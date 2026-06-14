@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+sample_news.json
+.venv/
+venv/

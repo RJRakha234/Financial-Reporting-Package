@@ -1,0 +1,5 @@
+# newsalpha runs on the Python standard library alone — no API keys, no install
+# required to use it. The packages below are OPTIONAL enhancements.
+
+# vaderSentiment>=3.3   # optional: blended general-purpose sentiment
+pytest>=7.0             # only needed to run the tests
