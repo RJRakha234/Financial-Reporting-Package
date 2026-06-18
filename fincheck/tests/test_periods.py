@@ -80,3 +80,52 @@ def test_detect_periods_ignores_unaligned_date_in_title():
     periods = {p.column: p.end_date for p in detect_periods(page)}
     # Only the two aligned dates are picked up; the title date is ignored.
     assert periods == {0: date(2026, 6, 30), 2: date(2026, 3, 31)}
+
+
+def test_stitches_split_year_row_with_grouped_period_types():
+    # The real income-statement layout: month/day on the descriptor row, bare
+    # years right-aligned beneath, and two period groups side by side.
+    edges = [383.0, 454.0, 515.0, 575.0]
+    descriptor = Row(
+        0, 10, 18, "Three months ended September 30, Six months ended September 30,",
+        333, is_header=True,
+        tokens=[
+            _tok("Three", 333, 352), _tok("months", 354, 378),
+            _tok("ended", 380, 399), _tok("September", 401, 436),
+            _tok("30,", 438, 448), _tok("Six", 464, 474),
+            _tok("months", 476, 499), _tok("ended", 501, 521),
+            _tok("September", 523, 558), _tok("30,", 559, 569),
+        ],
+    )
+    year_row = Row(
+        0, 28, 36, "2025 2024 2025 2024", 368, is_header=True,
+        tokens=[
+            _tok("2025", 368, 383, 28), _tok("2024", 439, 455, 28),
+            _tok("2025", 500, 515, 28), _tok("2024", 560, 575, 28),
+        ],
+    )
+    page = Page(0, 600, 800, [descriptor, year_row], 4, column_edges=edges)
+    periods = {p.column: p for p in detect_periods(page)}
+    assert periods[0].end_date == date(2025, 9, 30) and periods[0].period_type == "quarter"
+    assert periods[1].end_date == date(2024, 9, 30) and periods[1].period_type == "quarter"
+    assert periods[2].end_date == date(2025, 9, 30) and periods[2].period_type == "half-year"
+    assert periods[3].end_date == date(2024, 9, 30) and periods[3].period_type == "half-year"
+
+
+def test_day_less_month_descriptor_resolves_to_month_end():
+    # "Six months ended September" with no day -> period ends 30 September.
+    edges = [478.0, 529.0]
+    descriptor = Row(
+        0, 10, 18, "Six months ended September", 429, is_header=True,
+        tokens=[
+            _tok("Six", 429, 440), _tok("months", 442, 466),
+            _tok("ended", 468, 488), _tok("September", 490, 526),
+        ],
+    )
+    year_row = Row(
+        0, 28, 36, "2024 2023", 463, is_header=True,
+        tokens=[_tok("2024", 463, 478, 28), _tok("2023", 513, 529, 28)],
+    )
+    page = Page(0, 600, 800, [descriptor, year_row], 2, column_edges=edges)
+    periods = {p.column: p.end_date for p in detect_periods(page)}
+    assert periods == {0: date(2024, 9, 30), 1: date(2023, 9, 30)}

@@ -77,6 +77,7 @@ class RollforwardResult:
     checks: list[RollforwardCheck] = field(default_factory=list)
     current_periods: list[Period] = field(default_factory=list)
     covered_period_keys: set = field(default_factory=set)
+    ambiguous_skipped: int = 0
     output_pdf: str | None = None
 
     @property
@@ -116,6 +117,7 @@ class RollforwardResult:
             "prior": self.prior_pdfs,
             "figures_checked": self.figures_checked,
             "mismatch_count": len(self.mismatches),
+            "ambiguous_skipped": self.ambiguous_skipped,
             "consistent": self.consistent,
             "uncovered_periods": [p.describe() for p in self.uncovered_periods],
             "mismatches": [
@@ -181,29 +183,66 @@ def compare(
     current: list[Figure],
     priors: list[list[Figure]],
     base_tolerance: float,
-) -> tuple[list[RollforwardCheck], set]:
-    """Match current comparatives to published figures by period and line item."""
-    index: dict[tuple, list[Figure]] = {}
+) -> tuple[list[RollforwardCheck], set, int]:
+    """Match current comparatives to published figures by period and line item.
+
+    A figure is only compared when its (period, line-item) identity is
+    *unambiguous*: the label occurs exactly once for that period in the current
+    filing, and the prior filings supply a single agreed value for it. When a
+    label repeats for the same period (typical of cross-tabulated note matrices,
+    where "Trade receivables" appears under several category columns), the
+    position-based pairing is unreliable, so the figure is skipped and counted as
+    ambiguous rather than reported as a spurious mismatch.
+    """
+    from collections import defaultdict
+
+    prior_by_label: dict[tuple, list[Figure]] = defaultdict(list)
     for figs in priors:
         for f in figs:
-            index.setdefault((f.end_date, f.norm_label, f.occurrence), []).append(f)
+            prior_by_label[(f.end_date, f.norm_label)].append(f)
+
+    # Count per (period, line item) including the period *type*: the same date
+    # heads both a quarter and a half-year/year column on one income statement,
+    # so the type must distinguish them or every such row looks duplicated.
+    cur_count: dict[tuple, int] = defaultdict(int)
+    for c in current:
+        cur_count[(c.end_date, c.period_type, c.norm_label)] += 1
 
     checks: list[RollforwardCheck] = []
     covered: set = set()
+    ambiguous = 0
     for c in current:
-        candidates = index.get((c.end_date, c.norm_label, c.occurrence), [])
-        matches = [p for p in candidates if _type_compatible(c.period_type, p.period_type)]
-        if not matches:
+        if cur_count[(c.end_date, c.period_type, c.norm_label)] != 1:
+            ambiguous += 1
             continue
+        candidates = [
+            p
+            for p in prior_by_label.get((c.end_date, c.norm_label), [])
+            if _type_compatible(c.period_type, p.period_type)
+        ]
+        if not candidates:
+            continue
+        # The published figure must be unambiguous: all matching prior entries
+        # must agree on a single value.
+        if len({round(p.value, 4) for p in candidates}) != 1:
+            ambiguous += 1
+            continue
+        p = candidates[0]
         covered.add(c.period.key)
-        for p in matches:
-            status = (
-                "ok"
-                if abs(c.value - p.value) <= _tolerance(c.value, base_tolerance)
-                else "mismatch"
-            )
-            checks.append(RollforwardCheck(status=status, current=c, prior=p))
-    return checks, covered
+        status = (
+            "ok"
+            if abs(c.value - p.value) <= _tolerance(c.value, base_tolerance)
+            else "mismatch"
+        )
+        checks.append(RollforwardCheck(status=status, current=c, prior=p))
+    return checks, covered, ambiguous
+
+
+def _select_pages(pages, indices):
+    if indices is None:
+        return pages
+    wanted = set(indices)
+    return [p for p in pages if p.index in wanted]
 
 
 def check_rollforward(
@@ -211,6 +250,8 @@ def check_rollforward(
     prior_pdfs: list[str],
     tolerance: float = 1.0,
     output_pdf: str | None = None,
+    current_pages: "list[int] | None" = None,
+    prior_pages: "list[int] | None" = None,
 ) -> RollforwardResult:
     """Reconcile a current filing's comparatives against prior published filings.
 
@@ -221,16 +262,23 @@ def check_rollforward(
             comparative periods automatically.
         tolerance: absolute rounding slack before a figure is flagged.
         output_pdf: if given, write a highlighted copy of the current filing.
+        current_pages: 0-based page indices of the current filing to check
+            (default: all). Use this to focus on the primary statements and
+            avoid the note disclosures, where cross-tabulated tables make
+            line-item matching unreliable.
+        prior_pages: 0-based page indices to read from each prior filing
+            (default: all). Applied to every prior PDF.
     """
-    current_pages = extract_pages(current_pdf)
-    current_figs = _figures_from_pages(current_pdf, current_pages)
+    current_pages_data = _select_pages(extract_pages(current_pdf), current_pages)
+    current_figs = _figures_from_pages(current_pdf, current_pages_data)
     prior_figs = [
-        _figures_from_pages(p, extract_pages(p)) for p in prior_pdfs
+        _figures_from_pages(p, _select_pages(extract_pages(p), prior_pages))
+        for p in prior_pdfs
     ]
 
-    checks, covered = compare(current_figs, prior_figs, tolerance)
+    checks, covered, ambiguous = compare(current_figs, prior_figs, tolerance)
     current_periods: list[Period] = []
-    for page in current_pages:
+    for page in current_pages_data:
         current_periods.extend(detect_periods(page))
 
     written = None
@@ -245,6 +293,7 @@ def check_rollforward(
         checks=checks,
         current_periods=current_periods,
         covered_period_keys=covered,
+        ambiguous_skipped=ambiguous,
         output_pdf=written,
     )
 
@@ -282,6 +331,12 @@ def to_console(result: RollforwardResult) -> str:
             lines.append(f"     published in: {c.prior.source}")
             lines.append("")
 
+    if result.ambiguous_skipped:
+        lines.append(
+            f"({result.ambiguous_skipped} figures were skipped as ambiguous — a "
+            "line-item label that repeats for the same period, e.g. in a "
+            "cross-tabulated note table — and could not be matched reliably.)"
+        )
     if result.uncovered_periods:
         lines.append(
             "Note: no prior filing supplied covered these comparative periods, "
@@ -322,8 +377,36 @@ def _build_parser():
         default=1.0,
         help="absolute rounding slack before a figure is flagged (default: 1.0)",
     )
+    parser.add_argument(
+        "--current-pages",
+        help="1-based pages of the current filing to check, e.g. '2-7' or "
+        "'2,3,6-7'. Default: all. Use to focus on the primary statements and "
+        "skip the note disclosures, where matching is less reliable.",
+    )
+    parser.add_argument(
+        "--prior-pages",
+        help="1-based pages to read from each prior filing (same syntax). "
+        "Applied to every prior PDF. Default: all.",
+    )
     parser.add_argument("--json", action="store_true", help="print JSON")
     return parser
+
+
+def _parse_pages(spec: str | None) -> "list[int] | None":
+    """Parse '2-7,10' (1-based, inclusive) into 0-based page indices."""
+    if not spec:
+        return None
+    out: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            out.extend(range(int(a) - 1, int(b)))
+        else:
+            out.append(int(part) - 1)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -350,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
         args.prior,
         tolerance=args.tolerance,
         output_pdf=output,
+        current_pages=_parse_pages(args.current_pages),
+        prior_pages=_parse_pages(args.prior_pages),
     )
 
     if args.json:

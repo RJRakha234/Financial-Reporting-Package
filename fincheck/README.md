@@ -98,7 +98,19 @@ python -m fincheck.rollforward rf_current.pdf rf_prior.pdf
 # or skip the highlighted PDF:
 python -m fincheck.rollforward current.pdf prior_q1.pdf annual_report.pdf
 python -m fincheck.rollforward current.pdf prior.pdf -o none --json
+
+# Full filings carry ~hundreds of pages of notes whose cross-tabulated tables
+# reuse generic labels ("Total", "Others"). Focus on the primary statements
+# (1-based page numbers; --prior-pages applies to every prior) for a clean,
+# reliable check:
+python -m fincheck.rollforward sep2025.pdf sep2024.pdf mar2025.pdf \
+    --current-pages 2,3,6,7 --prior-pages 2,3,6,7
 ```
+
+When a line-item label repeats for the same period (typical of note matrices),
+the position-based pairing is unreliable, so the tool **skips** that figure and
+reports it as "ambiguous" rather than inventing a mismatch. It only compares
+figures whose (period, line-item) identity is unambiguous on both sides.
 
 Example output:
 

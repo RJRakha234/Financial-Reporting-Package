@@ -13,7 +13,20 @@ from dataclasses import dataclass, field
 
 import pdfplumber
 
-from .numbers import is_numberish, parse_number
+from .numbers import CURRENCY_SYMBOLS, DASHES, is_numberish, parse_number
+
+# A token that is (part of) a number: digits and the punctuation numbers wear
+# (parentheses, sign, comma, decimal point, currency, dashes). Unlike
+# ``is_numberish`` a lone "(", ")" or "," qualifies, so a figure rendered one
+# character at a time — "( 3 , 1 5 5 )" — can be stitched back together.
+_FRAGMENT_RE = re.compile(
+    r"^[\(\)\-+,.\d" + re.escape(CURRENCY_SYMBOLS + DASHES) + r"]+$"
+)
+
+
+def _is_fragment(text: str) -> bool:
+    text = text.strip()
+    return bool(text) and bool(_FRAGMENT_RE.match(text))
 
 # Phrases that mark a row as a column/period header rather than data.
 # Kept deliberately specific: e.g. "statement of" catches the Cash Flow Statement
@@ -102,24 +115,40 @@ def _cluster_rows(words: list[dict]) -> list[list[dict]]:
 
 
 def _merge_numberish(words: list[dict]) -> list[dict]:
-    """Glue adjacent number-ish tokens (e.g. ``1 234`` -> ``1234``)."""
+    """Glue adjacent number fragments into one figure.
+
+    Handles both space-separated thousands (``1 234 567``) and figures rendered
+    one glyph at a time (``( 3 , 1 5 5 )``). A maximal run of tightly-spaced
+    fragments is concatenated and kept as a single token only when the result
+    actually parses as a number, so unrelated punctuation is never fused.
+    """
     merged: list[dict] = []
-    for word in words:
-        if (
-            merged
-            and is_numberish(word["text"])
-            and is_numberish(merged[-1]["text"])
-            and word["x0"] - merged[-1]["x1"] <= _MERGE_GAP
-            # Don't glue a date apart into a number: "31," + "2026" -> year stays.
-            and not _is_year_token(word["text"])
-        ):
-            prev = merged[-1]
-            prev["text"] = prev["text"] + " " + word["text"]
-            prev["x1"] = word["x1"]
-            prev["bottom"] = max(prev["bottom"], word["bottom"])
-            prev["top"] = min(prev["top"], word["top"])
-        else:
-            merged.append(dict(word))
+    i, n = 0, len(words)
+    while i < n:
+        word = words[i]
+        if _is_fragment(word["text"]) and not _is_year_token(word["text"]):
+            j = i + 1
+            while (
+                j < n
+                and _is_fragment(words[j]["text"])
+                and words[j]["x0"] - words[j - 1]["x1"] <= _MERGE_GAP
+                # Don't glue a date apart into a number: "31," + "2026" -> year.
+                and not _is_year_token(words[j]["text"])
+            ):
+                j += 1
+            if j - i >= 2:
+                glued = "".join(words[k]["text"] for k in range(i, j))
+                if parse_number(glued) is not None:
+                    new = dict(word)
+                    new["text"] = glued
+                    new["x1"] = words[j - 1]["x1"]
+                    new["top"] = min(words[k]["top"] for k in range(i, j))
+                    new["bottom"] = max(words[k]["bottom"] for k in range(i, j))
+                    merged.append(new)
+                    i = j
+                    continue
+        merged.append(dict(word))
+        i += 1
     return merged
 
 

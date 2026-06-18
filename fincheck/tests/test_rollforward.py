@@ -44,7 +44,7 @@ def test_compare_flags_only_changed_figures():
         _fig("pri", d, "quarter", "Revenue", 100),
         _fig("pri", d, "quarter", "Other income", 95),
     ]
-    checks, covered = compare(current, [prior], base_tolerance=1.0)
+    checks, covered, _ = compare(current, [prior], base_tolerance=1.0)
     status = {c.current.label: c.status for c in checks}
     assert status == {"Revenue": "ok", "Other income": "mismatch"}
     assert (d, "quarter") in covered
@@ -55,7 +55,7 @@ def test_compare_requires_matching_period_type():
     # Quarter-ended 31 Mar and year-ended 31 Mar are different numbers.
     current = [_fig("cur", d, "quarter", "Revenue", 50)]
     prior = [_fig("pri", d, "year", "Revenue", 200)]
-    checks, _ = compare(current, [prior], base_tolerance=1.0)
+    checks, _, _ = compare(current, [prior], base_tolerance=1.0)
     assert checks == []
 
 
@@ -63,14 +63,44 @@ def test_compare_unknown_type_is_wildcard():
     d = date(2025, 6, 30)
     current = [_fig("cur", d, "unknown", "Cash", 10)]
     prior = [_fig("pri", d, "quarter", "Cash", 99)]
-    checks, _ = compare(current, [prior], base_tolerance=1.0)
+    checks, _, _ = compare(current, [prior], base_tolerance=1.0)
     assert len(checks) == 1 and checks[0].status == "mismatch"
+
+
+def test_same_date_different_type_not_treated_as_duplicate():
+    # An income statement shows the same date for a quarter and a half-year
+    # column; both must be checked, not dropped as ambiguous duplicates.
+    d = date(2024, 9, 30)
+    current = [
+        _fig("cur", d, "quarter", "Revenue", 44490),
+        _fig("cur", d, "half-year", "Revenue", 86769),
+    ]
+    prior = [
+        _fig("pri", d, "quarter", "Revenue", 44490),
+        _fig("pri", d, "half-year", "Revenue", 80000),  # differs
+    ]
+    checks, _, ambiguous = compare(current, [prior], base_tolerance=1.0)
+    status = {(c.current.period_type): c.status for c in checks}
+    assert status == {"quarter": "ok", "half-year": "mismatch"}
+    assert ambiguous == 0
+
+
+def test_ambiguous_repeated_label_is_skipped():
+    d = date(2025, 3, 31)
+    # "Total" appears twice for the same period/type (e.g. a note matrix).
+    current = [
+        _fig("cur", d, "year", "Total", 100),
+        _fig("cur", d, "year", "Total", 200),
+    ]
+    prior = [_fig("pri", d, "year", "Total", 100)]
+    checks, _, ambiguous = compare(current, [prior], base_tolerance=1.0)
+    assert checks == [] and ambiguous == 2
 
 
 def test_no_prior_figure_means_not_checked():
     current = [_fig("cur", date(2026, 6, 30), "quarter", "Revenue", 100)]
     prior = [_fig("pri", date(2025, 6, 30), "quarter", "Revenue", 100)]
-    checks, _ = compare(current, [prior], base_tolerance=1.0)
+    checks, _, _ = compare(current, [prior], base_tolerance=1.0)
     assert checks == []  # periods don't overlap
 
 

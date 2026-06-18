@@ -20,9 +20,14 @@ proximity. Detection is best-effort: a column with no recognisable date is simpl
 left without a period and skipped by the comparison.
 """
 
+import calendar
 import re
 from dataclasses import dataclass
 from datetime import date
+
+# Tokens that, preceding a month name, mark it as a period descriptor (so a
+# day-less month such as "ended September" can be read as that month's end).
+_DATE_CUES = {"ended", "ending", "at", "on", "of"}
 
 from .extract import Page, _assign_column
 
@@ -166,8 +171,71 @@ def _scan_dates(tokens: list[dict]) -> list[tuple[date, float]]:
     return out
 
 
+def _is_year(text: str) -> int | None:
+    t = _clean(text)
+    if re.fullmatch(r"\d{4}", t) and 1900 <= int(t) <= 2099:
+        return int(t)
+    return None
+
+
+def _scan_years(tokens: list[dict]) -> list[tuple[int, float]]:
+    """Bare 4-digit year tokens, returning (year, right_edge)."""
+    return [(_is_year(t["text"]), t["x1"]) for t in tokens if _is_year(t["text"])]
+
+
+def _scan_partial_dates(tokens: list[dict]) -> list[tuple[int, int, float, float]]:
+    """Month-and-day fragments lacking a year (e.g. ``September 30,`` or
+    ``30 September``), returning (month, day, x0, x1).
+
+    Statements often stack the period header: ``... ended September 30,`` on one
+    row and the bare year (``2025``) right-aligned under each column on the next.
+    These fragments supply the month/day to pair with those years.
+    """
+    out: list[tuple[int, int, float, float]] = []
+    words = [_clean(t["text"]) for t in tokens]
+    n = len(tokens)
+    i = 0
+    while i < n:
+        if words[i] in _MONTHS and i + 1 < n and re.fullmatch(r"\d{1,2}", words[i + 1]):
+            out.append((_MONTHS[words[i]], int(words[i + 1]),
+                        tokens[i]["x0"], tokens[i + 1]["x1"]))
+            i += 2
+            continue
+        if (
+            re.fullmatch(r"\d{1,2}", words[i])
+            and i + 1 < n
+            and words[i + 1] in _MONTHS
+        ):
+            out.append((_MONTHS[words[i + 1]], int(words[i]),
+                        tokens[i]["x0"], tokens[i + 1]["x1"]))
+            i += 2
+            continue
+        # Day-less month inside a period descriptor ("ended September") -> use
+        # the month's last day. Marked with day 0, resolved once the year known.
+        if words[i] in _MONTHS and i > 0 and words[i - 1] in _DATE_CUES:
+            out.append((_MONTHS[words[i]], 0, tokens[i]["x0"], tokens[i]["x1"]))
+        i += 1
+    return out
+
+
+def _choose_month_day(
+    partials: list[tuple[int, int, float, float]], x1: float
+) -> tuple[int, int] | None:
+    """Pick the month/day fragment that heads the column at right edge ``x1``."""
+    if not partials:
+        return None
+    # Prefer fragments that carry an explicit day over day-less month-end ones.
+    pool = [p for p in partials if p[1] != 0] or partials
+    distinct = {(m, d) for m, d, _, _ in pool}
+    if len(distinct) == 1:
+        return (pool[0][0], pool[0][1])
+    # Multiple fragments (e.g. two period groups): take the nearest by centre.
+    m, d, _, _ = min(pool, key=lambda p: abs((p[2] + p[3]) / 2 - x1))
+    return (m, d)
+
+
 def _scan_types(tokens: list[dict]) -> list[tuple[str, float]]:
-    """Find period-type phrases, returning (type, x_centre of the phrase)."""
+    """Find period-type phrases, returning (type, x_start of the phrase)."""
     words = [_clean(t["text"]) for t in tokens]
     hits: list[tuple[str, float]] = []
     i = 0
@@ -175,8 +243,7 @@ def _scan_types(tokens: list[dict]) -> list[tuple[str, float]]:
         for phrase, ptype in _TYPE_PHRASES:
             k = len(phrase)
             if tuple(words[i : i + k]) == phrase:
-                xc = (tokens[i]["x0"] + tokens[i + k - 1]["x1"]) / 2
-                hits.append((ptype, xc))
+                hits.append((ptype, tokens[i]["x0"]))
                 i += k
                 break
         else:
@@ -185,12 +252,22 @@ def _scan_types(tokens: list[dict]) -> list[tuple[str, float]]:
 
 
 def _type_for_column(edge: float, type_hits: list[tuple[str, float]]) -> str:
+    """Type of the column at right edge ``edge``.
+
+    Period descriptors are left-aligned group headers that govern the columns to
+    their right, so a column takes the *last* descriptor that begins at or before
+    it. (With a single descriptor this is just that type.)
+    """
     if not type_hits:
         return "unknown"
     distinct = {t for t, _ in type_hits}
     if len(distinct) == 1:
         return next(iter(distinct))
-    return min(type_hits, key=lambda th: abs(th[1] - edge))[0]
+    to_left = [th for th in type_hits if th[1] <= edge]
+    chosen = max(to_left, key=lambda th: th[1]) if to_left else min(
+        type_hits, key=lambda th: th[1]
+    )
+    return chosen[0]
 
 
 def _is_header_candidate(row) -> bool:
@@ -225,6 +302,30 @@ def detect_periods(page: Page) -> list[Period]:
     for _, _, aligned in sorted(aligned_rows, key=lambda r: (-r[0], r[1])):
         for col, d in aligned:
             dates_by_col.setdefault(col, d)
+
+    # Fall back to stitching a bare-year row to a month/day fragment, for the
+    # common "... ended September 30," / "2025  2024" stacked layout.
+    if len(dates_by_col) < len(edges):
+        partials: list[tuple[int, int, float, float]] = []
+        years: list[tuple[int, float]] = []
+        for row in page.rows:
+            if not _is_header_candidate(row):
+                continue
+            partials.extend(_scan_partial_dates(row.tokens))
+            years.extend(_scan_years(row.tokens))
+        for year, x1 in years:
+            col = _assign_column(x1, edges)
+            if col in dates_by_col or abs(edges[col] - x1) > _ALIGN_TOL:
+                continue
+            md = _choose_month_day(partials, x1)
+            if md is None:
+                continue
+            month, day = md
+            if day == 0:  # day-less descriptor -> month end
+                day = calendar.monthrange(year, month)[1]
+            d = _make(year, month, day)
+            if d is not None:
+                dates_by_col[col] = d
 
     periods: list[Period] = []
     for col, edge in enumerate(edges):
