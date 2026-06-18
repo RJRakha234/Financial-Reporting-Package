@@ -1,0 +1,3 @@
+PyMuPDF>=1.24      # PDF text extraction + highlighting (the fitz module)
+reportlab>=4.0     # only needed for make_sample.py
+pytest>=7.0        # only needed to run the tests
