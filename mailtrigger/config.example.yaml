@@ -1,0 +1,75 @@
+# mailtrigger configuration
+#
+# Copy this file to config.yaml and fill it in.  Anything written as
+# ${SOME_VAR} is read from an environment variable at runtime, so secrets
+# never have to live in the file.  Set them e.g. in a .env / your shell:
+#     export MAILTRIGGER_PASSWORD='your-outlook-app-password'
+#     export REPORT_TOKEN='your-api-token'
+
+# ---------------------------------------------------------------------------
+# 1. The mailbox to watch (IMAP).  For Outlook/Microsoft 365 use an
+#    *app password* (Account -> Security -> App passwords); your normal
+#    password will not work if MFA is on.
+# ---------------------------------------------------------------------------
+mailbox:
+  host: outlook.office365.com
+  port: 993
+  username: you@outlook.com
+  password: ${MAILTRIGGER_PASSWORD}
+  folder: INBOX
+  poll_seconds: 60          # how often to check for new mail
+  mark_seen: true           # mark a processed message as read so it is not run twice
+
+# ---------------------------------------------------------------------------
+# 2. Which message should trigger a run.  All of the conditions you set must
+#    match (leave a field blank/removed to ignore it).  Matching is
+#    case-insensitive "contains".
+# ---------------------------------------------------------------------------
+trigger:
+  from_contains: "reports@vendor.com"
+  subject_contains: "Run report"
+  body_contains: ""
+  require_attachment: false
+
+# ---------------------------------------------------------------------------
+# 3. The report to fetch.  By default it hits the fixed `url` below.  If you
+#    set `url_from_email_regex`, the first match found in the email body is
+#    used instead (handy when the email itself carries the link).
+# ---------------------------------------------------------------------------
+report:
+  url: "https://example.com/api/report"
+  url_from_email_regex: ""          # e.g. 'https?://\S+'
+  method: GET                       # GET or POST
+  params:                           # <-- your "defined parameters" (query string)
+    format: csv
+    period: monthly
+  headers:
+    Authorization: "Bearer ${REPORT_TOKEN}"
+  timeout_seconds: 60
+
+# ---------------------------------------------------------------------------
+# 4. How to process the fetched report before saving.
+#      auto  - detect json/csv from the response, otherwise keep raw
+#      json  - keep only the dotted paths in json_fields (if any)
+#      csv   - keep only the columns in csv_columns (if any)
+#      raw   - save the bytes exactly as received
+# ---------------------------------------------------------------------------
+process:
+  type: auto
+  json_fields: []        # e.g. ["data.total", "data.rows"]
+  csv_columns: []        # e.g. ["Date", "Amount"]
+
+# ---------------------------------------------------------------------------
+# 5. What to do with the result.
+# ---------------------------------------------------------------------------
+output:
+  save_dir: "./output"
+  filename_template: "report_{timestamp}.{ext}"
+  email_reply:
+    enabled: false
+    to: ""                          # blank = reply to the sender of the trigger email
+    subject: "Report result"
+    smtp_host: smtp.office365.com
+    smtp_port: 587
+    username: you@outlook.com
+    password: ${MAILTRIGGER_PASSWORD}
