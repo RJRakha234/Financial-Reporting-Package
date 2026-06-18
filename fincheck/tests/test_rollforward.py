@@ -8,9 +8,56 @@ from pathlib import Path
 import pytest
 
 from fincheck import check_rollforward
-from fincheck.extract import Cell
+from fincheck.extract import Cell, Row
 from fincheck.periods import Period
-from fincheck.rollforward import Figure, compare
+from fincheck.rollforward import Figure, _review_sections, _section_of, compare
+
+
+def _hrow(tokens):
+    return Row(
+        0, 0, 10, "", 0.0,
+        tokens=[
+            {"text": t, "x0": i * 30, "x1": i * 30 + 20, "top": 0, "bottom": 8}
+            for i, t in enumerate(tokens)
+        ],
+    )
+
+
+def test_section_of_reads_note_number_from_tokens():
+    assert _section_of(_hrow(["2.4", "Prepayments", "and", "other"])) == "2.4"
+    assert _section_of(_hrow(["2.3.4", "Fair", "value"])) == "2.3.4"
+    # An extraction artifact glued to the number is stripped.
+    assert _section_of(_hrow(["X14AO2.11", "Employees", "Stock"])) == "2.11"
+    # A note *reference* mid-row (not a heading) is not a section.
+    assert _section_of(_hrow(["Cash", "equivalents", "2.1", "24,455"])) is None
+
+
+def test_section_of_statement_title_requires_consolidated():
+    assert _section_of(_hrow(["Condensed", "Consolidated", "Balance", "Sheet"])) == "BS"
+    # Prose mentioning a statement is not a heading.
+    assert _section_of(_hrow(["recognised", "in", "comprehensive", "income"])) is None
+
+
+def test_review_flags_structural_mismatch_keeps_consistent_repeats():
+    d = date(2025, 3, 31)
+    # ESOP-like: the label occurs a different number of times across filings.
+    esop_cur = [
+        _fig("c", d, "year", "KMP", 10, occ=1, section="2.11"),
+        _fig("c", d, "year", "KMP", 20, occ=2, section="2.11"),
+    ]
+    esop_pri = [_fig("p", d, "year", "KMP", 10, occ=1, section="2.11")]
+    assert "2.11" in _review_sections(esop_cur, [esop_pri])
+
+    # Current/non-current split: same label twice on *both* sides — keep it.
+    note_cur = [
+        _fig("c", d, "year", "Deposits", 1, occ=1, section="2.4"),
+        _fig("c", d, "year", "Deposits", 2, occ=2, section="2.4"),
+    ]
+    note_pri = [
+        _fig("p", d, "year", "Deposits", 1, occ=1, section="2.4"),
+        _fig("p", d, "year", "Deposits", 2, occ=2, section="2.4"),
+    ]
+    assert "2.4" not in _review_sections(note_cur, [note_pri])
 
 ROOT = Path(__file__).resolve().parent.parent
 CURRENT = ROOT / "rf_current.pdf"
@@ -25,12 +72,12 @@ def ensure_samples():
         )
 
 
-def _fig(source, d, ptype, label, value, occ=1):
+def _fig(source, d, ptype, label, value, occ=1, section=""):
     period = Period(0, d, ptype)
     return Figure(
-        source=source, end_date=d, period_type=ptype, period=period,
-        label=label, norm_label=label.lower(), occurrence=occ, value=value,
-        page_index=0, cell=Cell(0, value, str(value), 0, 0, 0, 0),
+        source=source, section=section, end_date=d, period_type=ptype,
+        period=period, label=label, norm_label=label.lower(), occurrence=occ,
+        value=value, page_index=0, cell=Cell(0, value, str(value), 0, 0, 0, 0),
     )
 
 
@@ -85,16 +132,46 @@ def test_same_date_different_type_not_treated_as_duplicate():
     assert ambiguous == 0
 
 
-def test_ambiguous_repeated_label_is_skipped():
+def test_section_disambiguates_same_label():
     d = date(2025, 3, 31)
-    # "Total" appears twice for the same period/type (e.g. a note matrix).
+    # "Total" appears in two different notes; each must match its own note.
     current = [
-        _fig("cur", d, "year", "Total", 100),
-        _fig("cur", d, "year", "Total", 200),
+        _fig("cur", d, "year", "Total", 100, section="2.4"),
+        _fig("cur", d, "year", "Total", 200, section="2.5"),
     ]
-    prior = [_fig("pri", d, "year", "Total", 100)]
-    checks, _, ambiguous = compare(current, [prior], base_tolerance=1.0)
-    assert checks == [] and ambiguous == 2
+    prior = [
+        _fig("pri", d, "year", "Total", 100, section="2.4"),
+        _fig("pri", d, "year", "Total", 999, section="2.5"),  # restated
+    ]
+    checks, _, _ = compare(current, [prior], base_tolerance=1.0)
+    status = {c.current.section: c.status for c in checks}
+    assert status == {"2.4": "ok", "2.5": "mismatch"}
+
+
+def test_repeated_label_in_one_section_pairs_by_occurrence():
+    d = date(2025, 3, 31)
+    current = [
+        _fig("cur", d, "year", "Total", 100, occ=1, section="2.6"),
+        _fig("cur", d, "year", "Total", 200, occ=2, section="2.6"),
+    ]
+    prior = [
+        _fig("pri", d, "year", "Total", 100, occ=1, section="2.6"),
+        _fig("pri", d, "year", "Total", 222, occ=2, section="2.6"),
+    ]
+    checks, _, _ = compare(current, [prior], base_tolerance=1.0)
+    status = {c.current.occurrence: c.status for c in checks}
+    assert status == {1: "ok", 2: "mismatch"}
+
+
+def test_prior_disagreement_is_ambiguous():
+    d = date(2025, 3, 31)
+    current = [_fig("cur", d, "year", "Total", 100, section="2.6")]
+    priors = [
+        [_fig("a", d, "year", "Total", 100, section="2.6")],
+        [_fig("b", d, "year", "Total", 105, section="2.6")],  # priors disagree
+    ]
+    checks, _, ambiguous = compare(current, priors, base_tolerance=1.0)
+    assert checks == [] and ambiguous == 1
 
 
 def test_no_prior_figure_means_not_checked():

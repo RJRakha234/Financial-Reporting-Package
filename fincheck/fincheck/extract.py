@@ -42,6 +42,12 @@ def _is_year_token(text: str) -> bool:
     t = text.strip().rstrip(",.")
     return t.isdigit() and len(t) == 4 and 1900 <= int(t) <= 2099
 
+
+_MONTH_RE = re.compile(
+    r"(?i)\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|"
+    r"aug(ust)?|sep(t|tember)?|oct(ober)?|nov(ember)?|dec(ember)?)\b"
+)
+
 # Vertical slack (points) for treating two words as being on the same line.
 _ROW_TOLERANCE = 3.0
 # Horizontal gap (points) below which two number-ish tokens are one figure
@@ -183,6 +189,13 @@ def _looks_like_header(label: str, number_words: list[dict]) -> bool:
         return True
     # A row whose figures are all bare years (e.g. "2026  2025  2026  2025").
     if number_words and all(_is_year_token(w["text"]) for w in number_words):
+        return True
+    # A date header like "September 30, 2025  March 31, 2025": a month name in
+    # the text plus a year among the figures. Catching it here keeps the day
+    # tokens ("30,", "31,") from being mistaken for data columns.
+    if _MONTH_RE.search(label) and any(
+        _is_year_token(w["text"]) for w in number_words
+    ):
         return True
     return False
 

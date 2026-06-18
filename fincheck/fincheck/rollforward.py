@@ -36,11 +36,55 @@ def _normalize(label: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# A numbered-note token, e.g. "2.4" or the sub-note "2.3.4". An extraction
+# artifact ("X14AO2.11") may be glued in front; strip it. The dotted number is a
+# stable identifier shared across the current and prior filings. Note numbers are
+# read from the raw row *tokens*, because a bare "2.1" parses as a float and is
+# pulled out as a cell — so it has already vanished from the cleaned label.
+_NOTE_TOKEN = re.compile(r"^(?:X\d+AO)?(\d+\.\d+(?:\.\d+){0,2})$")
+
+# The primary statements have no number; key them by a short, stable code so the
+# same statement lines up across filings. Matched only on a real *title* row —
+# "Consolidated Statement of ..." — so a note's prose mentioning, say,
+# "comprehensive income" does not masquerade as a statement heading.
+_STATEMENT_TITLES = [
+    ("consolidated balance sheet", "BS"),
+    ("consolidated statement of comprehensive income", "P&L"),
+    ("consolidated statement of profit", "P&L"),
+    ("consolidated statement of changes in equity", "EQUITY"),
+    ("consolidated statement of cash flow", "CASHFLOW"),
+]
+
+_PRIMARY_SECTIONS = {"BS", "P&L", "CASHFLOW"}
+
+
+def _section_of(row) -> str | None:
+    """Section id a row's heading introduces, or ``None`` if it isn't a heading.
+
+    A numbered note begins with its number as one of the first tokens followed by
+    a title word ("2.4 Prepayments ..."); a primary statement begins with its
+    full title. Both are read from the raw tokens.
+    """
+    tokens = getattr(row, "tokens", None) or []
+    for k in (0, 1):
+        if k < len(tokens):
+            m = _NOTE_TOKEN.match(tokens[k]["text"].strip())
+            nxt = tokens[k + 1]["text"][:1] if k + 1 < len(tokens) else ""
+            if m and nxt.isalpha():
+                return m.group(1)
+    text = " ".join(t["text"] for t in tokens).lower()
+    for phrase, code in _STATEMENT_TITLES:
+        if phrase in text:
+            return code
+    return None
+
+
 @dataclass
 class Figure:
     """One reported figure: a line item, in a period, in a filing."""
 
     source: str
+    section: str
     end_date: date
     period_type: str
     period: Period
@@ -50,6 +94,9 @@ class Figure:
     value: float
     page_index: int
     cell: Cell
+    # True when the figure sits in a wide table with many more numeric columns
+    # than reporting periods — a segment/category matrix, not a period comparison.
+    wide: bool = False
 
 
 def _type_compatible(a: str, b: str) -> bool:
@@ -78,6 +125,7 @@ class RollforwardResult:
     current_periods: list[Period] = field(default_factory=list)
     covered_period_keys: set = field(default_factory=set)
     ambiguous_skipped: int = 0
+    review_sections: list[str] = field(default_factory=list)
     output_pdf: str | None = None
 
     @property
@@ -118,6 +166,7 @@ class RollforwardResult:
             "figures_checked": self.figures_checked,
             "mismatch_count": len(self.mismatches),
             "ambiguous_skipped": self.ambiguous_skipped,
+            "review_sections": self.review_sections,
             "consistent": self.consistent,
             "uncovered_periods": [p.describe() for p in self.uncovered_periods],
             "mismatches": [
@@ -140,14 +189,59 @@ class RollforwardResult:
 
 
 def _figures_from_pages(source: str, pages) -> list[Figure]:
+    """Build the list of reported figures, tagged with the section they sit in.
+
+    Rows are walked in document order so the current section (a numbered note or
+    a primary statement) can be carried down to the rows beneath its heading.
+    Occurrence is counted within (section, period, line item), so a label that
+    repeats *inside one note* still lines up across filings by position, while
+    the same label in a different note never collides.
+    """
+    from collections import Counter
+
     figures: list[Figure] = []
+    section = ""
+    started = False  # skip front matter (cover / contents) before the statements
+    seen_statement = False  # have we reached the primary statements yet?
+    in_notes = False  # ... and then moved past them into the numbered notes?
+    occ: dict[tuple, int] = {}
     for page in pages:
         periods = {p.column: p for p in detect_periods(page)}
-        if not periods:
-            continue
-        occ: dict[tuple, int] = {}
+        # Count well-populated data columns (those holding figures in several
+        # rows); phantom columns from footnote markers populate only a row or
+        # two and are ignored.
+        pop: Counter = Counter()
         for row in page.rows:
-            if row.is_header or not row.cells:
+            if not row.is_header:
+                pop.update(row.cells.keys())
+        data_cols = sum(1 for n in pop.values() if n >= 3)
+        # Many more data columns than periods => a segment/category matrix.
+        page_is_wide = (data_cols - len(periods)) >= 3
+        # The cover and table of contents list every statement title and note
+        # number; they carry no reporting-period columns, so begin tracking only
+        # at the first page that does (the first primary statement).
+        if not started:
+            if not periods:
+                continue
+            started = True
+        for row in page.rows:
+            heading = _section_of(row)
+            if heading is not None:
+                if heading[0].isdigit():
+                    # A numbered note. It only means "we are in the notes" once
+                    # the primary statements have been passed — the cover page's
+                    # table of contents also lists note numbers.
+                    if seen_statement:
+                        in_notes = True
+                    section = heading
+                    continue
+                # A primary-statement title; ignore once the notes have begun,
+                # where prose freely references "the consolidated statement of …".
+                if not in_notes:
+                    section = heading
+                    seen_statement = True
+                continue
+            if row.is_header or not row.cells or not periods:
                 continue
             norm = _normalize(row.label)
             if not norm:
@@ -156,11 +250,12 @@ def _figures_from_pages(source: str, pages) -> list[Figure]:
                 cell = row.cells.get(col)
                 if cell is None or period.end_date is None:
                     continue
-                key = (period.end_date, norm)
+                key = (section, period.end_date, period.period_type, norm)
                 occ[key] = occ.get(key, 0) + 1
                 figures.append(
                     Figure(
                         source=source,
+                        section=section,
                         end_date=period.end_date,
                         period_type=period.period_type,
                         period=period,
@@ -170,9 +265,45 @@ def _figures_from_pages(source: str, pages) -> list[Figure]:
                         value=cell.value,
                         page_index=page.index,
                         cell=cell,
+                        wide=page_is_wide,
                     )
                 )
     return figures
+
+
+def _review_sections(
+    current: list[Figure], priors: list[list[Figure]]
+) -> set[str]:
+    """Sections that cannot be row-matched reliably and need manual review.
+
+    Two signals:
+
+    * **wide** — the table has many data columns that are not periods (segment
+      reporting, financial instruments by category): a matrix, not a period
+      comparison.
+    * **structural mismatch** — a (period, line item) occurs a *different* number
+      of times in the current and the prior filing (e.g. an ESOP note whose
+      option-grant sub-tables differ between periods), so pairing repeated rows
+      by position would be guesswork.
+
+    A note that merely repeats a label a consistent number of times on both
+    sides — a current vs non-current split — is left in: occurrence pairing
+    handles it.
+    """
+    from collections import Counter
+
+    wide = {f.section for f in current if f.wide}
+
+    cur = Counter(
+        (f.section, f.end_date, f.period_type, f.norm_label) for f in current
+    )
+    pri: Counter = Counter()
+    for figs in priors:
+        pri.update(
+            (f.section, f.end_date, f.period_type, f.norm_label) for f in figs
+        )
+    structural = {k[0] for k, n in cur.items() if k in pri and pri[k] != n}
+    return wide | structural
 
 
 def _tolerance(value: float, base: float) -> float:
@@ -186,38 +317,30 @@ def compare(
 ) -> tuple[list[RollforwardCheck], set, int]:
     """Match current comparatives to published figures by period and line item.
 
-    A figure is only compared when its (period, line-item) identity is
-    *unambiguous*: the label occurs exactly once for that period in the current
-    filing, and the prior filings supply a single agreed value for it. When a
-    label repeats for the same period (typical of cross-tabulated note matrices,
-    where "Trade receivables" appears under several category columns), the
-    position-based pairing is unreliable, so the figure is skipped and counted as
-    ambiguous rather than reported as a spurious mismatch.
+    A figure is matched on its full identity — (section, period, line item) and
+    its occurrence within that group. Anchoring to the section (a numbered note
+    or a primary statement) means a generic label such as "Total" or "Others" in
+    one note never collides with the same word in another. The period *type* is
+    part of the identity too, so the same date heading a quarter and a
+    half-year/year column is not treated as a duplicate. A figure is skipped as
+    ambiguous only when the prior filings disagree among themselves on the value.
     """
     from collections import defaultdict
 
-    prior_by_label: dict[tuple, list[Figure]] = defaultdict(list)
+    index: dict[tuple, list[Figure]] = defaultdict(list)
     for figs in priors:
         for f in figs:
-            prior_by_label[(f.end_date, f.norm_label)].append(f)
-
-    # Count per (period, line item) including the period *type*: the same date
-    # heads both a quarter and a half-year/year column on one income statement,
-    # so the type must distinguish them or every such row looks duplicated.
-    cur_count: dict[tuple, int] = defaultdict(int)
-    for c in current:
-        cur_count[(c.end_date, c.period_type, c.norm_label)] += 1
+            index[(f.section, f.end_date, f.norm_label, f.occurrence)].append(f)
 
     checks: list[RollforwardCheck] = []
     covered: set = set()
     ambiguous = 0
     for c in current:
-        if cur_count[(c.end_date, c.period_type, c.norm_label)] != 1:
-            ambiguous += 1
-            continue
         candidates = [
             p
-            for p in prior_by_label.get((c.end_date, c.norm_label), [])
+            for p in index.get(
+                (c.section, c.end_date, c.norm_label, c.occurrence), []
+            )
             if _type_compatible(c.period_type, p.period_type)
         ]
         if not candidates:
@@ -276,10 +399,36 @@ def check_rollforward(
         for p in prior_pdfs
     ]
 
+    # Trust only the reporting periods the *primary statements* actually use.
+    # Notes occasionally yield a misread date (an opening-balance "1 April", a
+    # stray year), and restricting to the primary-statement period set discards
+    # those without hard-coding anything. Skipped when no primary statement was
+    # recognised (e.g. a single-table filing) so nothing is lost.
+    primary_periods = {
+        f.period.key: f.period
+        for f in current_figs
+        if f.section in _PRIMARY_SECTIONS
+    }
+    primary = set(primary_periods)
+    if primary:
+        current_figs = [f for f in current_figs if f.period.key in primary]
+
+    # Set aside cross-tabulated / structurally-inconsistent notes (segment, ESOP,
+    # instruments-by-category): they can't be reliably row-matched from PDF
+    # geometry, so they are reported for manual review rather than compared.
+    matrix = _review_sections(current_figs, prior_figs) - _PRIMARY_SECTIONS
+    current_figs = [f for f in current_figs if f.section not in matrix]
+
     checks, covered, ambiguous = compare(current_figs, prior_figs, tolerance)
-    current_periods: list[Period] = []
-    for page in current_pages_data:
-        current_periods.extend(detect_periods(page))
+    # Report uncovered periods for the primary statements; note pages emit too
+    # many misread one-off dates to be meaningful. When no primary statement was
+    # recognised (a single-table filing), fall back to every detected period.
+    if primary_periods:
+        current_periods = list(primary_periods.values())
+    else:
+        current_periods = [
+            p for page in current_pages_data for p in detect_periods(page)
+        ]
 
     written = None
     if output_pdf is not None:
@@ -294,6 +443,7 @@ def check_rollforward(
         current_periods=current_periods,
         covered_period_keys=covered,
         ambiguous_skipped=ambiguous,
+        review_sections=sorted(matrix),
         output_pdf=written,
     )
 
@@ -333,10 +483,17 @@ def to_console(result: RollforwardResult) -> str:
 
     if result.ambiguous_skipped:
         lines.append(
-            f"({result.ambiguous_skipped} figures were skipped as ambiguous — a "
-            "line-item label that repeats for the same period, e.g. in a "
-            "cross-tabulated note table — and could not be matched reliably.)"
+            f"({result.ambiguous_skipped} figures were skipped because the prior "
+            "filings disagreed on the published value.)"
         )
+    if result.review_sections:
+        lines.append("")
+        lines.append(
+            "Cross-tabulated notes set aside for manual review (segment / ESOP / "
+            "instruments-by-category style tables cannot be reliably row-matched "
+            "from the PDF):"
+        )
+        lines.append("  " + ", ".join(result.review_sections))
     if result.uncovered_periods:
         lines.append(
             "Note: no prior filing supplied covered these comparative periods, "

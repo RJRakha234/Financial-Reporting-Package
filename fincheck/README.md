@@ -79,11 +79,22 @@ quarter ended 30 June 2026, the results also restate the quarter ended 30 June
 2025 and the year ended 31 March 2026; those comparatives must equal what was
 filed last year. When they don't, something was mis-keyed or silently restated.
 
-It works period-by-period: each numeric column is labelled with its reporting
-period (end date + type — quarter/year/as-at), and for every period that appears
-in **both** the current filing and a prior one, each line item's comparative is
-matched (by period and label) against the published figure. Differences beyond a
-rounding tolerance are flagged.
+It works section-by-section across the **whole filing** — primary statements and
+numbered notes alike. Each numeric column is labelled with its reporting period
+(end date + type — quarter/year/half-year/as-at), each row is tagged with the
+section it sits in (a primary statement, or a numbered note such as `2.4`), and
+every figure is matched to its prior-published counterpart by **(section, line
+item, period)**. Anchoring on the section means a generic label like "Total" or
+"Others" in one note never collides with the same word elsewhere. Differences
+beyond a rounding tolerance are flagged.
+
+Disclosures that are genuinely **cross-tabulated** — segment reporting, ESOP
+option grants, financial-instruments-by-category — can't be row-matched from PDF
+geometry (their columns are segments/categories, not periods). The tool detects
+these automatically and lists them as "set aside for manual review" instead of
+emitting false mismatches. It validated 181 comparative figures across a real
+Infosys interim filing (balance sheet, P&L, cash flow and ~10 notes) with the
+remaining cross-tab notes flagged for review.
 
 ```bash
 # Generate two sample filings (June-2026 quarter + the published June-2025 quarter)
@@ -94,23 +105,21 @@ python make_rollforward_sample.py
 # The first PDF is the filing under review; the rest are previously published.
 python -m fincheck.rollforward rf_current.pdf rf_prior.pdf
 
-# Multiple priors (e.g. last year's quarter + last year's annual report), JSON,
-# or skip the highlighted PDF:
-python -m fincheck.rollforward current.pdf prior_q1.pdf annual_report.pdf
-python -m fincheck.rollforward current.pdf prior.pdf -o none --json
+# A real interim filing: Sep-2025 results checked against the Sep-2024 interim
+# (for the quarter/half-year comparatives) and the March-2025 annual report
+# (for the "as at March 31, 2025" balance-sheet comparatives). The whole filing
+# — statements and notes — is handled automatically; no page ranges needed.
+python -m fincheck.rollforward sep2025.pdf sep2024.pdf mar2025.pdf
 
-# Full filings carry ~hundreds of pages of notes whose cross-tabulated tables
-# reuse generic labels ("Total", "Others"). Focus on the primary statements
-# (1-based page numbers; --prior-pages applies to every prior) for a clean,
-# reliable check:
-python -m fincheck.rollforward sep2025.pdf sep2024.pdf mar2025.pdf \
-    --current-pages 2,3,6,7 --prior-pages 2,3,6,7
+# JSON, or skip the highlighted PDF. --current-pages / --prior-pages remain
+# available to restrict to specific pages if you ever need to.
+python -m fincheck.rollforward current.pdf prior.pdf -o none --json
 ```
 
-When a line-item label repeats for the same period (typical of note matrices),
-the position-based pairing is unreliable, so the tool **skips** that figure and
-reports it as "ambiguous" rather than inventing a mismatch. It only compares
-figures whose (period, line-item) identity is unambiguous on both sides.
+If the prior filings ever disagree with each other on a figure, it is skipped as
+"ambiguous" rather than guessed. Cross-tabulated notes are set aside for review
+(see above), and any comparative period with no matching prior filing is listed
+under a "could not be checked" note.
 
 Example output:
 
