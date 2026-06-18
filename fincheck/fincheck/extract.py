@@ -20,7 +20,7 @@ from .numbers import is_numberish, parse_number
 # title without misfiring on a "Cash flow hedge reserves" line item.
 _HEADER_RE = re.compile(
     r"(?i)(year ended|months ended|quarter ended|period ended|as at|as of|"
-    r"particulars|in ₹|in rs|in million|^note$|for the (year|period|quarter)|"
+    r"particulars|in ₹|in rs|in million|^note$|^for the (year|period|quarter)|"
     r"balance sheet|statement of|^index$|page no)"
 )
 
@@ -63,6 +63,10 @@ class Row:
     indent: int = 0
     is_header: bool = False
     cells: dict[int, Cell] = field(default_factory=dict)
+    # All merged word tokens on the row (text + bbox), kept so period/date
+    # headers — whose date parts are not stored as numeric cells — can still be
+    # reconstructed and mapped to columns. See ``periods.py``.
+    tokens: list[dict] = field(default_factory=list)
 
     @property
     def is_heading(self) -> bool:
@@ -76,6 +80,9 @@ class Page:
     height: float
     rows: list[Row]
     n_columns: int
+    # Right-edge x position learned for each numeric column (financial figures
+    # are right-aligned), so header dates can be mapped to the same columns.
+    column_edges: list[float] = field(default_factory=list)
 
 
 def _cluster_rows(words: list[dict]) -> list[list[dict]]:
@@ -212,6 +219,7 @@ def _build_page(page_index: int, page) -> Page:
                 label_x0=label_x0,
                 is_header=is_header,
                 cells=cells,
+                tokens=merged,
             )
         )
 
@@ -222,6 +230,7 @@ def _build_page(page_index: int, page) -> Page:
         height=page.height,
         rows=rows,
         n_columns=len(edges),
+        column_edges=edges,
     )
 
 

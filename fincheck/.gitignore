@@ -2,7 +2,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 sample_financials.pdf
+rf_current.pdf
+rf_prior.pdf
 *.highlighted.pdf
+*.rollforward.pdf
 preview_*.png
 # Never commit user-supplied statements or rendered previews
 real_infy*.pdf

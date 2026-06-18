@@ -71,6 +71,72 @@ for issue in result.issues:
 print(result.as_json())
 ```
 
+## Rollforward check (comparatives vs. previously published figures)
+
+A second tool checks that the **prior-period (comparative) figures** in a current
+filing match the numbers **as originally published** in earlier filings. For the
+quarter ended 30 June 2026, the results also restate the quarter ended 30 June
+2025 and the year ended 31 March 2026; those comparatives must equal what was
+filed last year. When they don't, something was mis-keyed or silently restated.
+
+It works period-by-period: each numeric column is labelled with its reporting
+period (end date + type — quarter/year/as-at), and for every period that appears
+in **both** the current filing and a prior one, each line item's comparative is
+matched (by period and label) against the published figure. Differences beyond a
+rounding tolerance are flagged.
+
+```bash
+# Generate two sample filings (June-2026 quarter + the published June-2025 quarter)
+# with one deliberate rollforward error (Other income shown as 120, published 95).
+python make_rollforward_sample.py
+
+# Check the current filing's comparatives against the prior published filing(s).
+# The first PDF is the filing under review; the rest are previously published.
+python -m fincheck.rollforward rf_current.pdf rf_prior.pdf
+
+# Multiple priors (e.g. last year's quarter + last year's annual report), JSON,
+# or skip the highlighted PDF:
+python -m fincheck.rollforward current.pdf prior_q1.pdf annual_report.pdf
+python -m fincheck.rollforward current.pdf prior.pdf -o none --json
+```
+
+Example output:
+
+```
+✗ Found 4 rollforward mismatches (of 12 comparative figures checked):
+
+  1. quarter ended 30 Jun 2025  ·  Other income
+     in current filing                120
+     as published                      95   (off by 25)
+     published in: rf_prior.pdf
+  ...
+
+Note: no prior filing supplied covered these comparative periods, so they
+could not be checked:
+  · year ended 31 Mar 2026
+```
+
+It writes `current.rollforward.pdf` highlighting every checked comparative
+(green = matches what was published, red = mismatch) and prepends a summary page.
+As a library:
+
+```python
+from fincheck import check_rollforward
+
+result = check_rollforward("current.pdf", ["prior_q1.pdf", "annual.pdf"])
+print(result.consistent)              # False
+for c in result.mismatches:
+    print(c.current.period.describe(), c.current.label,
+          c.current.value, "vs published", c.prior.value)
+print(result.as_json())
+```
+
+It exits `1` when a mismatch is found and `0` when every comparative ties out.
+Period detection is geometry-based and best-effort: a comparative column whose
+period (or a prior filing's period) can't be identified is simply skipped, and
+any period the current filing reports without a matching prior is listed under
+the "could not be checked" note rather than silently passed.
+
 ## Offline & data privacy
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It
