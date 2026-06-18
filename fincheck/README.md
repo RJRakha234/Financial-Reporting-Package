@@ -88,13 +88,21 @@ item, period)**. Anchoring on the section means a generic label like "Total" or
 "Others" in one note never collides with the same word elsewhere. Differences
 beyond a rounding tolerance are flagged.
 
-Disclosures that are genuinely **cross-tabulated** — segment reporting, ESOP
-option grants, financial-instruments-by-category — can't be row-matched from PDF
-geometry (their columns are segments/categories, not periods). The tool detects
-these automatically and lists them as "set aside for manual review" instead of
-emitting false mismatches. It validated 181 comparative figures across a real
-Infosys interim filing (balance sheet, P&L, cash flow and ~10 notes) with the
-remaining cross-tab notes flagged for review.
+**Matrix notes** whose columns are a secondary dimension (segments, asset
+classes, measurement categories) rather than periods are reconciled a second
+way: each metric/line-item row is compared to the prior filing as a **value
+multiset** for the overlapping period — order- and column-independent. This
+covers *stacked* tables (segment reporting: a current-year row then an
+unlabelled comparative row) and single-period *block* tables (lease/PPE movement
+schedules). Rows that don't line up cleanly are surfaced for a manual look
+rather than asserted as errors.
+
+A few disclosures remain genuinely intractable from PDF geometry alone — ESOP
+option-grant grids, financial-instruments-by-category, and movement tables with
+no prior-period block — and are listed as "set aside for manual review". On a
+real Infosys interim filing the tool validated **302 comparative figures** (181
+in the statements and list-notes, 121 in the segment and lease matrices) with
+0 mismatches, leaving only those few notes for review.
 
 ```bash
 # Generate two sample filings (June-2026 quarter + the published June-2025 quarter)

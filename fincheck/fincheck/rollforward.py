@@ -126,6 +126,8 @@ class RollforwardResult:
     covered_period_keys: set = field(default_factory=set)
     ambiguous_skipped: int = 0
     review_sections: list[str] = field(default_factory=list)
+    matrix_ok: list = field(default_factory=list)
+    matrix_review: list = field(default_factory=list)
     output_pdf: str | None = None
 
     @property
@@ -139,6 +141,11 @@ class RollforwardResult:
     @property
     def figures_checked(self) -> int:
         return len(self.checks)
+
+    @property
+    def matrix_figures(self) -> int:
+        """Individual figures validated inside stacked matrix notes."""
+        return sum(len(c.current_values) for c in self.matrix_ok)
 
     @property
     def uncovered_periods(self) -> list[Period]:
@@ -165,6 +172,8 @@ class RollforwardResult:
             "prior": self.prior_pdfs,
             "figures_checked": self.figures_checked,
             "mismatch_count": len(self.mismatches),
+            "matrix_figures_checked": self.matrix_figures,
+            "matrix_rows_to_review": len(self.matrix_review),
             "ambiguous_skipped": self.ambiguous_skipped,
             "review_sections": self.review_sections,
             "consistent": self.consistent,
@@ -394,10 +403,10 @@ def check_rollforward(
     """
     current_pages_data = _select_pages(extract_pages(current_pdf), current_pages)
     current_figs = _figures_from_pages(current_pdf, current_pages_data)
-    prior_figs = [
-        _figures_from_pages(p, _select_pages(extract_pages(p), prior_pages))
-        for p in prior_pdfs
+    prior_pages_data = [
+        (p, _select_pages(extract_pages(p), prior_pages)) for p in prior_pdfs
     ]
+    prior_figs = [_figures_from_pages(name, pg) for name, pg in prior_pages_data]
 
     # Trust only the reporting periods the *primary statements* actually use.
     # Notes occasionally yield a misread date (an opening-balance "1 April", a
@@ -413,13 +422,24 @@ def check_rollforward(
     if primary:
         current_figs = [f for f in current_figs if f.period.key in primary]
 
-    # Set aside cross-tabulated / structurally-inconsistent notes (segment, ESOP,
-    # instruments-by-category): they can't be reliably row-matched from PDF
-    # geometry, so they are reported for manual review rather than compared.
+    # Cross-tabulated / structurally-inconsistent notes (segment, ESOP,
+    # instruments-by-category) can't be matched cell-by-cell. Take them out of
+    # the per-cell comparison...
     matrix = _review_sections(current_figs, prior_figs) - _PRIMARY_SECTIONS
     current_figs = [f for f in current_figs if f.section not in matrix]
 
     checks, covered, ambiguous = compare(current_figs, prior_figs, tolerance)
+
+    # ... and reconcile the *stacked* ones (segment reporting) row-by-row as value
+    # multisets. Sections that yield clean matches are validated; the rest stay on
+    # the manual-review list.
+    from .matrix import reconcile_matrix
+
+    matrix_ok, matrix_review = reconcile_matrix(
+        current_pages_data, prior_pages_data, tolerance, allowed=matrix
+    )
+    reconciled = {c.section for c in matrix_ok}
+    review_sections = sorted(matrix - reconciled)
     # Report uncovered periods for the primary statements; note pages emit too
     # many misread one-off dates to be meaningful. When no primary statement was
     # recognised (a single-table filing), fall back to every detected period.
@@ -443,7 +463,9 @@ def check_rollforward(
         current_periods=current_periods,
         covered_period_keys=covered,
         ambiguous_skipped=ambiguous,
-        review_sections=sorted(matrix),
+        review_sections=review_sections,
+        matrix_ok=matrix_ok,
+        matrix_review=matrix_review,
         output_pdf=written,
     )
 
@@ -481,17 +503,35 @@ def to_console(result: RollforwardResult) -> str:
             lines.append(f"     published in: {c.prior.source}")
             lines.append("")
 
+    if result.matrix_ok:
+        secs = ", ".join(sorted({c.section for c in result.matrix_ok}))
+        lines.append("")
+        lines.append(
+            f"Plus {result.matrix_figures} figures in stacked matrix notes "
+            f"reconciled row-by-row (note {secs})."
+        )
     if result.ambiguous_skipped:
         lines.append(
             f"({result.ambiguous_skipped} figures were skipped because the prior "
             "filings disagreed on the published value.)"
         )
+    if result.matrix_review:
+        lines.append("")
+        lines.append(
+            f"{len(result.matrix_review)} matrix row(s) did not reconcile and "
+            "need a manual look:"
+        )
+        for c in result.matrix_review[:12]:
+            lines.append(
+                f"  · note {c.section} {c.metric.strip()[:36]} "
+                f"({c.period_desc})"
+            )
     if result.review_sections:
         lines.append("")
         lines.append(
-            "Cross-tabulated notes set aside for manual review (segment / ESOP / "
-            "instruments-by-category style tables cannot be reliably row-matched "
-            "from the PDF):"
+            "Cross-tabulated notes set aside for manual review (ESOP / "
+            "instruments-by-category / movement tables cannot be reliably "
+            "row-matched from the PDF):"
         )
         lines.append("  " + ", ".join(result.review_sections))
     if result.uncovered_periods:
