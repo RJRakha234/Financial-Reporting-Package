@@ -15,7 +15,23 @@ from .numbers import format_number
 
 _GREEN = (0.30, 0.66, 0.36)
 _RED = (0.86, 0.20, 0.18)
+_ORANGE = (0.95, 0.60, 0.15)
 _PAD = 1.5
+
+
+def _annotate_matrix(page, rows) -> None:
+    """Mark the first cell of each reconciled matrix row (green) or review (orange)."""
+    for c in rows:
+        cell = c.cell
+        rect = fitz.Rect(cell.x0 - _PAD, cell.top - _PAD, cell.x1 + _PAD,
+                         cell.bottom + _PAD)
+        annot = page.add_highlight_annot(rect)
+        annot.set_colors(stroke=_GREEN if c.status == "ok" else _ORANGE)
+        annot.set_info(content=(
+            f"note {c.section} · {c.metric.strip()} ({c.period_desc}): "
+            + ("matches the previously published figures."
+               if c.status == "ok" else "could not be reconciled — review.")))
+        annot.update()
 
 
 def _annotate_page(page, checks) -> None:
@@ -110,14 +126,21 @@ def _add_summary_page(doc, checks) -> None:
         y += 22
 
 
-def write_rollforward_pdf(source_pdf: str, output_pdf: str, checks) -> str:
+def write_rollforward_pdf(
+    source_pdf: str, output_pdf: str, checks, matrix_rows=()
+) -> str:
     doc = fitz.open(source_pdf)
     by_page: dict[int, list] = {}
     for c in checks:
         by_page.setdefault(c.current.page_index, []).append(c)
-
     for page_index, page_checks in by_page.items():
         _annotate_page(doc[page_index], page_checks)
+
+    matrix_by_page: dict[int, list] = {}
+    for c in matrix_rows:
+        matrix_by_page.setdefault(c.page_index, []).append(c)
+    for page_index, rows in matrix_by_page.items():
+        _annotate_matrix(doc[page_index], rows)
 
     _add_summary_page(doc, checks)
     doc.save(output_pdf, garbage=4, deflate=True)

@@ -91,18 +91,18 @@ beyond a rounding tolerance are flagged.
 **Matrix notes** whose columns are a secondary dimension (segments, asset
 classes, measurement categories) rather than periods are reconciled a second
 way: each metric/line-item row is compared to the prior filing as a **value
-multiset** for the overlapping period — order- and column-independent. This
-covers *stacked* tables (segment reporting: a current-year row then an
-unlabelled comparative row) and single-period *block* tables (lease/PPE movement
-schedules). Rows that don't line up cleanly are surfaced for a manual look
-rather than asserted as errors.
+multiset** for the overlapping period — order-, column- and nil-padding
+independent, and paired by occurrence so a label that repeats within a note
+("Total" for assets then liabilities) still lines up. This covers *stacked*
+tables (segment reporting) and single-period *block* tables (financial
+instruments by category, property-plant-equipment and lease movement schedules).
+Rows that don't line up cleanly are surfaced for a manual look rather than
+asserted as errors.
 
-A few disclosures remain genuinely intractable from PDF geometry alone — ESOP
-option-grant grids, financial-instruments-by-category, and movement tables with
-no prior-period block — and are listed as "set aside for manual review". On a
-real Infosys interim filing the tool validated **302 comparative figures** (181
-in the statements and list-notes, 121 in the segment and lease matrices) with
-0 mismatches, leaving only those few notes for review.
+On a real Infosys interim filing the tool validated **566 comparative figures**
+(181 in the statements and list-notes, 385 across the segment, instruments,
+PP&E and lease matrices) with 0 mismatches — leaving only the ESOP option-grant
+disclosure (heterogeneous share-count/price sub-tables) for manual review.
 
 ```bash
 # Generate two sample filings (June-2026 quarter + the published June-2025 quarter)

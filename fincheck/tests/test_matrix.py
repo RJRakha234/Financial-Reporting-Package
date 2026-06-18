@@ -63,3 +63,31 @@ def test_stacked_segment_flags_changed_comparative():
     ok, review = reconcile_matrix(current, [("prior", prior)], 1.0,
                                   allowed={"2.15.1"})
     assert not ok and len(review) == 1 and review[0].status == "review"
+
+
+def _fi_page(date_str, deriv_pad):
+    # A "2.3.5" block with a duplicate "Total" label (assets then liabilities)
+    # and a derivative row padded with a variable number of nil columns.
+    rows = [
+        Row(0, 0, 8, "2.3.5 Impairment", 0.0, tokens=_toks("2.3.5 Impairment")),
+        _title(f"The carrying value ... as at {date_str} were as follows:"),
+        _datarow("Cash and cash equivalents", [100, 0, 0, 100, 100]),
+        _datarow("Total", [100, 0, 0, 100, 100]),          # assets total
+        _datarow("Derivative financial instruments", [0] * deriv_pad + [50, 50]),
+        _datarow("Total", [0, 0, 50, 50]),                 # liabilities total
+    ]
+    return Page(0, 600, 800, rows, 5)
+
+
+def test_block_duplicate_labels_and_nil_padding_reconcile():
+    # Same figures, but the prior pads the derivative row with an extra nil
+    # column and repeats the "Total" label — must still reconcile.
+    current = [_fi_page("March 31, 2025", deriv_pad=2)]
+    prior = [_fi_page("March 31, 2025", deriv_pad=3)]
+    ok, review = reconcile_matrix(current, [("prior", prior)], 1.0,
+                                  allowed={"2.3.5"})
+    assert not review
+    assert {c.metric for c in ok} == {
+        "Cash and cash equivalents", "Total", "Derivative financial instruments"}
+    # both "Total" rows (assets and liabilities) reconciled by occurrence
+    assert sum(c.metric == "Total" for c in ok) == 2

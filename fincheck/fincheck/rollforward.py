@@ -454,7 +454,9 @@ def check_rollforward(
     if output_pdf is not None:
         from .rollforward_highlight import write_rollforward_pdf
 
-        written = write_rollforward_pdf(current_pdf, output_pdf, checks)
+        written = write_rollforward_pdf(
+            current_pdf, output_pdf, checks, matrix_ok + matrix_review
+        )
 
     return RollforwardResult(
         current_pdf=current_pdf,

@@ -63,6 +63,65 @@ def _row_text(row) -> str:
     return " ".join(t["text"] for t in (row.tokens or []))
 
 
+def _is_datepart(v) -> bool:
+    return (1900 <= v <= 2099) or (float(v).is_integer() and 1 <= v <= 31)
+
+
+def title_of(row) -> tuple[str, list[date]] | None:
+    """Period title a row announces, or None.
+
+    A genuine title carries no real figures — only the date parts (a day like
+    "30" or a year like "2025"). This distinguishes the segment title
+    "Three months ended September 30, 2025 and September 30, 2024" from a
+    movement-table data row such as "Gross carrying value as at April 1, 2025
+    1,477 11,721 …", which also says "as at <date>" but holds real numbers.
+    """
+    t = parse_title_periods(_row_text(row))
+    if t is None:
+        return None
+    if any(not _is_datepart(c.value) for c in row.cells.values()):
+        return None
+    return t
+
+
+class _SectionTracker:
+    """Track the current section the way ``_figures_from_pages`` does.
+
+    Numbered notes (``2.4``) win; a primary-statement title is honoured only
+    before the notes begin, so prose in a note that references "the consolidated
+    statement of comprehensive income" doesn't masquerade as a heading.
+    """
+
+    def __init__(self):
+        self.section = ""
+        self._seen_statement = False
+        self._in_notes = False
+
+    def feed(self, row) -> bool:
+        heading = _section_of(row)
+        if heading is None:
+            return False
+        if heading[0].isdigit():
+            if self._seen_statement:
+                self._in_notes = True
+            self.section = heading
+        elif not self._in_notes:
+            self.section = heading
+            self._seen_statement = True
+        return True
+
+
+def _started_pages(pages):
+    """Yield pages from the first one carrying data, skipping cover/contents."""
+    started = False
+    for page in pages:
+        if not started:
+            if not any(c for r in page.rows for c in r.cells):
+                continue
+            started = True
+        yield page
+
+
 @dataclass
 class MatrixRow:
     section: str
@@ -90,8 +149,7 @@ def stacked_rows(pages, allowed: set | None = None) -> list[MatrixRow]:
     bare-year rows are ignored.
     """
     out: list[MatrixRow] = []
-    section = ""
-    started = False
+    tracker = _SectionTracker()
     title: tuple[str, list[date]] | None = None
 
     def usable(row):
@@ -102,25 +160,20 @@ def stacked_rows(pages, allowed: set | None = None) -> list[MatrixRow]:
             return None
         return vals
 
-    for page in pages:
-        if not started:
-            if not any(c for r in page.rows for c in r.cells):
-                continue
-            started = True
+    for page in _started_pages(pages):
         rows = page.rows
         i = 0
         while i < len(rows):
             row = rows[i]
-            heading = _section_of(row)
-            if heading is not None:
-                section = heading
+            if tracker.feed(row):
                 i += 1
                 continue
-            t = parse_title_periods(_row_text(row))
+            t = title_of(row)
             if t is not None and len(t[1]) >= 2:
                 title = t
                 i += 1
                 continue
+            section = tracker.section
             if (
                 title is None
                 or (allowed is not None and section not in allowed)
@@ -161,25 +214,19 @@ def block_rows(pages, allowed: set | None = None) -> list[MatrixRow]:
     for that one period.
     """
     out: list[MatrixRow] = []
-    section = ""
-    started = False
+    tracker = _SectionTracker()
     period: tuple[str, date] | None = None
-    for page in pages:
-        if not started:
-            if not any(c for r in page.rows for c in r.cells):
-                continue
-            started = True
+    for page in _started_pages(pages):
         for row in page.rows:
-            heading = _section_of(row)
-            if heading is not None:
-                section = heading
+            if tracker.feed(row):
                 continue
-            t = parse_title_periods(_row_text(row))
+            t = title_of(row)
             if t is not None:
                 # One date => a block we can reconcile; two dates => a stacked
                 # table, handled elsewhere, so clear the block context.
                 period = (t[0], t[1][0]) if len(t[1]) == 1 else None
                 continue
+            section = tracker.section
             if (
                 period is None
                 or (allowed is not None and section not in allowed)
@@ -210,6 +257,7 @@ class MatrixCheck:
     prior_values: tuple
     page_index: int
     source: str
+    cell: object = None
 
 
 def reconcile_matrix(
@@ -225,30 +273,46 @@ def reconcile_matrix(
     don't are surfaced for manual review (matrix extraction is noisy, so a
     non-match is flagged to look at, not asserted as an error).
     """
-    cur = stacked_rows(current_pages, allowed) + block_rows(current_pages, allowed)
+    def occurts(rows):
+        """Assign an occurrence index within (section, metric, period)."""
+        seen: dict[tuple, int] = {}
+        out = []
+        for r in rows:
+            k = (r.section, r.norm_metric, r.end_date, r.period_type)
+            seen[k] = seen.get(k, 0) + 1
+            out.append((k + (seen[k],), r))
+        return out
+
+    cur = occurts(
+        stacked_rows(current_pages, allowed) + block_rows(current_pages, allowed)
+    )
     prior_index: dict[tuple, tuple[str, MatrixRow]] = {}
     for name, pages in prior_named_pages:
-        for r in stacked_rows(pages, allowed) + block_rows(pages, allowed):
-            prior_index.setdefault(
-                (r.section, r.norm_metric, r.end_date, r.period_type), (name, r)
-            )
+        rows = stacked_rows(pages, allowed) + block_rows(pages, allowed)
+        for key, r in occurts(rows):
+            prior_index.setdefault(key, (name, r))
+
+    def nonzero(values):
+        # Category matrices pad rows with a varying number of nil ("-") columns;
+        # the meaningful content is the non-zero figures.
+        return tuple(sorted(v for v in values if v != 0))
 
     ok: list[MatrixCheck] = []
     review: list[MatrixCheck] = []
-    for c in cur:
-        key = (c.section, c.norm_metric, c.end_date, c.period_type)
+    for key, c in cur:
         if key not in prior_index:
             continue
         name, p = prior_index[key]
-        same = len(c.values) == len(p.values) and all(
-            abs(a - b) <= tolerance for a, b in zip(c.values, p.values)
+        cv, pv = nonzero(c.values), nonzero(p.values)
+        same = len(cv) == len(pv) and all(
+            abs(a - b) <= tolerance for a, b in zip(cv, pv)
         )
         check = MatrixCheck(
             status="ok" if same else "review",
             section=c.section, metric=c.metric,
             period_desc=f"{c.period_type} ended {c.end_date:%d %b %Y}",
             current_values=c.values, prior_values=p.values,
-            page_index=c.page_index, source=name,
+            page_index=c.page_index, source=name, cell=c.cell,
         )
         (ok if same else review).append(check)
     return ok, review
