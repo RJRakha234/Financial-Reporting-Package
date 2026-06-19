@@ -1,0 +1,84 @@
+# mailflow configuration — copy to mailflow.yaml and edit.
+#
+# Passwords are NEVER stored here. Each server names an environment variable
+# (password_env) that must hold the password at run time, e.g.:
+#
+#   export MAILFLOW_SMTP_PASSWORD='...'
+#   export MAILFLOW_IMAP_PASSWORD='...'
+
+database: mailflow.db          # SQLite file holding send + revert status
+poll_seconds: 60               # daemon check interval
+
+smtp:
+  host: smtp.office365.com
+  port: 587
+  security: starttls           # starttls | ssl | none
+  username: reports@example.com
+  password_env: MAILFLOW_SMTP_PASSWORD
+  from_addr: reports@example.com   # optional; defaults to username
+  timeout: 30
+
+# Optional. Only needed for automatic reply ("revert") detection.
+imap:
+  host: outlook.office365.com
+  port: 993
+  security: ssl
+  username: reports@example.com
+  password_env: MAILFLOW_IMAP_PASSWORD
+  mailbox: INBOX
+  timeout: 30
+
+defaults:
+  save_dir: sent_mail          # every message archived here as .eml
+  track_replies: true
+  reply_window_days: 14        # stop looking for a revert after N days
+
+jobs:
+  # A weekly report that you expect a reply to.
+  - name: weekly-financials
+    to: [cfo@example.com, controller@example.com]
+    cc: [audit@example.com]
+    bcc: [archive@example.com]
+    subject: "Weekly financial report — {date}"
+    body: |
+      Hi team,
+
+      Please find this week's financial report attached.
+      Kindly revert with any corrections by end of day.
+
+      Regards,
+      Reporting Automation
+    # Optional HTML alternative; same {placeholders} apply.
+    html_body: |
+      <p>Hi team,</p>
+      <p>Please find this week's financial report attached.
+      Kindly <b>revert</b> with any corrections by end of day.</p>
+    attachments:
+      - reports/weekly_*.pdf      # glob patterns are expanded at send time
+    variables:
+      department: Finance
+    schedule:
+      every: weekly               # interval | daily | weekly | once
+      weekday: mon
+      at: "08:00"
+    save_dir: sent_mail/weekly
+
+  # A daily heartbeat that needs no reply.
+  - name: daily-heartbeat
+    to: ops@example.com
+    subject: "Daily pipeline status — {datetime}"
+    body: "Automated daily status. No reply needed."
+    track_replies: false
+    schedule:
+      every: daily
+      at: "07:30"
+
+  # An every-N-seconds example (use minutes/hours too).
+  - name: frequent-poll
+    to: monitor@example.com
+    subject: "Heartbeat {time}"
+    body: "ping"
+    track_replies: false
+    schedule:
+      every: interval
+      minutes: 30

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Never commit live config (it names real recipients/servers), the local
+# status database, or archived outgoing mail.
+mailflow.yaml
+mailflow.db
+*.db
+sent_mail/
+*.eml
