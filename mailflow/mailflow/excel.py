@@ -29,17 +29,19 @@ config / environment, exactly as for the rest of mailflow.
 from __future__ import annotations
 
 import logging
+import os
 import re
-from dataclasses import dataclass, field
-from datetime import date, datetime
+import time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import openpyxl
-from openpyxl.styles import Font
+from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from .config import Config, Job
-from .message import build_message, save_message, save_raw
+from .config import Config, Job, SendingPolicy
+from .message import build_message, render, save_message, save_raw
 from .replies import ImapReplyChecker
 from .sender import Sender
 
@@ -56,6 +58,7 @@ INPUT_ALIASES: dict[str, list[str]] = {
     "send_time": ["send time", "timer", "schedule", "send at", "scheduled time",
                   "send date", "time", "when"],
     "save_dir": ["save dir", "save folder", "sent folder", "sent dir"],
+    "approved": ["approved?", "approved", "approval", "approve", "sign off"],
 }
 
 OUTPUT_HEADERS: dict[str, str] = {
@@ -63,10 +66,13 @@ OUTPUT_HEADERS: dict[str, str] = {
     "sent_at": "Sent At",
     "message_id": "Message ID",
     "sent_path": "Sent Path",
+    "attempts": "Attempts",
     "received_status": "Received Status",
     "received_from": "Received From",
     "received_at": "Received At",
     "received_path": "Received Path",
+    "reminders_sent": "Reminders Sent",
+    "last_reminder": "Last Reminder",
     "error": "Notes",
 }
 
@@ -74,6 +80,18 @@ _SENT = "Sent"
 _FAILED = "Failed"
 _AWAITING = "Awaiting"
 _RECEIVED = "Received"
+_HELD = "Held"  # awaiting approval
+
+_TRUTHY = {"y", "yes", "true", "1", "approved", "ok", "✓", "done", "sign off", "signed"}
+
+# Status-cell fills for the visual board.
+_FILL = {
+    _SENT: PatternFill("solid", fgColor="C6EFCE"),       # green
+    _FAILED: PatternFill("solid", fgColor="FFC7CE"),     # red
+    _AWAITING: PatternFill("solid", fgColor="FFEB9C"),   # amber
+    _RECEIVED: PatternFill("solid", fgColor="BDD7EE"),   # blue
+    _HELD: PatternFill("solid", fgColor="E2D9F3"),       # lilac
+}
 
 
 class ExcelError(Exception):
@@ -86,12 +104,31 @@ class SendSummary:
     failed: int = 0
     skipped_not_due: int = 0
     already_sent: int = 0
+    held_for_approval: int = 0
+    capped: int = 0
 
 
 @dataclass
 class ReplySummary:
     checked: int = 0
     received: int = 0
+
+
+@dataclass
+class ReminderSummary:
+    reminded: int = 0
+    escalated: int = 0
+
+
+@dataclass
+class StatusSummary:
+    total: int = 0
+    sent: int = 0
+    awaiting: int = 0
+    received: int = 0
+    failed: int = 0
+    held: int = 0
+    overdue: int = 0
 
 
 # -- spreadsheet wrapper -----------------------------------------------------
@@ -138,6 +175,13 @@ class Spreadsheet:
     def set(self, row: int, col: int, value) -> None:
         self.ws.cell(row=row, column=col, value=value)
 
+    def set_status(self, row: int, col: int, status: str) -> None:
+        """Write a status string and colour the cell to match the board."""
+        cell = self.ws.cell(row=row, column=col, value=status)
+        fill = _FILL.get(status)
+        if fill is not None:
+            cell.fill = fill
+
     def row_dict(self) -> dict[int, str]:
         """Map column index -> original header text (for placeholders)."""
         out = {}
@@ -151,6 +195,35 @@ class Spreadsheet:
         target = Path(path) if path else self.path
         self.wb.save(target)
         return target
+
+
+class FileLock:
+    """A simple exclusive lock so two runs can't clobber the same workbook.
+
+    Used as a context manager around an Excel operation. The lock is a sibling
+    ``<file>.lock`` created atomically; a stale lock can be removed by hand.
+    """
+
+    def __init__(self, target: str | Path):
+        self.lock_path = Path(str(target) + ".lock")
+        self._fd: int | None = None
+
+    def __enter__(self) -> "FileLock":
+        try:
+            self._fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(self._fd, str(os.getpid()).encode())
+        except FileExistsError:
+            raise ExcelError(
+                f"{self.lock_path.name} exists — another mailflow run may be "
+                f"using {self.lock_path.stem}. Remove the lock file if it is stale."
+            ) from None
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+        self.lock_path.unlink(missing_ok=True)
 
 
 # -- value parsing -----------------------------------------------------------
@@ -233,6 +306,28 @@ def _require_columns(sheet: Spreadsheet) -> dict[str, int | None]:
     return cols
 
 
+def _truthy(value: object) -> bool:
+    return value is not None and str(value).strip().lower() in _TRUTHY
+
+
+def _send_with_retry(
+    sender: Sender, msg, recipients: list[str], policy: SendingPolicy
+) -> tuple[int, Exception | None]:
+    """Try to send, retrying transient failures with linear backoff."""
+    last: Exception | None = None
+    for attempt in range(1, policy.max_attempts + 1):
+        try:
+            sender.send(msg, recipients)
+            return attempt, None
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            log.warning("send attempt %d/%d failed: %s",
+                        attempt, policy.max_attempts, exc)
+            if attempt < policy.max_attempts and policy.retry_backoff_seconds > 0:
+                time.sleep(policy.retry_backoff_seconds * attempt)
+    return policy.max_attempts, last
+
+
 def send_due(
     sheet: Spreadsheet,
     config: Config,
@@ -240,11 +335,17 @@ def send_due(
     now: datetime | None = None,
     dry_run: bool = False,
 ) -> SendSummary:
-    """Send every row whose Send Time has arrived and is not yet sent."""
+    """Send every approved, due row that has not been sent yet.
+
+    Honours the approval gate, per-run rate cap, retry policy, and throttle
+    from ``config.sending``, and colour-codes the status cells.
+    """
     now = now or datetime.now()
     cols = _require_columns(sheet)
     out = {k: sheet.ensure_col(h) for k, h in OUTPUT_HEADERS.items()} if not dry_run else {}
+    policy = config.sending
     summary = SendSummary()
+    sent_this_run = 0
 
     for row in sheet.data_rows():
         to = split_addresses(sheet.get(row, cols["to"]))
@@ -257,11 +358,23 @@ def send_due(
         if status == _SENT.lower():
             summary.already_sent += 1
             continue
-        # Any other value (blank/Pending, or a previous 'Failed') is (re)tried.
 
         when = parse_when(sheet.get(row, cols["send_time"])) if cols["send_time"] else None
         if when is not None and when > now:
             summary.skipped_not_due += 1
+            continue
+
+        # Approval gate: if an approval column exists, the row must be approved.
+        if cols["approved"] is not None and not _truthy(sheet.get(row, cols["approved"])):
+            summary.held_for_approval += 1
+            if not dry_run:
+                sheet.set_status(row, out["sent_status"], _HELD)
+                sheet.set(row, out["error"], "awaiting approval")
+            continue
+
+        # Per-run rate cap (protects against corporate send limits).
+        if policy.max_per_run is not None and sent_this_run >= policy.max_per_run:
+            summary.capped += 1
             continue
 
         job = Job(
@@ -277,28 +390,42 @@ def send_due(
         if dry_run:
             log.info("[dry-run] row %s -> %s | %s", row, ", ".join(to), job.subject)
             summary.sent += 1
+            sent_this_run += 1
             continue
 
+        # Build + archive first; a bad attachment fails the row cleanly.
         try:
             msg = build_message(job, config.smtp, now)
-            save_dir = (str(sheet.get(row, cols["save_dir"])) if cols["save_dir"] and sheet.get(row, cols["save_dir"]) else None) or config.save_dir
+            override = sheet.get(row, cols["save_dir"]) if cols["save_dir"] else None
+            save_dir = str(override) if override else config.save_dir
             saved = save_message(msg, save_dir, f"row{row}")
-            sender.send(msg, job.all_recipients())
         except Exception as exc:  # noqa: BLE001
-            sheet.set(row, out["sent_status"], _FAILED)
+            sheet.set_status(row, out["sent_status"], _FAILED)
             sheet.set(row, out["error"], str(exc)[:300])
             summary.failed += 1
-            log.error("row %s failed: %s", row, exc)
+            log.error("row %s could not be prepared: %s", row, exc)
             continue
 
-        sheet.set(row, out["sent_status"], _SENT)
+        attempts, error = _send_with_retry(sender, msg, job.all_recipients(), policy)
+        sheet.set(row, out["attempts"], attempts)
+        if error is not None:
+            sheet.set_status(row, out["sent_status"], _FAILED)
+            sheet.set(row, out["error"], str(error)[:300])
+            summary.failed += 1
+            log.error("row %s failed after %d attempt(s): %s", row, attempts, error)
+            continue
+
+        sheet.set_status(row, out["sent_status"], _SENT)
         sheet.set(row, out["sent_at"], now.strftime("%Y-%m-%d %H:%M:%S"))
         sheet.set(row, out["message_id"], msg["Message-ID"])
         sheet.set(row, out["sent_path"], str(saved))
-        sheet.set(row, out["received_status"], _AWAITING)
+        sheet.set_status(row, out["received_status"], _AWAITING)
         sheet.set(row, out["error"], "")
         summary.sent += 1
+        sent_this_run += 1
         log.info("row %s sent to %s (saved %s)", row, ", ".join(to), saved)
+        if policy.throttle_seconds > 0:
+            time.sleep(policy.throttle_seconds)
 
     if not dry_run:
         sheet.save()
@@ -336,7 +463,7 @@ def check_replies(
             if hit is None:
                 continue
             saved = save_raw(hit.raw, config.received_dir, f"row{row}-revert")
-            sheet.set(row, out["received_status"], _RECEIVED)
+            sheet.set_status(row, out["received_status"], _RECEIVED)
             sheet.set(row, out["received_from"], hit.from_addr)
             sheet.set(row, out["received_at"], hit.received_at or now.strftime("%Y-%m-%d %H:%M:%S"))
             sheet.set(row, out["received_path"], str(saved))
@@ -346,6 +473,124 @@ def check_replies(
         checker._logout(conn)
 
     sheet.save()
+    return summary
+
+
+# -- reminders / SLA escalation ---------------------------------------------
+
+
+def send_reminders(
+    sheet: Spreadsheet,
+    config: Config,
+    sender: Sender,
+    now: datetime | None = None,
+) -> ReminderSummary:
+    """Chase rows that have been Awaiting a revert beyond the configured SLA.
+
+    Sends up to ``max_reminders`` reminders per row (no more often than
+    ``every_hours``), cc-ing ``escalate_to`` on the final reminder.
+    """
+    policy = config.reminders
+    summary = ReminderSummary()
+    if not policy.enabled:
+        return summary
+
+    now = now or datetime.now()
+    cols = _require_columns(sheet)
+    out = {k: sheet.ensure_col(h) for k, h in OUTPUT_HEADERS.items()}
+    sla = timedelta(hours=policy.sla_hours)
+    gap = timedelta(hours=policy.every_hours)
+
+    for row in sheet.data_rows():
+        sent = str(sheet.get(row, out["sent_status"]) or "").strip().lower()
+        recvd = str(sheet.get(row, out["received_status"]) or "").strip().lower()
+        if sent != _SENT.lower() or recvd == _RECEIVED.lower():
+            continue
+
+        sent_at = parse_when(sheet.get(row, out["sent_at"]))
+        if sent_at is None or now - sent_at < sla:
+            continue  # not overdue yet
+
+        reminders_sent = int(sheet.get(row, out["reminders_sent"]) or 0)
+        if reminders_sent >= policy.max_reminders:
+            continue  # exhausted
+
+        last_reminder = parse_when(sheet.get(row, out["last_reminder"]))
+        if last_reminder is not None and now - last_reminder < gap:
+            continue  # too soon since the last nudge
+
+        to = split_addresses(sheet.get(row, cols["to"]))
+        if not to:
+            continue
+        is_final = reminders_sent + 1 >= policy.max_reminders
+        cc = list(policy.escalate_to) if (is_final and policy.escalate_to) else []
+
+        context = _context(sheet, row, now)
+        reminder = Job(
+            name=f"row{row}-reminder",
+            to=to,
+            cc=cc,
+            subject=render(policy.subject, context),
+            body=render(policy.body, context),
+            variables=context,
+        )
+        try:
+            msg = build_message(reminder, config.smtp, now)
+            save_message(msg, config.save_dir, f"row{row}-reminder")
+            attempts, error = _send_with_retry(
+                sender, msg, reminder.all_recipients(), config.sending
+            )
+            if error is not None:
+                raise error
+        except Exception as exc:  # noqa: BLE001
+            log.error("row %s reminder failed: %s", row, exc)
+            continue
+
+        sheet.set(row, out["reminders_sent"], reminders_sent + 1)
+        sheet.set(row, out["last_reminder"], now.strftime("%Y-%m-%d %H:%M:%S"))
+        summary.reminded += 1
+        if cc:
+            summary.escalated += 1
+            log.info("row %s escalated to %s", row, ", ".join(cc))
+        else:
+            log.info("row %s reminded (%d)", row, reminders_sent + 1)
+
+    sheet.save()
+    return summary
+
+
+# -- status board ------------------------------------------------------------
+
+
+def summarize(sheet: Spreadsheet, config: Config, now: datetime | None = None) -> StatusSummary:
+    """Tally the board: counts per status and how many are overdue for a revert."""
+    now = now or datetime.now()
+    s_col = sheet.col(OUTPUT_HEADERS["sent_status"])
+    r_col = sheet.col(OUTPUT_HEADERS["received_status"])
+    at_col = sheet.col(OUTPUT_HEADERS["sent_at"])
+    to_col = sheet.col(*INPUT_ALIASES["to"])
+    sla = timedelta(hours=config.reminders.sla_hours)
+    summary = StatusSummary()
+
+    for row in sheet.data_rows():
+        if not (to_col and sheet.get(row, to_col)):
+            continue
+        summary.total += 1
+        sent = str(sheet.get(row, s_col) or "").strip().lower() if s_col else ""
+        recvd = str(sheet.get(row, r_col) or "").strip().lower() if r_col else ""
+        if sent == _SENT.lower():
+            summary.sent += 1
+        elif sent == _FAILED.lower():
+            summary.failed += 1
+        elif sent == _HELD.lower():
+            summary.held += 1
+        if recvd == _RECEIVED.lower():
+            summary.received += 1
+        elif sent == _SENT.lower():
+            summary.awaiting += 1
+            sent_at = parse_when(sheet.get(row, at_col)) if at_col else None
+            if sent_at is not None and now - sent_at >= sla:
+                summary.overdue += 1
     return summary
 
 
@@ -359,7 +604,7 @@ def make_template(path: str | Path) -> Path:
     ws = wb.active
     ws.title = "Mails"
     headers = [
-        "To", "CC", "Subject", "Body", "Attachments", "Send Time",
+        "To", "CC", "Subject", "Body", "Attachments", "Send Time", "Approved?",
         *OUTPUT_HEADERS.values(),
     ]
     ws.append(headers)
@@ -372,10 +617,12 @@ def make_template(path: str | Path) -> Path:
         "Hi team,\n\nPlease find this week's report attached. Kindly revert with approval.",
         "reports/weekly_latest.pdf",
         "2026-06-22 08:00",
+        "No",
     ])
-    # Friendly column widths.
-    widths = [34, 22, 32, 40, 26, 18, 12, 18, 30, 28, 14, 16, 18, 28, 24]
-    for i, w in enumerate(widths, 1):
-        ws.column_dimensions[get_column_letter(i)].width = w
+    wide = {"To": 34, "CC": 22, "Subject": 30, "Body": 40, "Attachments": 26,
+            "Send Time": 18, "Sent Path": 26, "Received Path": 26, "Notes": 28}
+    for i, header in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(i)].width = wide.get(header, 15)
+    ws.freeze_panes = "A2"
     wb.save(path)
     return path

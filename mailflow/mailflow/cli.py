@@ -11,10 +11,13 @@ from pathlib import Path
 from .config import Config, ConfigError, load_config
 from .excel import (
     ExcelError,
+    FileLock,
     Spreadsheet,
     check_replies as xlsx_check_replies,
     make_template,
     send_due,
+    send_reminders,
+    summarize,
 )
 from .replies import ImapReplyChecker
 from .scheduler import next_run, run_due, run_forever, send_job
@@ -309,14 +312,21 @@ def cmd_xlsx_init(args: argparse.Namespace) -> int:
 
 def cmd_xlsx_send(args: argparse.Namespace) -> int:
     config = _load(args)
-    sheet = Spreadsheet(args.file, sheet=args.sheet)
+    if getattr(args, "max", None) is not None:
+        config.sending.max_per_run = args.max
     sender = _make_sender(config, args.dry_run)
-    s = send_due(sheet, config, sender, dry_run=args.dry_run)
-    prefix = "[dry-run] " if args.dry_run else ""
-    print(f"{prefix}sent={s.sent} failed={s.failed} "
-          f"not-due={s.skipped_not_due} already-sent={s.already_sent}")
-    if not args.dry_run:
-        print(f"status written back to {sheet.path}")
+    if args.dry_run:
+        s = send_due(Spreadsheet(args.file, sheet=args.sheet), config, sender, dry_run=True)
+        print(f"[dry-run] would send {s.sent}; held={s.held_for_approval} "
+              f"not-due={s.skipped_not_due} already-sent={s.already_sent}")
+        return 0
+    with FileLock(args.file):
+        sheet = Spreadsheet(args.file, sheet=args.sheet)
+        s = send_due(sheet, config, sender)
+    print(f"sent={s.sent} failed={s.failed} held={s.held_for_approval} "
+          f"not-due={s.skipped_not_due} already-sent={s.already_sent}"
+          + (f" capped={s.capped}" if s.capped else ""))
+    print(f"status written back to {sheet.path}")
     return 1 if s.failed else 0
 
 
@@ -326,22 +336,66 @@ def cmd_xlsx_check_replies(args: argparse.Namespace) -> int:
         print("error: no 'imap' section in config; cannot detect reverts.",
               file=sys.stderr)
         return 2
-    sheet = Spreadsheet(args.file, sheet=args.sheet)
-    r = xlsx_check_replies(sheet, config)
+    with FileLock(args.file):
+        sheet = Spreadsheet(args.file, sheet=args.sheet)
+        r = xlsx_check_replies(sheet, config)
     print(f"checked {r.checked} awaiting row(s); {r.received} revert(s) recorded.")
     print(f"status written back to {sheet.path}")
     return 0
 
 
-def cmd_xlsx_run(args: argparse.Namespace) -> int:
-    """Send due rows, then (if IMAP configured) reconcile reverts — for cron."""
-    rc = cmd_xlsx_send(args)
+def cmd_xlsx_remind(args: argparse.Namespace) -> int:
     config = _load(args)
-    if config.imap and not args.dry_run:
+    if not config.reminders.enabled:
+        print("note: reminders are disabled; add a 'reminders:' section with "
+              "enabled: true to the config.", file=sys.stderr)
+        return 2
+    with FileLock(args.file):
         sheet = Spreadsheet(args.file, sheet=args.sheet)
-        r = xlsx_check_replies(sheet, config)
-        print(f"reverts: checked {r.checked}, recorded {r.received}.")
-    return rc
+        r = send_reminders(sheet, config, _make_sender(config, False))
+    print(f"sent {r.reminded} reminder(s); {r.escalated} escalated.")
+    return 0
+
+
+def cmd_xlsx_run(args: argparse.Namespace) -> int:
+    """Send due rows, reconcile reverts, then send reminders — for cron."""
+    config = _load(args)
+    if getattr(args, "max", None) is not None:
+        config.sending.max_per_run = args.max
+    sender = _make_sender(config, args.dry_run)
+    if args.dry_run:
+        s = send_due(Spreadsheet(args.file, sheet=args.sheet), config, sender, dry_run=True)
+        print(f"[dry-run] would send {s.sent}; held={s.held_for_approval} "
+              f"not-due={s.skipped_not_due}")
+        return 0
+    with FileLock(args.file):
+        sheet = Spreadsheet(args.file, sheet=args.sheet)
+        s = send_due(sheet, config, sender)
+        print(f"sent={s.sent} failed={s.failed} held={s.held_for_approval}")
+        if config.imap:
+            sheet = Spreadsheet(args.file, sheet=args.sheet)
+            r = xlsx_check_replies(sheet, config)
+            print(f"reverts: checked {r.checked}, recorded {r.received}.")
+        if config.reminders.enabled:
+            sheet = Spreadsheet(args.file, sheet=args.sheet)
+            rem = send_reminders(sheet, config, sender)
+            print(f"reminders: sent {rem.reminded}, escalated {rem.escalated}.")
+    return 1 if s.failed else 0
+
+
+def cmd_xlsx_status(args: argparse.Namespace) -> int:
+    config = _load(args)
+    sheet = Spreadsheet(args.file, sheet=args.sheet)
+    s = summarize(sheet, config)
+    print(f"Board: {sheet.path}")
+    print(f"  total rows     {s.total}")
+    print(f"  sent           {s.sent}")
+    print(f"  ├─ received    {s.received}")
+    print(f"  └─ awaiting    {s.awaiting}"
+          + (f"  ({s.overdue} overdue > SLA)" if s.overdue else ""))
+    print(f"  held (approval){s.held:>4}")
+    print(f"  failed         {s.failed}")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -408,9 +462,10 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--force", action="store_true", help="overwrite if it exists")
     x.set_defaults(func=cmd_xlsx_init)
 
-    x = xlsub.add_parser("send", help="send all due rows; write status back")
+    x = xlsub.add_parser("send", help="send all due, approved rows; write status back")
     x.add_argument("file", help="path to the .xlsx")
     x.add_argument("--sheet", help="worksheet name (default: first)")
+    x.add_argument("--max", type=int, help="cap mails sent this run (rate control)")
     x.add_argument("--dry-run", action="store_true", help="don't actually send")
     x.set_defaults(func=cmd_xlsx_send)
 
@@ -419,11 +474,22 @@ def build_parser() -> argparse.ArgumentParser:
     x.add_argument("--sheet", help="worksheet name (default: first)")
     x.set_defaults(func=cmd_xlsx_check_replies)
 
-    x = xlsub.add_parser("run", help="send due rows then reconcile reverts (for cron)")
+    x = xlsub.add_parser("remind", help="chase rows awaiting a revert past the SLA")
     x.add_argument("file", help="path to the .xlsx")
     x.add_argument("--sheet", help="worksheet name (default: first)")
+    x.set_defaults(func=cmd_xlsx_remind)
+
+    x = xlsub.add_parser("run", help="send + reconcile reverts + remind (for cron)")
+    x.add_argument("file", help="path to the .xlsx")
+    x.add_argument("--sheet", help="worksheet name (default: first)")
+    x.add_argument("--max", type=int, help="cap mails sent this run (rate control)")
     x.add_argument("--dry-run", action="store_true", help="don't actually send")
     x.set_defaults(func=cmd_xlsx_run)
+
+    x = xlsub.add_parser("status", help="print a summary of the board")
+    x.add_argument("file", help="path to the .xlsx")
+    x.add_argument("--sheet", help="worksheet name (default: first)")
+    x.set_defaults(func=cmd_xlsx_status)
 
     return parser
 

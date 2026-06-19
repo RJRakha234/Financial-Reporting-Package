@@ -25,10 +25,16 @@ from .config import (
 )
 from .excel import (
     ExcelError,
+    FileLock,
+    ReminderSummary,
+    SendSummary,
     Spreadsheet,
+    StatusSummary,
     check_replies,
     make_template,
     send_due,
+    send_reminders,
+    summarize,
 )
 from .message import build_message, save_message, save_raw
 from .replies import ImapReplyChecker, ReplyCheckResult
@@ -47,10 +53,16 @@ __all__ = [
     "SmtpConfig",
     "load_config",
     "ExcelError",
+    "FileLock",
+    "ReminderSummary",
+    "SendSummary",
     "Spreadsheet",
+    "StatusSummary",
     "check_replies",
     "make_template",
     "send_due",
+    "send_reminders",
+    "summarize",
     "build_message",
     "save_message",
     "save_raw",

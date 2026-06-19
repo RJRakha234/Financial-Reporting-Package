@@ -109,6 +109,29 @@ or Body — i.e. **mail-merge straight from the sheet** (e.g. a `Region` column 
 
 Run `xlsx send --dry-run` to preview without sending or writing anything.
 
+### Efficiency features
+
+| Feature | How to use it |
+|---|---|
+| **Approval gate** | Add an `Approved?` column. Rows are sent only when it's `Yes`/`True`/`✓`; others are marked **Held** until approved. |
+| **Auto-retry** | Transient SMTP failures are retried (`sending.max_attempts`, linear backoff); the `Attempts` column records tries and `Notes` the last error. |
+| **Revert reminders + escalation** | Enable `reminders:`; rows awaiting a revert past `sla_hours` get a chase-up (`xlsx remind` / `xlsx run`), escalating to `escalate_to` on the final one. `Reminders Sent` / `Last Reminder` track it. |
+| **Rate control** | `sending.max_per_run` (or `--max`) caps mails per run; `throttle_seconds` paces them — to stay under corporate send limits. |
+| **Visual board** | Status cells are colour-coded: green `Sent`, amber `Awaiting`, blue `Received`, red `Failed`, lilac `Held`. |
+| **At-a-glance summary** | `python -m mailflow xlsx status mails.xlsx` prints totals, awaiting/overdue, held and failed counts. |
+| **Concurrency lock** | Each write operation takes an exclusive `<file>.lock`, so a scheduled run and a manual run can't clobber the sheet. |
+
+Full command set:
+
+```bash
+python -m mailflow xlsx init mails.xlsx           # template with all columns
+python -m mailflow xlsx send mails.xlsx [--max N] # send approved, due rows
+python -m mailflow xlsx check-replies mails.xlsx  # reconcile reverts via IMAP
+python -m mailflow xlsx remind mails.xlsx         # chase overdue rows
+python -m mailflow xlsx run mails.xlsx            # send + reconcile + remind (cron)
+python -m mailflow xlsx status mails.xlsx         # board summary
+```
+
 ## Live demo & presentation
 
 See it work end to end (no internet or real mailbox needed):

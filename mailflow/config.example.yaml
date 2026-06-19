@@ -29,9 +29,29 @@ imap:
   timeout: 30
 
 defaults:
-  save_dir: sent_mail          # every message archived here as .eml
+  save_dir: sent_mail          # every sent message archived here as .eml
+  received_dir: received_mail  # every received revert archived here as .eml
   track_replies: true
   reply_window_days: 14        # stop looking for a revert after N days
+
+# Pacing & resilience for both Excel and job modes (all optional).
+sending:
+  max_per_run: 200             # cap mails per invocation (corporate send limits)
+  throttle_seconds: 0          # pause between sends (e.g. 1 to go gently)
+  max_attempts: 3              # retry transient SMTP failures this many times
+  retry_backoff_seconds: 2     # linear backoff: 2s, 4s, ...
+
+# Automatic chase-ups for mail awaiting a revert (Excel mode; optional).
+reminders:
+  enabled: false               # set true to turn on `xlsx remind` / `xlsx run`
+  sla_hours: 48                # remind once a row is Awaiting longer than this
+  max_reminders: 2             # stop after this many reminders
+  every_hours: 24              # minimum gap between reminders
+  escalate_to: [manager@example.com]   # cc'd on the final reminder
+  subject: "Reminder: awaiting your response — {Subject}"
+  body: |
+    This is an automated reminder that we are still awaiting your response to
+    "{Subject}" (originally sent {Sent At}). Please revert at your convenience.
 
 jobs:
   # A weekly report that you expect a reply to.

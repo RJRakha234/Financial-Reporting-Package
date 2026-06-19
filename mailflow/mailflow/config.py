@@ -127,6 +127,33 @@ class Job:
 
 
 @dataclass
+class SendingPolicy:
+    """How sends are paced and retried (applies to Excel + job modes)."""
+
+    max_per_run: int | None = None  # cap mails per invocation (rate control)
+    throttle_seconds: float = 0.0  # pause between successful sends
+    max_attempts: int = 3  # total tries per mail before marking Failed
+    retry_backoff_seconds: float = 2.0  # base backoff, multiplied by attempt #
+
+
+@dataclass
+class ReminderPolicy:
+    """Automatic chase-ups for mail that has not been reverted in time."""
+
+    enabled: bool = False
+    sla_hours: float = 48.0  # remind once Awaiting exceeds this age
+    max_reminders: int = 2  # stop after this many reminders
+    every_hours: float = 24.0  # minimum gap between reminders
+    escalate_to: list[str] = field(default_factory=list)  # cc'd on final reminder
+    subject: str = "Reminder: awaiting your response — {Subject}"
+    body: str = (
+        "This is an automated reminder that we are still awaiting your "
+        "response to: \"{Subject}\" (originally sent {Sent At}).\n\n"
+        "Please revert at your earliest convenience."
+    )
+
+
+@dataclass
 class Config:
     smtp: SmtpConfig
     imap: ImapConfig | None
@@ -135,6 +162,8 @@ class Config:
     save_dir: str = "sent_mail"
     received_dir: str = "received_mail"
     poll_seconds: int = 60
+    sending: SendingPolicy = field(default_factory=SendingPolicy)
+    reminders: ReminderPolicy = field(default_factory=ReminderPolicy)
 
     def job(self, name: str) -> Job:
         for job in self.jobs:
@@ -318,4 +347,31 @@ def load_config(path: str | Path) -> Config:
         save_dir=str(defaults.get("save_dir", "sent_mail")),
         received_dir=str(defaults.get("received_dir", "received_mail")),
         poll_seconds=int(raw.get("poll_seconds", 60)),
+        sending=_parse_sending(raw.get("sending")),
+        reminders=_parse_reminders(raw.get("reminders")),
+    )
+
+
+def _parse_sending(raw: dict | None) -> SendingPolicy:
+    raw = raw or {}
+    max_per_run = raw.get("max_per_run")
+    return SendingPolicy(
+        max_per_run=int(max_per_run) if max_per_run not in (None, "") else None,
+        throttle_seconds=float(raw.get("throttle_seconds", 0.0)),
+        max_attempts=max(1, int(raw.get("max_attempts", 3))),
+        retry_backoff_seconds=float(raw.get("retry_backoff_seconds", 2.0)),
+    )
+
+
+def _parse_reminders(raw: dict | None) -> ReminderPolicy:
+    raw = raw or {}
+    default = ReminderPolicy()
+    return ReminderPolicy(
+        enabled=bool(raw.get("enabled", False)),
+        sla_hours=float(raw.get("sla_hours", default.sla_hours)),
+        max_reminders=int(raw.get("max_reminders", default.max_reminders)),
+        every_hours=float(raw.get("every_hours", default.every_hours)),
+        escalate_to=_as_list(raw.get("escalate_to")),
+        subject=str(raw.get("subject", default.subject)),
+        body=str(raw.get("body", default.body)),
     )
