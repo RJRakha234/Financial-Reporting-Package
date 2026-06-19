@@ -103,10 +103,14 @@ def _safe_filename(text: str) -> str:
 
 def save_message(msg: EmailMessage, save_dir: str | Path, job_name: str) -> Path:
     """Write ``msg`` to ``save_dir`` as a timestamped ``.eml`` file."""
+    return save_raw(bytes(msg), save_dir, job_name)
+
+
+def save_raw(raw: bytes, save_dir: str | Path, name: str) -> Path:
+    """Write raw RFC822 ``bytes`` to ``save_dir`` as a timestamped ``.eml``."""
     directory = Path(save_dir)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    filename = f"{stamp}_{_safe_filename(job_name)}.eml"
-    path = directory / filename
-    path.write_bytes(bytes(msg))
+    path = directory / f"{stamp}_{_safe_filename(name)}.eml"
+    path.write_bytes(raw)
     return path

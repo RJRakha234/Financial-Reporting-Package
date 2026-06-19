@@ -12,3 +12,6 @@ sent_mail/
 
 # Demo runtime artifacts
 demo/_run/
+demo/_xlsx_run/
+*.xlsx
+!demo/**/template*.xlsx

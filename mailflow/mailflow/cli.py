@@ -9,6 +9,13 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import Config, ConfigError, load_config
+from .excel import (
+    ExcelError,
+    Spreadsheet,
+    check_replies as xlsx_check_replies,
+    make_template,
+    send_due,
+)
 from .replies import ImapReplyChecker
 from .scheduler import next_run, run_due, run_forever, send_job
 from .sender import DryRunSender, Sender, SmtpSender
@@ -284,6 +291,60 @@ def _max_window(config: Config) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Excel-driven commands
+# ---------------------------------------------------------------------------
+
+
+def cmd_xlsx_init(args: argparse.Namespace) -> int:
+    path = Path(args.file)
+    if path.exists() and not args.force:
+        print(f"error: {path} already exists (use --force)", file=sys.stderr)
+        return 2
+    make_template(path)
+    print(f"Wrote spreadsheet template to {path}")
+    print("Fill in To / Subject / Body / Send Time rows, then run "
+          "`python -m mailflow xlsx send <file>`.")
+    return 0
+
+
+def cmd_xlsx_send(args: argparse.Namespace) -> int:
+    config = _load(args)
+    sheet = Spreadsheet(args.file, sheet=args.sheet)
+    sender = _make_sender(config, args.dry_run)
+    s = send_due(sheet, config, sender, dry_run=args.dry_run)
+    prefix = "[dry-run] " if args.dry_run else ""
+    print(f"{prefix}sent={s.sent} failed={s.failed} "
+          f"not-due={s.skipped_not_due} already-sent={s.already_sent}")
+    if not args.dry_run:
+        print(f"status written back to {sheet.path}")
+    return 1 if s.failed else 0
+
+
+def cmd_xlsx_check_replies(args: argparse.Namespace) -> int:
+    config = _load(args)
+    if not config.imap:
+        print("error: no 'imap' section in config; cannot detect reverts.",
+              file=sys.stderr)
+        return 2
+    sheet = Spreadsheet(args.file, sheet=args.sheet)
+    r = xlsx_check_replies(sheet, config)
+    print(f"checked {r.checked} awaiting row(s); {r.received} revert(s) recorded.")
+    print(f"status written back to {sheet.path}")
+    return 0
+
+
+def cmd_xlsx_run(args: argparse.Namespace) -> int:
+    """Send due rows, then (if IMAP configured) reconcile reverts — for cron."""
+    rc = cmd_xlsx_send(args)
+    config = _load(args)
+    if config.imap and not args.dry_run:
+        sheet = Spreadsheet(args.file, sheet=args.sheet)
+        r = xlsx_check_replies(sheet, config)
+        print(f"reverts: checked {r.checked}, recorded {r.received}.")
+    return rc
+
+
+# ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
 
@@ -336,6 +397,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=50, help="max rows (default: 50)")
     p.set_defaults(func=cmd_status)
 
+    # -- Excel-driven group ------------------------------------------------
+    xl = sub.add_parser(
+        "xlsx", help="drive mail from an Excel spreadsheet (row = one mail)"
+    )
+    xlsub = xl.add_subparsers(dest="xlsx_command", required=True)
+
+    x = xlsub.add_parser("init", help="write a ready-to-edit .xlsx template")
+    x.add_argument("file", help="path for the new .xlsx")
+    x.add_argument("--force", action="store_true", help="overwrite if it exists")
+    x.set_defaults(func=cmd_xlsx_init)
+
+    x = xlsub.add_parser("send", help="send all due rows; write status back")
+    x.add_argument("file", help="path to the .xlsx")
+    x.add_argument("--sheet", help="worksheet name (default: first)")
+    x.add_argument("--dry-run", action="store_true", help="don't actually send")
+    x.set_defaults(func=cmd_xlsx_send)
+
+    x = xlsub.add_parser("check-replies", help="reconcile reverts via IMAP; write back")
+    x.add_argument("file", help="path to the .xlsx")
+    x.add_argument("--sheet", help="worksheet name (default: first)")
+    x.set_defaults(func=cmd_xlsx_check_replies)
+
+    x = xlsub.add_parser("run", help="send due rows then reconcile reverts (for cron)")
+    x.add_argument("file", help="path to the .xlsx")
+    x.add_argument("--sheet", help="worksheet name (default: first)")
+    x.add_argument("--dry-run", action="store_true", help="don't actually send")
+    x.set_defaults(func=cmd_xlsx_run)
+
     return parser
 
 
@@ -346,6 +435,9 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
+        return 2
+    except ExcelError as exc:
+        print(f"spreadsheet error: {exc}", file=sys.stderr)
         return 2
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)

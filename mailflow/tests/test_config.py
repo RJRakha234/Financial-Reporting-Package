@@ -80,10 +80,11 @@ def test_password_from_env(tmp_path, monkeypatch):
     assert cfg.smtp.password() == "secret"
 
 
-def test_missing_jobs_rejected(tmp_path):
+def test_jobs_optional_for_excel_mode(tmp_path):
+    # The Excel/CSV front-end needs only server settings, so zero jobs is fine.
     text = GOOD.split("jobs:")[0] + "jobs: []\n"
-    with pytest.raises(ConfigError):
-        load_config(write(tmp_path, text))
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.jobs == []
 
 
 def test_duplicate_job_names_rejected(tmp_path):

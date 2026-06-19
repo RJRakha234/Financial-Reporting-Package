@@ -29,6 +29,21 @@ Set `DEMO_PAUSE=2` to slow the script down for a live audience:
 DEMO_PAUSE=2 bash demo/run_demo.sh
 ```
 
+## Run the Excel-driven demo
+
+```bash
+cd mailflow
+bash demo/run_excel_demo.sh
+```
+
+Builds a 3-row spreadsheet (one mail per row), sends the **due** rows for real
+through the local relay — resolving `{Region}` mail-merge placeholders — and
+prints the sheet before/after. It then simulates the CFO's revert so you can
+watch the `Received Status`, `Received From`, and `Received Path` columns fill
+in. The resulting `acme_mails.xlsx` (under `demo/_xlsx_run/`) is the live status
+board; the IMAP matching logic is real and unit-tested, fed one canned reply so
+no mailbox is needed.
+
 ## The presentation
 
 Open **`presentation.html`** in any browser (double-click it — no build step).

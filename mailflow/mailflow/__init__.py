@@ -23,7 +23,14 @@ from .config import (
     SmtpConfig,
     load_config,
 )
-from .message import build_message, save_message
+from .excel import (
+    ExcelError,
+    Spreadsheet,
+    check_replies,
+    make_template,
+    send_due,
+)
+from .message import build_message, save_message, save_raw
 from .replies import ImapReplyChecker, ReplyCheckResult
 from .scheduler import due_jobs, is_due, next_run, run_due, run_forever, send_job
 from .sender import DryRunSender, Sender, SmtpSender
@@ -39,8 +46,14 @@ __all__ = [
     "Schedule",
     "SmtpConfig",
     "load_config",
+    "ExcelError",
+    "Spreadsheet",
+    "check_replies",
+    "make_template",
+    "send_due",
     "build_message",
     "save_message",
+    "save_raw",
     "ImapReplyChecker",
     "ReplyCheckResult",
     "due_jobs",

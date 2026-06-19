@@ -133,6 +133,7 @@ class Config:
     jobs: list[Job]
     database: str = "mailflow.db"
     save_dir: str = "sent_mail"
+    received_dir: str = "received_mail"
     poll_seconds: int = 60
 
     def job(self, name: str) -> Job:
@@ -298,9 +299,11 @@ def load_config(path: str | Path) -> Config:
 
     defaults = raw.get("defaults") or {}
     jobs_raw = raw.get("jobs") or []
-    if not isinstance(jobs_raw, list) or not jobs_raw:
-        raise ConfigError("config must define at least one job under 'jobs'")
+    if not isinstance(jobs_raw, list):
+        raise ConfigError("'jobs' must be a list")
 
+    # Jobs are optional: the Excel/CSV front-end drives mail from a spreadsheet
+    # and needs only the server settings below.
     jobs = [_parse_job(j, defaults) for j in jobs_raw]
     names = [j.name for j in jobs]
     dupes = {n for n in names if names.count(n) > 1}
@@ -313,5 +316,6 @@ def load_config(path: str | Path) -> Config:
         jobs=jobs,
         database=str(raw.get("database", "mailflow.db")),
         save_dir=str(defaults.get("save_dir", "sent_mail")),
+        received_dir=str(defaults.get("received_dir", "received_mail")),
         poll_seconds=int(raw.get("poll_seconds", 60)),
     )

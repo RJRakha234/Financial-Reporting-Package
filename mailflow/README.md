@@ -53,6 +53,62 @@ python -m mailflow status
 python -m mailflow check-replies        # poll IMAP, update revert status
 ```
 
+## Two ways to drive it
+
+| | **Excel-driven** (`xlsx` commands) | **Config jobs** (YAML) |
+|---|---|---|
+| Control surface | a spreadsheet — one row per mail | `jobs:` in `mailflow.yaml` |
+| Best for | business users, ad-hoc / mail-merge batches, a visible status board | fixed recurring jobs under version control |
+| Status lives in | the sheet itself (written back) | a SQLite database |
+
+Both share the same engine (sending, archiving, IMAP revert detection) and the
+same server config; **credentials are never in the spreadsheet** — they stay in
+the YAML/env.
+
+## Excel-driven mode
+
+Each **row is one e-mail**. You fill in what to send; mailflow sends the rows
+whose time has come and **writes the status back into the same sheet**.
+
+```bash
+python -m mailflow xlsx init mails.xlsx        # create a template to fill in
+# ... edit rows in Excel: To, Subject, Body, Send Time, attachments ...
+export MAILFLOW_SMTP_PASSWORD=...              # creds still come from env
+python -m mailflow xlsx send mails.xlsx        # send due rows, write status back
+python -m mailflow xlsx check-replies mails.xlsx   # reconcile reverts via IMAP
+python -m mailflow xlsx run mails.xlsx         # send + reconcile (wire to cron)
+```
+
+**Input columns** (case-insensitive, with aliases):
+
+| Column | Meaning |
+|---|---|
+| `To` | recipient(s), separated by `,` or `;` |
+| `CC` | optional cc recipient(s) |
+| `Subject` | subject line — supports `{Column}` placeholders |
+| `Body` | message body — supports `{Column}` placeholders |
+| `Attachments` | path(s)/glob(s), separated by `;` or new lines |
+| `Send Time` | when to send (e.g. `2026-06-22 08:00`); **blank = send now** |
+
+Any **other column** can be used as a `{Column Name}` placeholder in the Subject
+or Body — i.e. **mail-merge straight from the sheet** (e.g. a `Region` column and
+`Subject: "Weekly Report - {Region}"`).
+
+**Columns mailflow writes back** (created automatically if absent):
+
+`Sent Status` · `Sent At` · `Message ID` · `Sent Path` · `Received Status` ·
+`Received From` · `Received At` · `Received Path` · `Notes`
+
+* a row is sent only when `Send Time` ≤ now and `Sent Status` isn't already `Sent`
+  (so re-running is **idempotent** — it never double-sends);
+* every sent message is archived as `.eml` under `defaults.save_dir`; its path is
+  written to `Sent Path`;
+* when a reply is detected (matched by `Message ID` over IMAP) the row flips to
+  `Received`, recording who replied and saving the reply under
+  `defaults.received_dir`, with its path in `Received Path`.
+
+Run `xlsx send --dry-run` to preview without sending or writing anything.
+
 ## Live demo & presentation
 
 See it work end to end (no internet or real mailbox needed):
