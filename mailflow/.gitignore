@@ -9,3 +9,6 @@ mailflow.db
 *.db
 sent_mail/
 *.eml
+
+# Demo runtime artifacts
+demo/_run/

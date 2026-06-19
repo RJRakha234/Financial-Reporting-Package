@@ -56,6 +56,7 @@ class ServerConfig:
 @dataclass
 class SmtpConfig(ServerConfig):
     from_addr: str | None = None
+    auth: bool = True  # set false for internal relays that take unauthed mail
 
     def sender_address(self) -> str:
         return self.from_addr or self.username
@@ -162,18 +163,23 @@ def _as_list(value: Any) -> list[str]:
     raise ConfigError(f"expected a string or list, got {type(value).__name__}")
 
 
-def _parse_server(raw: dict, where: str) -> dict:
+def _parse_server(raw: dict, where: str, require_password: bool = True) -> dict:
     security = str(raw.get("security", "starttls")).lower()
     if security not in _VALID_SECURITY:
         raise ConfigError(
             f"{where}: security must be one of {sorted(_VALID_SECURITY)}, "
             f"got {security!r}"
         )
+    password_env = (
+        _require(raw, "password_env", where)
+        if require_password
+        else raw.get("password_env", "")
+    )
     return {
         "host": _require(raw, "host", where),
         "port": int(_require(raw, "port", where)),
         "username": _require(raw, "username", where),
-        "password_env": _require(raw, "password_env", where),
+        "password_env": password_env,
         "security": security,
         "timeout": int(raw.get("timeout", 30)),
     }
@@ -275,9 +281,11 @@ def load_config(path: str | Path) -> Config:
         raise ConfigError("top level of config must be a mapping")
 
     smtp_raw = _require(raw, "smtp", "config")
+    auth = bool(smtp_raw.get("auth", True))
     smtp = SmtpConfig(
-        **_parse_server(smtp_raw, "smtp"),
+        **_parse_server(smtp_raw, "smtp", require_password=auth),
         from_addr=smtp_raw.get("from_addr"),
+        auth=auth,
     )
 
     imap = None

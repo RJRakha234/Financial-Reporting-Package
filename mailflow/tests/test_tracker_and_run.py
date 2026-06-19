@@ -63,6 +63,20 @@ def test_run_due_fires_only_due_jobs(tmp_path):
     assert second == []
 
 
+def test_dry_run_persists_nothing(tmp_path):
+    cfg = make_config(tmp_path, schedule=Schedule(every="interval", seconds=3600))
+    sender = DryRunSender()
+    with Tracker(cfg.database) as tracker:
+        result = run_due(cfg, sender, tracker, dry_run=True)
+        # The sender saw the message, but nothing was recorded or scheduled.
+        assert len(sender.sent) == 1
+        assert result == [0]  # one job "would" fire
+        assert tracker.all_sends() == []
+        assert tracker.last_run("weekly") is None
+        # Because the schedule did not advance, a real run still fires it.
+        assert run_due(cfg, sender, tracker) != []
+
+
 def test_mark_replied_and_counts(tmp_path):
     cfg = make_config(tmp_path, track=True)
     with Tracker(cfg.database) as tracker:

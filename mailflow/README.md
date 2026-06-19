@@ -53,6 +53,17 @@ python -m mailflow status
 python -m mailflow check-replies        # poll IMAP, update revert status
 ```
 
+## Live demo & presentation
+
+See it work end to end (no internet or real mailbox needed):
+
+```bash
+bash demo/run_demo.sh          # full lifecycle against a local capture relay
+```
+
+Open [`demo/presentation.html`](demo/presentation.html) in a browser for a
+corporate slide deck. Details in [`demo/README.md`](demo/README.md).
+
 ## Commands
 
 | Command | What it does |

@@ -102,6 +102,32 @@ jobs:
         load_config(write(tmp_path, text))
 
 
+def test_smtp_auth_false_makes_password_optional(tmp_path):
+    text = """
+smtp:
+  host: relay.internal
+  port: 25
+  security: none
+  auth: false
+  username: bot@corp.com
+jobs:
+  - {name: j, to: a@e.com, subject: s}
+"""
+    cfg = load_config(write(tmp_path, text))
+    assert cfg.smtp.auth is False
+    assert cfg.smtp.password_env == ""
+
+
+def test_smtp_auth_true_requires_password_env(tmp_path):
+    text = """
+smtp: {host: h, port: 25, security: none, username: u}
+jobs:
+  - {name: j, to: a@e.com, subject: s}
+"""
+    with pytest.raises(ConfigError):
+        load_config(write(tmp_path, text))
+
+
 def test_bad_time_rejected(tmp_path):
     text = """
 smtp: {host: h, port: 25, security: none, username: u, password_env: P}

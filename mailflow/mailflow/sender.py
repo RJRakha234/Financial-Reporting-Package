@@ -26,7 +26,7 @@ class SmtpSender:
 
     def send(self, msg: EmailMessage, recipients: list[str]) -> None:
         cfg = self.config
-        password = cfg.password()
+        password = cfg.password() if cfg.auth else None
         if cfg.security == "ssl":
             context = ssl.create_default_context()
             client: smtplib.SMTP = smtplib.SMTP_SSL(
@@ -40,7 +40,8 @@ class SmtpSender:
             if cfg.security == "starttls":
                 client.starttls(context=ssl.create_default_context())
                 client.ehlo()
-            client.login(cfg.username, password)
+            if cfg.auth:
+                client.login(cfg.username, password)
             client.send_message(
                 msg, from_addr=cfg.sender_address(), to_addrs=recipients
             )

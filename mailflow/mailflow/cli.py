@@ -145,8 +145,10 @@ def cmd_test_connection(args: argparse.Namespace) -> int:
             if cfg.security == "starttls":
                 s.starttls(context=ssl.create_default_context())
                 s.ehlo()
-            s.login(cfg.username, cfg.password())
-        print(f"✓ SMTP login OK ({cfg.username}@{cfg.host})")
+            if cfg.auth:
+                s.login(cfg.username, cfg.password())
+        verb = "login OK" if cfg.auth else "connection OK (no auth)"
+        print(f"✓ SMTP {verb} ({cfg.username}@{cfg.host})")
     except Exception as exc:  # noqa: BLE001
         ok = False
         print(f"✗ SMTP failed: {exc}", file=sys.stderr)
@@ -176,15 +178,16 @@ def cmd_send(args: argparse.Namespace) -> int:
     job = config.job(args.job)
     sender = _make_sender(config, args.dry_run)
     with Tracker(config.database) as tracker:
-        send_id = send_job(job, config, sender, tracker)
-    record = None
-    with Tracker(config.database) as tracker:
+        send_id = send_job(job, config, sender, tracker, dry_run=args.dry_run)
+        if args.dry_run:
+            print(f"[dry-run] would send {job.name} to "
+                  f"{', '.join(job.all_recipients())} (nothing written)")
+            return 0
         record = tracker.find_by_id(send_id)
-    prefix = "[dry-run] " if args.dry_run else ""
     if record and record.status == "failed":
-        print(f"{prefix}✗ {job.name} failed: {record.error}", file=sys.stderr)
+        print(f"✗ {job.name} failed: {record.error}", file=sys.stderr)
         return 1
-    print(f"{prefix}✓ sent {job.name} (id={send_id})"
+    print(f"✓ sent {job.name} (id={send_id})"
           + (f", saved to {record.saved_path}" if record and record.saved_path else ""))
     return 0
 
@@ -193,12 +196,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     config = _load(args)
     sender = _make_sender(config, args.dry_run)
     with Tracker(config.database) as tracker:
-        ids = run_due(config, sender, tracker)
+        ids = run_due(config, sender, tracker, dry_run=args.dry_run)
     prefix = "[dry-run] " if args.dry_run else ""
     if not ids:
         print(f"{prefix}no jobs due.")
+    elif args.dry_run:
+        print(f"[dry-run] {len(ids)} job(s) would fire now (nothing written)")
     else:
-        print(f"{prefix}fired {len(ids)} job(s): ids {ids}")
+        print(f"fired {len(ids)} job(s): ids {ids}")
     return 0
 
 

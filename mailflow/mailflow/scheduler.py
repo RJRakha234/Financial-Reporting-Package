@@ -87,11 +87,21 @@ def send_job(
     sender: Sender,
     tracker: Tracker,
     now: datetime | None = None,
-) -> int:
-    """Build, save, send and record one job. Returns the send-record id."""
+    dry_run: bool = False,
+) -> int | None:
+    """Build, save, send and record one job.
+
+    Returns the send-record id, or ``None`` for a dry run (which writes nothing
+    to disk or the tracker and does not advance the schedule).
+    """
     now = now or datetime.now()
     msg = build_message(job, config.smtp, now)
     subject = msg["Subject"]
+
+    if dry_run:
+        sender.send(msg, job.all_recipients())
+        log.info("[dry-run] would send %s to %s", job.name, ", ".join(job.to))
+        return None
 
     saved_path: str | None = None
     save_dir = job.save_dir or config.save_dir
@@ -123,12 +133,24 @@ def run_due(
     sender: Sender,
     tracker: Tracker,
     now: datetime | None = None,
+    dry_run: bool = False,
 ) -> list[int]:
-    """Send every job that is currently due. Returns the send-record ids."""
+    """Send every job that is currently due. Returns the send-record ids.
+
+    For a dry run nothing is persisted; the returned list is the names of the
+    jobs that *would* have fired (as a count proxy).
+    """
     now = now or datetime.now()
+    due = due_jobs(config, tracker, now)
+    if dry_run:
+        for job in due:
+            send_job(job, config, sender, tracker, now, dry_run=True)
+        return list(range(len(due)))
     ids = []
-    for job in due_jobs(config, tracker, now):
-        ids.append(send_job(job, config, sender, tracker, now))
+    for job in due:
+        send_id = send_job(job, config, sender, tracker, now)
+        if send_id is not None:
+            ids.append(send_id)
     return ids
 
 
