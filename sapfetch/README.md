@@ -36,6 +36,21 @@ pip install -r requirements.txt
 playwright install chromium      # one-time browser download
 ```
 
+> **Air-gapped / corporate machine?** Don't run the commands above (they need
+> internet). Follow [`OFFLINE.md`](OFFLINE.md) instead — the recommended path
+> uses the Edge/Chrome already installed on the machine and needs only two
+> offline wheels.
+
+## Verify the environment
+
+```bash
+python -m sapfetch doctor                 # checks Python, deps, browser, config, session
+python -m sapfetch doctor --check-portal   # also confirms the portal is reachable
+```
+
+Run this first on any new machine — it launches the configured browser and
+prints a ✓/✗ checklist so you catch problems before a scheduled download fails.
+
 ## Configure
 
 Copy the template and edit it to match exactly what you see in the portal:

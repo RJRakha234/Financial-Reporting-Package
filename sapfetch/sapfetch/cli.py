@@ -18,6 +18,7 @@ import sys
 
 from . import __version__
 from .config import load
+from .doctor import run_doctor
 from .downloader import download_reports
 from .errors import SapfetchError
 from .period import Period
@@ -38,6 +39,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("login", help="capture an SSO session in a visible browser")
+
+    doc = sub.add_parser(
+        "doctor", help="check the environment is ready (great for air-gapped)"
+    )
+    doc.add_argument(
+        "--check-portal", action="store_true",
+        help="also try to reach the portal with the saved session",
+    )
 
     dl = sub.add_parser("download", help="download reports for a period")
     dl.add_argument("--fiscal-year", type=int, required=True,
@@ -60,6 +69,23 @@ def _cmd_login(config) -> int:
     path = capture_session(config.portal)
     print(f"Session saved to {path}. You can now run `sapfetch download`.")
     return 0
+
+
+def _cmd_doctor(config, args) -> int:
+    checks = run_doctor(config, check_portal=args.check_portal)
+    print("sapfetch environment check:\n")
+    for c in checks:
+        mark = "✓" if c.ok else "✗"
+        line = f"  {mark} {c.name}"
+        if c.detail:
+            line += f"  ({c.detail})"
+        print(line)
+    failed = [c for c in checks if not c.ok]
+    print(
+        f"\n{len(checks) - len(failed)}/{len(checks)} checks passed."
+        + ("" if not failed else "  Fix the ✗ items above before downloading.")
+    )
+    return 1 if failed else 0
 
 
 def _cmd_download(config, args) -> int:
@@ -92,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         config = load(args.config)
         if args.command == "login":
             return _cmd_login(config)
+        if args.command == "doctor":
+            return _cmd_doctor(config, args)
         if args.command == "download":
             return _cmd_download(config, args)
     except SapfetchError as exc:
