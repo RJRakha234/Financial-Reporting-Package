@@ -78,10 +78,7 @@ def _cmd_download(config, args) -> int:
     failed = [r for r in results if not r.ok]
     for r in results:
         if r.ok:
-            line = f"  ✓ {r.report}  ->  {r.path}"
-            if r.note:
-                line += f"   [{r.note}]"
-            print(line)
+            print(f"  ✓ {r.report}  ->  {r.path}")
         else:
             print(f"  ✗ {r.report}  ({r.error})", file=sys.stderr)
 

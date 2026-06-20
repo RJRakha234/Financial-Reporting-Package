@@ -1,4 +1,3 @@
 playwright>=1.44      # browser automation engine
 PyYAML>=6.0           # config file parsing
 pytest>=7.0           # only needed to run the tests
-# fincheck (the sibling package) is optional — used only when run_fincheck=true.

@@ -17,7 +17,6 @@ from pathlib import Path
 from .config import Config, ReportSpec
 from .errors import SapfetchError
 from .period import Period
-from .pipeline import run_fincheck
 from .portal import PortalSession
 from .session import require_session
 
@@ -27,7 +26,6 @@ class DownloadResult:
     report: str
     ok: bool
     path: Path | None = None
-    note: str | None = None      # fincheck summary or other info
     error: str | None = None     # populated when ok is False
 
 
@@ -90,16 +88,8 @@ def download_reports(
                 portal.export(
                     report.export_format or config.defaults.export_format, dest
                 )
-                note = None
-                want_check = (
-                    report.run_fincheck
-                    if report.run_fincheck is not None
-                    else config.defaults.run_fincheck
-                )
-                if want_check:
-                    note = run_fincheck(dest)
                 results.append(
-                    DownloadResult(report.name, ok=True, path=dest, note=note)
+                    DownloadResult(report.name, ok=True, path=dest)
                 )
             except Exception as exc:  # capture, keep going
                 results.append(

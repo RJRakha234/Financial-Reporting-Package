@@ -27,7 +27,6 @@ prompt_labels:
 defaults:
   export_format: "xlsx"          # xlsx | pdf
   download_dir: "downloads"
-  run_fincheck: false            # run fincheck on each downloaded PDF
   prompts:
     "Consol Group": "G_GRUP"     # default consolidation group
 

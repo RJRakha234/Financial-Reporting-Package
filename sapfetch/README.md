@@ -5,8 +5,10 @@ once via your corporate SSO, then **downloads multiple Web Intelligence reports
 for a chosen reporting period** — e.g. *GR INDAS Consolidated PL* plus the
 *IFRS INR* and *IFRS USD* variants — filling each report's prompt screen
 (Consol Group, Fiscal Year, From Period, To Period) and exporting to Excel or
-PDF. Optionally it hands every downloaded PDF straight to the sibling
-[`fincheck`](../fincheck) tool for a footing check.
+PDF.
+
+It is a fully self-contained package — it has no dependency on anything else in
+this repository.
 
 It is driven by [Playwright](https://playwright.dev/python/), so it works on any
 browser-accessible portal even behind SSO — no backend API access required.
@@ -96,12 +98,6 @@ for r in results:
     print(r.report, "->", r.path if r.ok else r.error)
 ```
 
-### Hand-off to fincheck
-
-Set `defaults.run_fincheck: true` (or `run_fincheck: true` on a report) and any
-downloaded **PDF** is automatically run through `fincheck`, writing a
-colour-highlighted copy and reporting whether every total foots.
-
 ## Calibrating selectors (the one manual step)
 
 Navigation, prompt-filling and export depend on the live WebI/portal DOM. The
@@ -126,7 +122,6 @@ selectors adjusted once.
 3. **downloader.py** — orchestrates the batch: merges config + report prompts
    with the period, computes output filenames, and collects per-report results
    so partial success is reported cleanly.
-4. **pipeline.py** — optional `fincheck` hand-off for PDFs.
 
 ## Safety & scope
 

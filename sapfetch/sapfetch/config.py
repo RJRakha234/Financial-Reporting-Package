@@ -73,7 +73,6 @@ class Defaults:
     prompts: dict[str, str] = field(default_factory=dict)
     export_format: str = "xlsx"
     download_dir: str = "downloads"
-    run_fincheck: bool = False
 
 
 @dataclass
@@ -88,7 +87,6 @@ class ReportSpec:
     prompts: dict[str, str] = field(default_factory=dict)
     export_format: str | None = None  # falls back to Defaults.export_format
     output_name: str | None = None    # base filename; period tag is appended
-    run_fincheck: bool | None = None  # falls back to Defaults.run_fincheck
 
     def __post_init__(self) -> None:
         if not self.name:

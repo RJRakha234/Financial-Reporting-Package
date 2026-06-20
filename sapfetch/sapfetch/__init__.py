@@ -2,8 +2,10 @@
 
 Logs in to the SAP NetWeaver Enterprise Portal once via SSO, then pulls one or
 more Web Intelligence reports (e.g. the GR INDAS / IFRS INR / IFRS USD
-consolidated P&Ls) for a chosen reporting period, and can hand each file to
-``fincheck`` for a footing check.
+consolidated P&Ls) for a chosen reporting period.
+
+It is a fully self-contained package with no dependency on anything else in this
+repository.
 
 Public API::
 
