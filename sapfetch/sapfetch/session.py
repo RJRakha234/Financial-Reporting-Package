@@ -31,6 +31,7 @@ def capture_session(portal: PortalConfig) -> str:
         ) from exc
 
     state_path = Path(portal.storage_state)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     # Login is always interactive, so force a visible window regardless of the
     # configured headless flag, but still honour the browser channel/path.
     launch_kwargs = {**portal.launch_kwargs(), "headless": False}

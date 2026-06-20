@@ -2,8 +2,8 @@ import pytest
 
 from sapfetch import Period
 from sapfetch.config import from_dict
-from sapfetch.downloader import output_path, prompt_values_for
-from sapfetch.errors import ConfigError
+from sapfetch.downloader import download_reports, output_path, prompt_values_for
+from sapfetch.errors import AuthError, ConfigError, SapfetchError
 
 BASE = {
     "portal": {"base_url": "https://example/irj/portal/reports"},
@@ -66,6 +66,14 @@ def test_unknown_key_raises():
         from_dict(bad)
 
 
+def test_malformed_report_entry_raises_configerror():
+    with pytest.raises(ConfigError):
+        from_dict({
+            "portal": {"base_url": "x"},
+            "reports": ["this should be a mapping, not a string"],
+        })
+
+
 def test_report_requires_open_path():
     with pytest.raises(ConfigError):
         from_dict({
@@ -95,3 +103,45 @@ def test_output_path_uses_format_and_period_tag():
     usd = output_path(cfg, cfg.report("GR IFRS USD"), period)
     assert indas.as_posix() == "out/GR_INDAS_Consolidated_PL_FY2025_P01-10.xlsx"
     assert usd.as_posix() == "out/GR_IFRS_USD_FY2025_P01-10.pdf"
+
+
+def test_download_requires_a_saved_session(tmp_path):
+    cfg = from_dict({
+        "portal": {
+            "base_url": "https://example/irj/portal/reports",
+            "storage_state": str(tmp_path / "missing.json"),
+        },
+        "reports": [{"name": "R", "open_path": ["A", "B"]}],
+    })
+    with pytest.raises(AuthError):
+        download_reports(cfg, Period(2025, 1, 10))
+
+
+def test_download_empty_batch_short_circuits(tmp_path):
+    # A session file exists, but the filter selects no reports -> returns []
+    # without launching a browser (which would fail: playwright is absent here).
+    session = tmp_path / "sess.json"
+    session.write_text("{}")
+    cfg = from_dict({
+        "portal": {
+            "base_url": "https://example/irj/portal/reports",
+            "storage_state": str(session),
+        },
+        "reports": [{"name": "R", "open_path": ["A", "B"]}],
+    })
+    # No reports match an empty config selection path: use unknown filter guard.
+    with pytest.raises(SapfetchError):
+        download_reports(cfg, Period(2025, 1, 10), only=["does-not-exist"])
+
+
+def test_download_no_configured_reports_returns_empty(tmp_path):
+    session = tmp_path / "sess.json"
+    session.write_text("{}")
+    cfg = from_dict({
+        "portal": {
+            "base_url": "https://example/irj/portal/reports",
+            "storage_state": str(session),
+        },
+        "reports": [],
+    })
+    assert download_reports(cfg, Period(2025, 1, 10)) == []

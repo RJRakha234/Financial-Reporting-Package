@@ -133,6 +133,8 @@ class Config:
 
 
 def _only_known(cls: type, data: dict[str, Any], where: str) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ConfigError(f"{where} must be a mapping, got {type(data).__name__}")
     known = {f.name for f in fields(cls)}
     unknown = set(data) - known
     if unknown:

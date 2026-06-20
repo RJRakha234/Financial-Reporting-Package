@@ -76,6 +76,9 @@ def download_reports(
                 f"unknown report(s): {', '.join(sorted(missing))}"
             )
 
+    if not reports:
+        return []  # nothing to do — don't spin up a browser
+
     results: list[DownloadResult] = []
     with PortalSession(config, storage_state) as portal:
         for report in reports:

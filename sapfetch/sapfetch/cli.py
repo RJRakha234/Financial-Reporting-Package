@@ -97,7 +97,8 @@ def _cmd_download(config, args) -> int:
         to_period=args.to_period,
         consol_group=args.consol_group,
     )
-    print(f"Downloading {len(config.reports)} report(s) for {period.label} ...")
+    count = len(args.reports) if args.reports else len(config.reports)
+    print(f"Downloading {count} report(s) for {period.label} ...")
     results = download_reports(config, period, only=args.reports)
 
     ok = [r for r in results if r.ok]
