@@ -31,8 +31,11 @@ def capture_session(portal: PortalConfig) -> str:
         ) from exc
 
     state_path = Path(portal.storage_state)
+    # Login is always interactive, so force a visible window regardless of the
+    # configured headless flag, but still honour the browser channel/path.
+    launch_kwargs = {**portal.launch_kwargs(), "headless": False}
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        browser = pw.chromium.launch(**launch_kwargs)
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
         page.goto(portal.base_url, timeout=portal.nav_timeout_ms)

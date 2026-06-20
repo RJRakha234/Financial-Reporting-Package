@@ -37,7 +37,7 @@ class PortalSession:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(headless=self._portal.headless)
+        self._browser = self._pw.chromium.launch(**self._portal.launch_kwargs())
         self._context = self._browser.new_context(
             storage_state=self._storage_state, accept_downloads=True
         )

@@ -14,6 +14,13 @@ portal:
   headless: true
   nav_timeout_ms: 60000
   action_timeout_ms: 30000
+  # Air-gapped / corporate machines: instead of staging Playwright's bundled
+  # Chromium offline, drive the browser already installed on the machine.
+  # Set ONE of the following (leave both null to use bundled Chromium):
+  #   browser_channel: "msedge"          # or "chrome"
+  #   executable_path: "C:/Program Files/Microsoft/Edge/Application/msedge.exe"
+  browser_channel: null
+  executable_path: null
 
 # The visible labels of the period prompts, exactly as the portal shows them.
 # Defaults below match the "GR INDAS Consolidated PL" prompt panel.

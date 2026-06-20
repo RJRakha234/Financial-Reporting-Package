@@ -66,6 +66,22 @@ class PortalConfig:
     headless: bool = True
     nav_timeout_ms: int = 60_000
     action_timeout_ms: int = 30_000
+    # Air-gapped / corporate browser selection. By default Playwright launches
+    # its own bundled Chromium (which must be staged offline). To drive the
+    # browser already installed on the machine instead, set one of:
+    #   browser_channel: "msedge" | "chrome" | "chrome-beta" | ...
+    #   executable_path: full path to a chromium-family browser binary
+    browser_channel: str | None = None
+    executable_path: str | None = None
+
+    def launch_kwargs(self) -> dict:
+        """Assemble the kwargs for ``chromium.launch`` from this config."""
+        kwargs: dict = {"headless": self.headless}
+        if self.browser_channel:
+            kwargs["channel"] = self.browser_channel
+        if self.executable_path:
+            kwargs["executable_path"] = self.executable_path
+        return kwargs
 
 
 @dataclass

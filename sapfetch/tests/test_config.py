@@ -35,6 +35,26 @@ def test_loads_and_finds_reports():
     assert cfg.report("GR IFRS USD").export_format == "pdf"
 
 
+def test_launch_kwargs_default_is_bundled_chromium():
+    cfg = from_dict(BASE)
+    assert cfg.portal.launch_kwargs() == {"headless": True}
+
+
+def test_launch_kwargs_uses_corporate_browser():
+    data = {**BASE, "portal": {
+        "base_url": "https://example/irj/portal/reports",
+        "headless": False,
+        "browser_channel": "msedge",
+        "executable_path": "/opt/edge/msedge",
+    }}
+    cfg = from_dict(data)
+    assert cfg.portal.launch_kwargs() == {
+        "headless": False,
+        "channel": "msedge",
+        "executable_path": "/opt/edge/msedge",
+    }
+
+
 def test_missing_base_url_raises():
     with pytest.raises(ConfigError):
         from_dict({"portal": {}, "reports": []})
