@@ -18,6 +18,13 @@ def to_console(ev: Evaluation) -> str:
     flagged = ev.flagged()
     np_flagged = ev.net_profit_flagged()
 
+    if ev.missing_blocks:
+        lines.append("⚠ Expected column blocks not found in the report (their "
+                     "checks were skipped): " + ", ".join(ev.missing_blocks))
+        lines.append("  Check the block headings in row 2 match the expected "
+                     "names, e.g. 'GC - Total'.")
+        lines.append("")
+
     if ev.unmapped_categories:
         lines.append("⚠ Unmapped P&L categories (no rule, LC tie-out skipped): "
                      + ", ".join(ev.unmapped_categories))
@@ -54,6 +61,7 @@ def to_dict(ev: Evaluation) -> dict:
         "ok": ev.ok,
         "tolerance": ev.tolerance,
         "unmapped_categories": ev.unmapped_categories,
+        "missing_blocks": ev.missing_blocks,
         "differences": [
             {
                 "kind": d.kind, "category": d.category, "account": d.account,

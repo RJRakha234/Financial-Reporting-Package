@@ -11,7 +11,7 @@ from __future__ import annotations
 from openpyxl import Workbook
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 from . import config as C
 from . import inputs
@@ -59,9 +59,26 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     rate_from = get_column_letter(rates.from_col)
     rate_to = get_column_letter(rates.rate_col)
 
-    fx_last = layout.block_last_value[C.FX_SOURCE_BLOCKS[-1]]
-    consol_first = layout.block_first_value[C.CONSOL_SOURCE_BLOCKS[0]]
-    consol_last = layout.block_last_value[C.CONSOL_SOURCE_BLOCKS[-1]]
+    # Span the FX / consolidation source ranges over whichever of the expected
+    # blocks are actually present, so a renamed or absent block can't crash the
+    # build — the missing block simply contributes nothing to the SUMIF.
+    def _first_present(blocks):
+        cols = [layout.block_first_value[b] for b in blocks
+                if b in layout.block_first_value]
+        return min(cols, key=column_index_from_string) if cols else None
+
+    def _last_present(blocks):
+        cols = [layout.block_last_value[b] for b in blocks
+                if b in layout.block_last_value]
+        return max(cols, key=column_index_from_string) if cols else None
+
+    fx_last = _last_present(C.FX_SOURCE_BLOCKS)
+    consol_first = _first_present(C.CONSOL_SOURCE_BLOCKS)
+    consol_last = _last_present(C.CONSOL_SOURCE_BLOCKS)
+
+    # MA-rate lookup spans a safe fixed window so extra currencies are covered.
+    rate_last_row = max(rates.last_row,
+                        rates.first_row + cfg.rate_lookup_rows - 1)
 
     wb = Workbook()
     ws = wb.active
@@ -104,7 +121,7 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
         elif info.block == C.CHECK_GC_BALANCE:
             ws[f"{d}{ROW_AGG_LABEL}"] = (
                 f"=VLOOKUP({v}${ROW_CURR},'{C.SHEET_RATES}'!"
-                f"${rate_from}${rates.first_row}:${rate_to}${rates.last_row},"
+                f"${rate_from}${rates.first_row}:${rate_to}${rate_last_row},"
                 f"{rates.col_index},FALSE)")
         for hr in (ROW_TB_LABEL, ROW_AGG_LABEL):
             if ws[f"{d}{hr}"].value is not None:
@@ -183,12 +200,16 @@ def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
         return f"=IFERROR(VLOOKUP($C{r},{table},{match},FALSE),0)-{v}{r}"
 
     if info.block == C.CHECK_GC_BALANCE:
+        if fx_last is None:
+            return None
         rate = f"{C.SHEET_CHECK}!{d}${ROW_AGG_LABEL}"
         rng_hdr = f"${COL_CLASS}${ROW_SUBHEADER}:${fx_last}${ROW_SUBHEADER}"
         rng_row = f"${COL_CLASS}{r}:${fx_last}{r}"
         return (f"=SUMIF({rng_hdr},{v}${ROW_SUBHEADER},{rng_row})*{rate}-{v}{r}")
 
     if info.block == C.CHECK_GC_TOTAL:
+        if consol_first is None or consol_last is None:
+            return None
         rng_hdr = f"${consol_first}${ROW_SUBHEADER}:${consol_last}${ROW_SUBHEADER}"
         rng_row = f"${consol_first}{r}:${consol_last}{r}"
         return f"=SUMIF({rng_hdr},{v}${ROW_SUBHEADER},{rng_row})-{v}{r}"

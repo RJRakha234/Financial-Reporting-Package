@@ -143,6 +143,12 @@ Two things this guarantees in particular:
 * "P&L accounts" for the TB net-profit sum are defined by number range
   (`100000`–`399999`). If your chart of accounts uses different series for the
   P&L, adjust `pl_account_low` / `pl_account_high` in `CheckConfig`.
+* Block headings (`LC - Balance`, `GC - Total`, …) are matched **ignoring
+  spacing and case**, so minor export differences (`GC-Total`, `gc  -  total`)
+  still work. If an expected block is genuinely absent (or named completely
+  differently) its check is skipped and a clear ⚠ warning is printed.
+* The FX-rate lookup spans **150 rows** of the MA Rates table by default
+  (`rate_lookup_rows`), so a varying number of currencies is always covered.
 * `--tolerance` (default `0.5`) is the absolute slack, in each figure's own
   units, before a difference is flagged.
 

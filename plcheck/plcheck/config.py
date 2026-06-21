@@ -64,6 +64,28 @@ FX_SOURCE_BLOCKS = ("LC - Balance", "LC - Consol")
 CONSOL_SOURCE_BLOCKS = ("GC - Balance", "GC - Reclass", "GC - Elimination",
                         "GC - Consol")
 
+# The full set of canonical block labels we recognise. A block label read from
+# a report is matched to one of these ignoring spacing and case (so "GC-Total",
+# "GC - Total" and "gc  -  total" are all treated as "GC - Total"), which keeps
+# the checks working when the export's spelling varies slightly.
+CANONICAL_BLOCKS = ("LC - Balance", "LC - Consol", "GC - Balance",
+                    "GC - Reclass", "GC - Elimination", "GC - Consol",
+                    "GC - Total")
+
+
+def normalize_label(label) -> str:
+    """Spacing- and case-insensitive key for matching block labels."""
+    return "".join(str(label).split()).lower()
+
+
+def canonical_block_label(label) -> str:
+    """Map a raw block label to its canonical form when it matches one."""
+    n = normalize_label(label)
+    for c in CANONICAL_BLOCKS:
+        if normalize_label(c) == n:
+            return c
+    return str(label).strip()
+
 
 # --- Category mapping -------------------------------------------------------
 @dataclass(frozen=True)
@@ -123,6 +145,10 @@ class CheckConfig:
     # it adapts to accounts being added or removed in the Real Time TB.
     pl_account_low: int = 100000
     pl_account_high: int = 400000
+    # The FX-rate VLOOKUP spans at least this many rows of the MA Rates table,
+    # so additional currencies (the table can have a varying number) are never
+    # left out of the lookup range.
+    rate_lookup_rows: int = 150
 
     def rule_for(self, category: str) -> CategoryRule | None:
         if not category:

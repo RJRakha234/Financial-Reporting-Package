@@ -196,3 +196,55 @@ def test_is_pl_account_boundaries():
     assert not cfg.is_pl_account(445600)   # balance sheet
     assert not cfg.is_pl_account(885900)
     assert not cfg.is_pl_account(400000)   # boundary is exclusive
+
+
+# --------------------------------------------------------------------------
+# Block-label robustness: GC - Total (and others) must still be checked when
+# the export's spelling/spacing varies; if a block is truly absent, warn.
+# --------------------------------------------------------------------------
+
+def _clone_report_relabel(path, old_norm, new_text):
+    """Clone the sample report, replacing a block label (row 2) by its
+    normalized match with new_text."""
+    from plcheck.config import normalize_label
+    wb = openpyxl.load_workbook(REPORT)
+    ws = wb.active
+    for c in ws[2]:
+        if c.value is not None and normalize_label(c.value) == old_norm:
+            c.value = new_text
+    wb.save(path)
+
+
+def test_canonical_block_label_variants():
+    from plcheck.config import canonical_block_label
+    assert canonical_block_label("GC-Total") == "GC - Total"
+    assert canonical_block_label("gc  -  total") == "GC - Total"
+    assert canonical_block_label("LC - Balance ") == "LC - Balance"
+    assert canonical_block_label("Mystery Block") == "Mystery Block"
+
+
+def test_gc_total_check_runs_despite_spacing(tmp_path):
+    from plcheck.workbook import build_check_workbook
+    rep = tmp_path / "report_variant.xlsx"
+    _clone_report_relabel(rep, "gc-total", "GC-Total")     # drop the spaces
+    report = inputs.read_report(str(rep))
+    assert report.block("GC - Total") is not None          # canonicalized
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(out)
+    ws = openpyxl.load_workbook(out)["Check"]
+    assert str(ws["AJ9"].value).startswith("=SUMIF")       # GC-Total check built
+    ev = evaluate(report, TB, AGG, RATES)
+    assert "GC - Total" not in ev.missing_blocks
+
+
+def test_missing_block_is_flagged(tmp_path):
+    rep = tmp_path / "report_missing.xlsx"
+    _clone_report_relabel(rep, "gc-total", "Grand Total XYZ")   # unrecognised
+    report = inputs.read_report(str(rep))
+    ev = evaluate(report, TB, AGG, RATES)                       # must not crash
+    assert "GC - Total" in ev.missing_blocks
+
+
+def test_rate_lookup_window_is_configurable():
+    from plcheck.config import CheckConfig
+    assert CheckConfig().rate_lookup_rows == 150

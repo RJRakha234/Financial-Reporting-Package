@@ -52,6 +52,7 @@ class Evaluation:
     diffs: list[Diff] = field(default_factory=list)
     net_profit: list[NetProfitCheck] = field(default_factory=list)
     unmapped_categories: list[str] = field(default_factory=list)
+    missing_blocks: list[str] = field(default_factory=list)
     tolerance: float = 0.5
 
     def flagged(self) -> list[Diff]:
@@ -142,4 +143,11 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
         ))
 
     ev.unmapped_categories = sorted(unmapped)
+
+    # Flag any expected reconciliation block that the report did not contain, so
+    # a skipped check (e.g. GC - Total under a different heading) is visible.
+    present = {b.label for b in report.blocks}
+    expected = (C.CHECK_LC_BALANCE, C.CHECK_GC_BALANCE, C.CHECK_GC_TOTAL,
+                *C.FX_SOURCE_BLOCKS, *C.CONSOL_SOURCE_BLOCKS)
+    ev.missing_blocks = [b for b in dict.fromkeys(expected) if b not in present]
     return ev

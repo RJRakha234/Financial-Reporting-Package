@@ -63,7 +63,8 @@ def read_report(path: str) -> ReportTable:
                                              column=col).value or "").strip(),
                     )
                 )
-        blocks.append(Block(label=label, columns=colmap))
+        blocks.append(Block(label=C.canonical_block_label(label),
+                            columns=colmap))
 
     # --- data rows ---------------------------------------------------------
     cat_c = column_index_from_string(C.REPORT_CATEGORY_COL)
