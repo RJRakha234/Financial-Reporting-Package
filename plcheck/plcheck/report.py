@@ -18,6 +18,14 @@ def to_console(ev: Evaluation) -> str:
     flagged = ev.flagged()
     np_flagged = ev.net_profit_flagged()
 
+    if ev.missing_entities:
+        lines.append("⚠ Report companies not found in the Real Time TB "
+                     "(their 'Net Profit as per Real Time TB' is shown as 0): "
+                     + ", ".join(ev.missing_entities))
+        lines.append("  Check the company codes match between the report and "
+                     "the TB.")
+        lines.append("")
+
     if ev.missing_blocks:
         lines.append("⚠ Expected column blocks not found in the report (their "
                      "checks were skipped): " + ", ".join(ev.missing_blocks))
@@ -62,6 +70,7 @@ def to_dict(ev: Evaluation) -> dict:
         "tolerance": ev.tolerance,
         "unmapped_categories": ev.unmapped_categories,
         "missing_blocks": ev.missing_blocks,
+        "missing_entities": ev.missing_entities,
         "differences": [
             {
                 "kind": d.kind, "category": d.category, "account": d.account,

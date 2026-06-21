@@ -240,13 +240,18 @@ def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
     for e in report.entities:
         v = layout.value_col(C.CHECK_LC_BALANCE, e.code)   # value column (E/G/I)
         d = layout.diff_col(C.CHECK_LC_BALANCE, e.code)    # output column (F/H/J)
-        ent = get_column_letter(tb.entity_cols.get(e.code, tb.entity_first_col))
-        ent_rng = f"'{C.SHEET_TB}'!${ent}${first}:${ent}${last}"
         ws[f"{d}{r_inc}"] = f"=SUMIF($A:$A,$D{r_inc},{v}:{v})"
         ws[f"{d}{r_exp}"] = f"=SUMIF($A:$A,$D{r_exp},{v}:{v})"
         ws[f"{d}{r_np}"] = f"=SUMIF($A:$A,$D{r_np},{v}:{v})"
         ws[f"{d}{r_calc}"] = f"={d}{r_inc}+{d}{r_exp}+{d}{r_np}"
-        ws[f"{d}{r_tbnp}"] = f"=SUMPRODUCT(({series_test})*({ent_rng}))"
+        # Only sum the TB when this company actually exists there; otherwise the
+        # net profit per TB is undefined (0), not the first company's figure.
+        if e.code in tb.entity_cols:
+            ent = get_column_letter(tb.entity_cols[e.code])
+            ent_rng = f"'{C.SHEET_TB}'!${ent}${first}:${ent}${last}"
+            ws[f"{d}{r_tbnp}"] = f"=SUMPRODUCT(({series_test})*({ent_rng}))"
+        else:
+            ws[f"{d}{r_tbnp}"] = 0
         ws[f"{d}{r_chk}"] = f"={d}{r_np}+{d}{r_tbnp}"
     for rr in (r_inc, r_exp, r_np, r_calc, r_tbnp, r_chk):
         ws[f"{COL_DESC}{rr}"].font = HDR_FONT

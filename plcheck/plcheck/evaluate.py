@@ -53,6 +53,7 @@ class Evaluation:
     net_profit: list[NetProfitCheck] = field(default_factory=list)
     unmapped_categories: list[str] = field(default_factory=list)
     missing_blocks: list[str] = field(default_factory=list)
+    missing_entities: list[str] = field(default_factory=list)
     tolerance: float = 0.5
 
     def flagged(self) -> list[Diff]:
@@ -77,6 +78,7 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     tb_accounts, _ = inputs.tb_values(tb_path, codes)
     agg = inputs.agg_values(agg_path, codes)
     rates = inputs.parse_rates(rates_path).rates
+    tb_entity_cols = inputs.parse_tb(tb_path, codes).entity_cols
 
     # Net profit per TB = column-wise sum of the P&L-series GLs (computed from
     # the accounts themselves, so it adapts to GLs being added or removed and
@@ -151,4 +153,9 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     expected = (C.CHECK_LC_BALANCE, C.CHECK_GC_BALANCE, C.CHECK_GC_TOTAL,
                 *C.FX_SOURCE_BLOCKS, *C.CONSOL_SOURCE_BLOCKS)
     ev.missing_blocks = [b for b in dict.fromkeys(expected) if b not in present]
+
+    # report companies with no matching column in the Real Time TB (their
+    # "Net Profit as per Real Time TB" can't be computed and shows 0).
+    ev.missing_entities = [e.code for e in report.entities
+                           if e.code not in tb_entity_cols]
     return ev

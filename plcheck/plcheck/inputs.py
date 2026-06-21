@@ -148,11 +148,11 @@ def _find_cell(ws, text):
 
 
 def _find_header_row(ws, codes):
-    """First row that contains any of the entity ``codes``."""
-    code_set = {c for c in codes}
+    """First row that contains any of the entity ``codes`` (case-insensitive)."""
+    code_set = {str(c).strip().lower() for c in codes}
     for row in ws.iter_rows():
         for c in row:
-            if isinstance(c.value, str) and c.value.strip() in code_set:
+            if isinstance(c.value, str) and c.value.strip().lower() in code_set:
                 return c.row
     return None
 
@@ -170,12 +170,24 @@ class TBGeometry:
     entity_cols: dict[str, int] = field(default_factory=dict)  # code -> col
 
 
+def _entity_columns(ws, header_row, codes) -> dict:
+    """Map each report entity code to its column on ``header_row`` in this sheet,
+    matched case-insensitively (keyed by the report's spelling of the code)."""
+    by_norm = {str(c).strip().lower(): c for c in codes}
+    out: dict[str, int] = {}
+    for cell in ws[header_row]:
+        if isinstance(cell.value, str):
+            rep = by_norm.get(cell.value.strip().lower())
+            if rep is not None:
+                out.setdefault(rep, cell.column)
+    return out
+
+
 def parse_tb(path: str, codes) -> TBGeometry:
     wb = load_workbook(path, data_only=True)
     ws = wb.active
     hdr = _find_header_row(ws, codes) or C.REPORT_FIRST_DATA_ROW
-    ent_cols = {c.value.strip(): c.column for c in ws[hdr]
-                if isinstance(c.value, str) and c.value.strip() in set(codes)}
+    ent_cols = _entity_columns(ws, hdr, codes)
     acct_rc = _find_cell(ws, "Group Account Number")
     acct_col = acct_rc[1] if acct_rc else 1
     # first/last row that actually carries a GL account (skips the text header
@@ -303,8 +315,7 @@ def tb_values(path: str, codes):
     wb = load_workbook(path, data_only=True)
     ws = wb.active
     hdr = _find_header_row(ws, codes)
-    code_col = {c.value.strip(): c.column for c in ws[hdr]
-                if isinstance(c.value, str) and c.value.strip() in set(codes)}
+    code_col = _entity_columns(ws, hdr, codes)
     acct_rc = _find_cell(ws, "Group Account Number")
     acct_col = acct_rc[1] if acct_rc else 1
     accounts: dict[object, dict[str, float]] = {}

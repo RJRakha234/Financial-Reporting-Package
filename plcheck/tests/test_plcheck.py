@@ -340,3 +340,56 @@ def test_both_report_styles_share_one_config():
     for cat in ("Income", "Software Development Exp", "Sales & Marketing Cost",
                 "Administration cost", "Depreciation"):
         assert cfg.rule_for(cat) is not None
+
+
+# --------------------------------------------------------------------------
+# An entity in the report that has no matching company column in the TB must
+# get 0 for "Net Profit as per Real Time TB" (not the first company's figure),
+# and be flagged.
+# --------------------------------------------------------------------------
+
+def _clone_report_rename_entity(path, old_code, new_code):
+    """Clone the sample report, renaming an entity code across the sub-header
+    row (row 3) so it no longer matches the TB."""
+    wb = openpyxl.load_workbook(REPORT)
+    ws = wb.active
+    for c in ws[3]:
+        if isinstance(c.value, str) and c.value.strip() == old_code:
+            c.value = new_code
+    wb.save(path)
+
+
+def test_unmatched_entity_tb_net_profit_is_zero(tmp_path):
+    from plcheck.workbook import build_check_workbook
+    rep = tmp_path / "report_badcode.xlsx"
+    _clone_report_rename_entity(rep, "BALSDK", "BALSXX")   # not in the TB
+    report = inputs.read_report(str(rep))
+
+    # flagged in the summary
+    ev = evaluate(report, TB, AGG, RATES)
+    assert "BALSXX" in ev.missing_entities
+
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(out)
+    ws = openpyxl.load_workbook(out)["Check"]
+    # locate the BALSXX value column and its diff (output) column
+    from plcheck.layout import plan
+    from plcheck import config as C
+    layout = plan(report)
+    d = layout.diff_col(C.CHECK_LC_BALANCE, "BALSXX")
+    # find the "Net Profit as per Real Time TB" row
+    row = next(r for r in range(33, 50)
+               if ws[f"D{r}"].value == "Net Profit as per Real Time TB")
+    assert ws[f"{d}{row}"].value == 0          # not a SUMPRODUCT, not AUD's value
+
+    # a matched entity still gets the live SUMPRODUCT
+    d_ok = layout.diff_col(C.CHECK_LC_BALANCE, "BALSCH")
+    assert str(ws[f"{d_ok}{row}"].value).startswith("=SUMPRODUCT")
+
+
+def test_entity_matching_is_case_insensitive(tmp_path):
+    rep = tmp_path / "report_lower.xlsx"
+    _clone_report_rename_entity(rep, "BALSDK", "balsdk")   # same code, lowercase
+    report = inputs.read_report(str(rep))
+    ev = evaluate(report, TB, AGG, RATES)
+    assert ev.missing_entities == []           # still matched to the TB
