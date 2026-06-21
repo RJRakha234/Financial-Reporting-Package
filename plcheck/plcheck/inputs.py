@@ -115,6 +115,21 @@ def read_sheet(path: str, title: str, keep_formulas: bool = True) -> SheetData:
 # These describe *where* things are so the generated formulas (and the Python
 # evaluator) adapt to a revised file with more/fewer rows or accounts.
 
+def account_key(value):
+    """Canonical key for a GL account, tolerant of text-formatted numbers.
+
+    ERP exports often store account numbers as text ("110200"); this returns an
+    int for numeric or all-digit values so the report and TB/Aggregate match
+    regardless of how each stored them. Non-account cells return None.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    s = str(value).strip()
+    return int(s) if s.isdigit() else None
+
+
 def _find_cell(ws, text):
     """Return (row, col) of the first cell whose stripped text == ``text``."""
     for row in ws.iter_rows():
@@ -139,6 +154,7 @@ class TBGeometry:
     header_row: int            # row carrying BALSCH / BALSDE / BALSDK
     first_col: int             # first column of the used range (for MATCH)
     last_col: int              # last column (last entity)
+    first_data_row: int        # first row that holds a GL account
     last_data_row: int         # last row to include in VLOOKUP table
     sum_row: int               # the workbook's own SUM row (not relied upon)
     entity_first_col: int      # column of the first entity code in header_row
@@ -153,14 +169,20 @@ def parse_tb(path: str, codes) -> TBGeometry:
     ent_cols = {c.value.strip(): c.column for c in ws[hdr]
                 if isinstance(c.value, str) and c.value.strip() in set(codes)}
     acct_rc = _find_cell(ws, "Group Account Number")
+    acct_col = acct_rc[1] if acct_rc else 1
+    # first/last row that actually carries a GL account (skips the text header
+    # band so a SUMPRODUCT over the account column never hits stray text).
+    gl_rows = [r for r in range(hdr + 1, ws.max_row + 1)
+               if account_key(ws.cell(row=r, column=acct_col).value) is not None]
     return TBGeometry(
         header_row=hdr,
         first_col=1,
         last_col=ws.max_column,
-        last_data_row=ws.max_row,
+        first_data_row=gl_rows[0] if gl_rows else hdr + 1,
+        last_data_row=gl_rows[-1] if gl_rows else ws.max_row,
         sum_row=ws.max_row,
         entity_first_col=min(ent_cols.values()) if ent_cols else 1,
-        acct_col=acct_rc[1] if acct_rc else 1,
+        acct_col=acct_col,
         entity_cols=ent_cols,
     )
 
@@ -216,7 +238,7 @@ def parse_agg(path: str, codes) -> AggGeometry:
             continue                 # e.g. the "Total" block has no account col
         ac = max(candidates)
         data_rows = [r for r in range(sub_row + 1, ws.max_row + 1)
-                     if isinstance(ws.cell(row=r, column=ac).value, (int, float))]
+                     if account_key(ws.cell(row=r, column=ac).value) is not None]
         blocks[label] = AggBlock(
             label=label, acct_col=ac, subheader_row=sub_row,
             first_data_row=min(data_rows) if data_rows else sub_row + 1,
@@ -274,10 +296,10 @@ def tb_values(path: str, codes):
     acct_col = acct_rc[1] if acct_rc else 1
     accounts: dict[object, dict[str, float]] = {}
     for r in range(hdr + 1, ws.max_row + 1):
-        acct = ws.cell(row=r, column=acct_col).value
-        if not isinstance(acct, (int, float)):
+        key = account_key(ws.cell(row=r, column=acct_col).value)
+        if key is None:
             continue
-        accounts[acct] = {
+        accounts[key] = {
             code: float(ws.cell(row=r, column=col).value or 0)
             for code, col in code_col.items()
         }
@@ -295,10 +317,10 @@ def agg_values(path: str, codes):
     for label, blk in geo.blocks.items():
         table: dict[object, dict[str, float]] = {}
         for r in range(blk.first_data_row, blk.last_data_row + 1):
-            acct = ws.cell(row=r, column=blk.acct_col).value
-            if not isinstance(acct, (int, float)):
+            key = account_key(ws.cell(row=r, column=blk.acct_col).value)
+            if key is None:
                 continue
-            table[acct] = {code: float(ws.cell(row=r, column=col).value or 0)
-                           for code, col in blk.entity_cols.items()}
+            table[key] = {code: float(ws.cell(row=r, column=col).value or 0)
+                          for code, col in blk.entity_cols.items()}
         out[label] = table
     return out

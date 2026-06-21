@@ -229,11 +229,14 @@ def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
     ws[f"{COL_DESC}{r_calc}"] = "Calc Check"
     ws[f"{COL_DESC}{r_tbnp}"] = "Net Profit as per Real Time TB"
     ws[f"{COL_DESC}{r_chk}"] = "Check"
-    # TB net profit is summed live from the P&L-series GLs, so it tracks GLs
-    # being added / removed and never depends on a fixed SUM range.
+    # TB net profit is summed live from the P&L-series GLs (leading digit 1/2/3)
+    # using a text-safe SUMPRODUCT, so it works whether the TB stores account
+    # numbers as numbers or as text, and tracks GLs being added / removed.
     acct = get_column_letter(tb.acct_col)
-    first, last = tb.header_row + 1, tb.last_data_row
+    first, last = tb.first_data_row, tb.last_data_row
     acct_rng = f"'{C.SHEET_TB}'!${acct}${first}:${acct}${last}"
+    series_test = "+".join(
+        f'(LEFT(TRIM({acct_rng}),1)="{d}")' for d in cfg.pl_series)
     for e in report.entities:
         v = layout.value_col(C.CHECK_LC_BALANCE, e.code)   # value column (E/G/I)
         d = layout.diff_col(C.CHECK_LC_BALANCE, e.code)    # output column (F/H/J)
@@ -243,9 +246,7 @@ def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
         ws[f"{d}{r_exp}"] = f"=SUMIF($A:$A,$D{r_exp},{v}:{v})"
         ws[f"{d}{r_np}"] = f"=SUMIF($A:$A,$D{r_np},{v}:{v})"
         ws[f"{d}{r_calc}"] = f"={d}{r_inc}+{d}{r_exp}+{d}{r_np}"
-        ws[f"{d}{r_tbnp}"] = (
-            f'=SUMIFS({ent_rng},{acct_rng},">="&{cfg.pl_account_low},'
-            f'{acct_rng},"<"&{cfg.pl_account_high})')
+        ws[f"{d}{r_tbnp}"] = f"=SUMPRODUCT(({series_test})*({ent_rng}))"
         ws[f"{d}{r_chk}"] = f"={d}{r_np}+{d}{r_tbnp}"
     for rr in (r_inc, r_exp, r_np, r_calc, r_tbnp, r_chk):
         ws[f"{COL_DESC}{rr}"].font = HDR_FONT

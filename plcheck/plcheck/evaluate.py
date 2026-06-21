@@ -97,13 +97,14 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
             if rule is None:
                 unmapped.add(row.category)
             elif rule.source:
+                acct = inputs.account_key(row.account)
                 for e in report.entities:
                     stated = row.values.get((C.CHECK_LC_BALANCE, e.code), 0.0)
                     if rule.source == "tb":
-                        expected = tb_accounts.get(row.account, {}).get(e.code, 0.0)
+                        expected = tb_accounts.get(acct, {}).get(e.code, 0.0)
                     else:
                         expected = agg.get(rule.source, {}).get(
-                            row.account, {}).get(e.code, 0.0)
+                            acct, {}).get(e.code, 0.0)
                     ev.diffs.append(Diff("lc", i, row.category, row.account,
                                          row.description, e.code, expected, stated))
 

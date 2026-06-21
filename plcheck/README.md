@@ -140,9 +140,11 @@ Two things this guarantees in particular:
   its ratio in the rate table first.
 * The local-currency *Overall Result* columns are carried through but not
   re-checked (they are the report's own row sums).
-* "P&L accounts" for the TB net-profit sum are defined by number range
-  (`100000`–`399999`). If your chart of accounts uses different series for the
-  P&L, adjust `pl_account_low` / `pl_account_high` in `CheckConfig`.
+* "P&L accounts" for the TB net-profit sum are identified by their **leading
+  digit** (the 1-, 2- and 3-series; 4/8/9-series balance-sheet accounts are
+  excluded). This works whether the TB stores account numbers as **numbers or
+  as text** (common in ERP exports) and for any account length. Adjust the
+  series via `pl_series` in `CheckConfig`.
 * Block headings (`LC - Balance`, `GC - Total`, …) are matched **ignoring
   spacing and case**, so minor export differences (`GC-Total`, `gc  -  total`)
   still work. If an expected block is genuinely absent (or named completely

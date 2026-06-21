@@ -195,7 +195,40 @@ def test_is_pl_account_boundaries():
     assert cfg.is_pl_account(110200) and cfg.is_pl_account(311025)
     assert not cfg.is_pl_account(445600)   # balance sheet
     assert not cfg.is_pl_account(885900)
-    assert not cfg.is_pl_account(400000)   # boundary is exclusive
+    assert not cfg.is_pl_account(400000)   # 4-series excluded
+
+
+def test_is_pl_account_text_formatted():
+    """Account numbers stored as text (ERP exports) are still recognised."""
+    from plcheck.config import CheckConfig
+    cfg = CheckConfig()
+    assert cfg.is_pl_account("110200")     # text P&L account
+    assert cfg.is_pl_account(" 311025 ")   # text with stray spaces
+    assert not cfg.is_pl_account("445600")
+    assert not cfg.is_pl_account("885900")
+
+
+def test_tb_values_handle_text_accounts(tmp_path):
+    """TB net-profit sum is unaffected by accounts being stored as text."""
+    import openpyxl as _xl
+    num = inputs.tb_values(TB, ["BALSCH", "BALSDE", "BALSDK"])[0]
+
+    # rewrite every account in the TB as a text string, then re-read
+    wb = _xl.load_workbook(TB)
+    ws = wb.active
+    acct_col = inputs._find_cell(ws, "Group Account Number")[1]
+    for r in range(1, ws.max_row + 1):
+        c = ws.cell(r, acct_col)
+        if isinstance(c.value, (int, float)):
+            c.value = str(int(c.value))
+    text_tb = tmp_path / "TB_text.xlsx"
+    wb.save(text_tb)
+
+    txt = inputs.tb_values(str(text_tb), ["BALSCH", "BALSDE", "BALSDK"])[0]
+    cfg = __import__("plcheck.config", fromlist=["CheckConfig"]).CheckConfig()
+    s_num = sum(v["BALSCH"] for a, v in num.items() if cfg.is_pl_account(a))
+    s_txt = sum(v["BALSCH"] for a, v in txt.items() if cfg.is_pl_account(a))
+    assert round(s_num, 2) == round(s_txt, 2)
 
 
 # --------------------------------------------------------------------------

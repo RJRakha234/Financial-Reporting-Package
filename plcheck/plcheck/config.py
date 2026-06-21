@@ -138,13 +138,13 @@ class CheckConfig:
     )
     # Absolute slack (in the figure's own units) before a difference is flagged.
     tolerance: float = 0.5
-    # P&L account range for the "Net Profit as per Real Time TB" sum: the tool
-    # sums every TB GL whose number is in [pl_account_low, pl_account_high)
-    # — i.e. the 1-, 2- and 3-series accounts — and excludes balance-sheet
-    # accounts (4-, 8-, 9-series). This is computed from the GLs themselves, so
-    # it adapts to accounts being added or removed in the Real Time TB.
-    pl_account_low: int = 100000
-    pl_account_high: int = 400000
+    # "P&L accounts" for the "Net Profit as per Real Time TB" sum are identified
+    # by their leading digit — the 1-, 2- and 3-series accounts — which excludes
+    # balance-sheet accounts (4-, 8-, 9-series). Using the leading digit (rather
+    # than a numeric range) means it works whether the TB stores account numbers
+    # as numbers OR as text (common in ERP exports), and regardless of how many
+    # digits they have.
+    pl_series: tuple = ("1", "2", "3")
     # The FX-rate VLOOKUP spans at least this many rows of the MA Rates table,
     # so additional currencies (the table can have a varying number) are never
     # left out of the lookup range.
@@ -159,5 +159,7 @@ class CheckConfig:
         return None
 
     def is_pl_account(self, account) -> bool:
-        return (isinstance(account, (int, float))
-                and self.pl_account_low <= account < self.pl_account_high)
+        if account is None:
+            return False
+        s = str(account).strip().lstrip("-")
+        return bool(s) and s[0] in self.pl_series
