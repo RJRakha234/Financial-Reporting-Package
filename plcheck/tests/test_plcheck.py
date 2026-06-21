@@ -281,3 +281,62 @@ def test_missing_block_is_flagged(tmp_path):
 def test_rate_lookup_window_is_configurable():
     from plcheck.config import CheckConfig
     assert CheckConfig().rate_lookup_rows == 150
+
+
+# --------------------------------------------------------------------------
+# Ind-AS Function-wise report: different section names + a Depreciation section
+# (which may contain multiple GLs).
+# --------------------------------------------------------------------------
+
+INDAS = os.path.join(SAMPLE, "INDAS_Functionwise_PL_Report.xlsx")
+
+
+def test_indas_report_reconciles():
+    report = inputs.read_report(INDAS)
+    ev = evaluate(report, TB, AGG, RATES)
+    assert ev.unmapped_categories == []          # all INDAS sections mapped
+    assert ev.missing_blocks == []               # all blocks recognised
+    # internal P&L integrity holds for every entity
+    assert all(abs(n.calc_check) < 0.01 for n in ev.net_profit)
+    # the only LC tie-out breaks are the genuine depreciation roundings
+    lc_bad = {(d.category, d.account) for d in ev.flagged() if d.kind == "lc"}
+    assert lc_bad == {("Depreciation", 290100)}
+
+
+def test_depreciation_section_supports_multiple_gls(tmp_path):
+    """A second GL in the Depreciation section is reconciled like the first."""
+    from plcheck.model import ReportRow
+    from plcheck.workbook import build_check_workbook, FIRST_DATA_ROW
+
+    report = inputs.read_report(INDAS)
+    new_row = ReportRow(
+        category="Depreciation", account=290200,
+        description="Depreciation - Plant & Machinery",
+        values={(b.label, sub): 111.0
+                for b in report.blocks for sub in b.columns},
+    )
+    pos = max(i for i, r in enumerate(report.rows)
+              if r.category == "Depreciation") + 1
+    report.rows.insert(pos, new_row)
+
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(out)
+    ws = openpyxl.load_workbook(out)["Check"]
+    r = FIRST_DATA_ROW + pos
+    assert ws[f"C{r}"].value == 290200
+    # ties back to the Real Time TB, by account number, like the first dep. GL
+    assert str(ws[f"F{r}"].value).startswith("=IFERROR(VLOOKUP")
+    assert "'Real Time TB'" in ws[f"F{r}"].value
+    assert str(ws[f"Q{r}"].value).startswith("=SUMIF")    # FX
+    assert str(ws[f"AJ{r}"].value).startswith("=SUMIF")   # consolidation
+
+
+def test_both_report_styles_share_one_config():
+    """IFRS and INDAS section names both resolve with the default config."""
+    from plcheck.config import CheckConfig
+    cfg = CheckConfig()
+    for cat in ("Revenue", "Cost of Production", "Sales", "General Administration"):
+        assert cfg.rule_for(cat) is not None
+    for cat in ("Income", "Software Development Exp", "Sales & Marketing Cost",
+                "Administration cost", "Depreciation"):
+        assert cfg.rule_for(cat) is not None

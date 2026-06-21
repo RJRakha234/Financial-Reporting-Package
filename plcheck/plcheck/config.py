@@ -110,14 +110,27 @@ AGG_COST = "Cost of revenue"
 AGG_SALES = "Sales & Marketing"
 AGG_GA = "General Administration"
 
-# Default mapping for the Base life science IFRS INR P&L.  Categories are
-# matched case-insensitively; unknown categories are reported, not guessed.
+# Default mapping for the Base life science consolidation P&L. It covers the
+# category names used by *both* the IFRS INR and the Ind-AS Function-wise
+# reports (the names differ but never clash), so the tool auto-handles either
+# report. Categories are matched case-insensitively; unknown ones are reported,
+# not guessed.
 DEFAULT_CATEGORY_RULES: dict[str, CategoryRule] = {
+    # --- IFRS INR section names ------------------------------------------
     "Revenue": CategoryRule("Income", "tb"),
-    "Other Income": CategoryRule("Income", "tb"),
     "Cost of Production": CategoryRule("Expense", AGG_COST),
     "Sales": CategoryRule("Expense", AGG_SALES),
     "General Administration": CategoryRule("Expense", AGG_GA),
+    # --- Ind-AS Function-wise section names ------------------------------
+    "Income": CategoryRule("Income", "tb"),
+    "Software Development Exp": CategoryRule("Expense", AGG_COST),
+    "Sales & Marketing Cost": CategoryRule("Expense", AGG_SALES),
+    "Administration cost": CategoryRule("Expense", AGG_GA),
+    # Depreciation is its own line in Ind-AS (full GL 290100); it ties to the
+    # trial balance directly, like tax / interest.
+    "Depreciation": CategoryRule("Expense", "tb"),
+    # --- common to both reports ------------------------------------------
+    "Other Income": CategoryRule("Income", "tb"),
     "Provision for Tax": CategoryRule("Expense", "tb"),
     "Interest": CategoryRule("Expense", "tb"),
     "Provision for Investment": CategoryRule("Expense", "tb"),
