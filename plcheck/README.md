@@ -108,6 +108,20 @@ The output is a real, recalculating Excel file — not a static dump:
 Because everything is a formula over the embedded inputs, an auditor can trace
 every number, and tweaking an input recalculates the check.
 
+## Works for any same-format report (IFRS INR, Ind-AS Function-wise, …)
+
+The tool is **not tied to a particular report**. It reads whatever file you pass
+as the first argument purely by its structure, so any function-wise
+consolidation P&L with the same layout and checks — IFRS INR, Ind-AS
+Function-wise, etc. — is handled by the same command with no code change:
+
+```bash
+python -m plcheck "INDAS_Functionwise_PL_Report.xlsx" --tb ... --agg ... --rates ...
+```
+
+If a report's layout isn't recognised, the tool stops with a clear message
+(naming the file and what it expected) instead of a crash.
+
 ## Robust to revised files
 
 The header band is read by **label**, not by fixed cell addresses, and the

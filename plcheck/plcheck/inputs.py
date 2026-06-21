@@ -95,6 +95,14 @@ def read_report(path: str) -> ReportTable:
             )
         )
 
+    if not entities or not blocks:
+        raise ValueError(
+            f"Could not recognise the report layout in '{path}'. Expected block "
+            f"headings (e.g. 'LC - Balance') in row {C.REPORT_BLOCK_LABEL_ROW} "
+            f"and entity codes (e.g. 'BALSCH') in row {C.REPORT_SUBHEADER_ROW}. "
+            "Check that the first worksheet is the P&L report and that its "
+            "header rows match the expected layout.")
+
     return ReportTable(entities=entities, blocks=blocks, rows=rows)
 
 
@@ -245,6 +253,11 @@ def parse_agg(path: str, codes) -> AggGeometry:
             last_data_row=max(data_rows) if data_rows else ws.max_row,
             entity_cols=ents, last_entity_col=max(ents.values()),
         )
+    if not blocks:
+        raise ValueError(
+            f"Could not recognise any expense blocks in the Aggregate Expenses "
+            f"file '{path}'. Expected functional blocks (e.g. 'Cost of revenue') "
+            "each with a 'Group Account Number' column and entity sub-columns.")
     first = blocks[next(iter(blocks))]
     return AggGeometry(blocks=blocks, match_first_col=first.acct_col,
                        match_last_col=first.last_entity_col, subheader_row=sub_row)

@@ -14,10 +14,13 @@ from .report import to_console, to_json
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="plcheck",
-        description="Reconcile an IFRS INR P&L report against its sources and "
+        description="Reconcile a function-wise consolidation P&L report "
+        "(e.g. IFRS INR or Ind-AS Function-wise) against its sources and "
         "generate a highlighted, formula-driven check workbook.",
     )
-    p.add_argument("report", help="the IFRS INR P&L report (.xlsx)")
+    p.add_argument("report",
+                   help="the P&L report to check, IFRS INR or Ind-AS "
+                        "Function-wise (.xlsx)")
     p.add_argument("--tb", required=True, help="Real Time Trial Balance (.xlsx)")
     p.add_argument("--agg", required=True, help="Aggregate Expenses (.xlsx)")
     p.add_argument("--rates", required=True, help="MA exchange rates (.xlsx)")
@@ -49,8 +52,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = args.output
 
-    result = analyze(args.report, args.tb, args.agg, args.rates,
-                     output_path=output, cfg=CheckConfig(tolerance=args.tolerance))
+    try:
+        result = analyze(args.report, args.tb, args.agg, args.rates,
+                         output_path=output,
+                         cfg=CheckConfig(tolerance=args.tolerance))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if args.json:
         print(to_json(result.evaluation))
