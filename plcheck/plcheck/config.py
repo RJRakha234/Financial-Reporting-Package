@@ -133,6 +133,10 @@ DEFAULT_CATEGORY_RULES: dict[str, CategoryRule] = {
     "Other Income": CategoryRule("Income", "tb"),
     "Provision for Tax": CategoryRule("Expense", "tb"),
     "Interest": CategoryRule("Expense", "tb"),
+    "Interest Exp": CategoryRule("Expense", "tb"),
+    "Interest Expense": CategoryRule("Expense", "tb"),
+    "Finance Cost": CategoryRule("Expense", "tb"),
+    "Finance Costs": CategoryRule("Expense", "tb"),
     "Provision for Investment": CategoryRule("Expense", "tb"),
     "Minority Interest": CategoryRule("", ""),  # nets out, excluded from P&L
     "Net Profit": CategoryRule("Net Profit", ""),
