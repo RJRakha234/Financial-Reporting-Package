@@ -1,0 +1,253 @@
+"""Assemble the ``Check`` workbook with live reconciliation formulas.
+
+The output is a genuine, self-contained Excel file: the three source reports
+are embedded as sheets and every difference is a real formula referencing them,
+so it recalculates in Excel exactly like a hand-built check file — but produced
+in one step from the inputs.
+"""
+
+from __future__ import annotations
+
+from openpyxl import Workbook
+from openpyxl.formatting.rule import FormulaRule
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+from . import config as C
+from . import inputs
+from .layout import (COL_ACCOUNT, COL_CATEGORY, COL_CLASS, COL_DESC,
+                     CheckLayout, plan)
+from .model import ReportTable, SheetData
+
+# Row map of the Check sheet (matches the reference layout).
+ROW_TB_LABEL = 2       # "Real Time TB" + per-entity MATCH into the TB
+ROW_AGG_LABEL = 3      # "Aggregate Exp" + per-entity MATCH / FX-rate VLOOKUP
+ROW_SUMDIFF = 4        # "Sum of Differences" + SUM of each difference column
+ROW_BLOCKLABEL = 5
+ROW_SUBHEADER = 6
+ROW_ENTNAME = 7
+ROW_CURR = 8
+FIRST_DATA_ROW = 9
+
+RED_FILL = PatternFill("solid", fgColor="FFC7CE")
+RED_FONT = Font(color="9C0006")
+HDR_FONT = Font(bold=True)
+HELP_FONT = Font(italic=True, color="808080")
+
+
+def _embed(wb: Workbook, sheet: SheetData) -> None:
+    ws = wb.create_sheet(sheet.title)
+    for coord, value in sheet.cells.items():
+        ws[coord] = value
+
+
+def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
+                         rates_path: str,
+                         cfg: C.CheckConfig | None = None) -> Workbook:
+    cfg = cfg or C.CheckConfig()
+    layout = plan(report)
+    codes = [e.code for e in report.entities]
+    currency = {e.code: e.currency for e in report.entities}
+
+    tb = inputs.parse_tb(tb_path, codes)
+    agg = inputs.parse_agg(agg_path, codes)
+    rates = inputs.parse_rates(rates_path)
+
+    tb_lastcol = get_column_letter(tb.last_col)
+    tb_entfirst = get_column_letter(tb.entity_first_col)
+    agg_mfirst = get_column_letter(agg.match_first_col)
+    agg_mlast = get_column_letter(agg.match_last_col)
+    rate_from = get_column_letter(rates.from_col)
+    rate_to = get_column_letter(rates.rate_col)
+
+    fx_last = layout.block_last_value[C.FX_SOURCE_BLOCKS[-1]]
+    consol_first = layout.block_first_value[C.CONSOL_SOURCE_BLOCKS[0]]
+    consol_last = layout.block_last_value[C.CONSOL_SOURCE_BLOCKS[-1]]
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = C.SHEET_CHECK
+
+    # ---- header band ------------------------------------------------------
+    ws[f"{COL_ACCOUNT}{ROW_CURR}"] = "GLACCOUNT"
+    ws[f"{COL_DESC}{ROW_CURR}"] = "GL Description | Currency"
+    ws[f"{COL_DESC}{ROW_TB_LABEL}"] = C.SHEET_TB
+    ws[f"{COL_DESC}{ROW_AGG_LABEL}"] = C.SHEET_AGG
+    ws[f"{COL_DESC}{ROW_SUMDIFF}"] = "Sum of Differences"
+    for cell in (f"{COL_DESC}{ROW_TB_LABEL}", f"{COL_DESC}{ROW_AGG_LABEL}",
+                 f"{COL_DESC}{ROW_SUMDIFF}"):
+        ws[cell].font = HELP_FONT
+
+    ent_by_valuecol: dict[str, str] = {}      # LC-Balance value col -> code
+    for info in layout.cols:
+        ws[f"{info.value_col}{ROW_BLOCKLABEL}"] = info.block
+        ws[f"{info.value_col}{ROW_SUBHEADER}"] = info.sub
+        ws[f"{info.value_col}{ROW_BLOCKLABEL}"].font = HDR_FONT
+        if info.is_entity:
+            e = next(en for en in report.entities if en.code == info.sub)
+            ws[f"{info.value_col}{ROW_ENTNAME}"] = e.name
+            ws[f"{info.value_col}{ROW_CURR}"] = e.currency
+            if info.block == C.CHECK_LC_BALANCE:
+                ent_by_valuecol[info.value_col] = e.code
+
+    # ---- per-entity helper cells -----------------------------------------
+    for info in layout.cols:
+        if not (info.is_entity and info.diff_col):
+            continue
+        d, v = info.diff_col, info.value_col
+        if info.block == C.CHECK_LC_BALANCE:
+            ws[f"{d}{ROW_TB_LABEL}"] = (
+                f"=MATCH({v}${ROW_SUBHEADER},'{C.SHEET_TB}'!"
+                f"$A${tb.header_row}:${tb_lastcol}${tb.header_row},0)")
+            ws[f"{d}{ROW_AGG_LABEL}"] = (
+                f"=MATCH({v}${ROW_SUBHEADER},'{C.SHEET_AGG}'!"
+                f"${agg_mfirst}${agg.subheader_row}:${agg_mlast}${agg.subheader_row},0)")
+        elif info.block == C.CHECK_GC_BALANCE:
+            ws[f"{d}{ROW_AGG_LABEL}"] = (
+                f"=VLOOKUP({v}${ROW_CURR},'{C.SHEET_RATES}'!"
+                f"${rate_from}${rates.first_row}:${rate_to}${rates.last_row},"
+                f"{rates.col_index},FALSE)")
+        for hr in (ROW_TB_LABEL, ROW_AGG_LABEL):
+            if ws[f"{d}{hr}"].value is not None:
+                ws[f"{d}{hr}"].font = HELP_FONT
+
+    # ---- data rows --------------------------------------------------------
+    diff_cols: set[str] = set()
+    last_data_row = FIRST_DATA_ROW - 1
+    for i, row in enumerate(report.rows):
+        r = FIRST_DATA_ROW + i
+        last_data_row = r
+        rule = cfg.rule_for(row.category)
+        ws[f"{COL_CATEGORY}{r}"] = row.category or None
+        if not row.is_subtotal:
+            if rule and rule.classification:
+                ws[f"{COL_CLASS}{r}"] = rule.classification
+            ws[f"{COL_ACCOUNT}{r}"] = row.account
+            ws[f"{COL_DESC}{r}"] = row.description
+
+        # value cells (verbatim from the report)
+        for info in layout.cols:
+            val = row.values.get((info.block, info.sub))
+            if val is not None:
+                ws[f"{info.value_col}{r}"] = val
+
+        # difference formulas
+        for info in layout.cols:
+            if not (info.is_entity and info.diff_col):
+                continue
+            d, v = info.diff_col, info.value_col
+            diff_cols.add(d)
+            f = _diff_formula(info, r, d, v, rule, agg, tb, layout,
+                              fx_last, consol_first, consol_last,
+                              row.is_subtotal)
+            if f:
+                ws[f"{d}{r}"] = f
+
+    # ---- sum-of-differences row ------------------------------------------
+    for d in sorted(diff_cols):
+        ws[f"{d}{ROW_SUMDIFF}"] = f"=SUM({d}{FIRST_DATA_ROW}:{d}{last_data_row})"
+
+    # ---- net-profit reconciliation block ---------------------------------
+    _net_profit_block(ws, report, layout, tb, tb_entfirst, tb_lastcol,
+                      last_data_row)
+
+    # ---- highlighting + cosmetics ----------------------------------------
+    _highlight(ws, diff_cols, FIRST_DATA_ROW, last_data_row, cfg.tolerance)
+    _cosmetics(ws, layout)
+
+    # ---- embed the source sheets -----------------------------------------
+    _embed(wb, inputs.read_sheet(tb_path, C.SHEET_TB))
+    _embed(wb, inputs.read_sheet(agg_path, C.SHEET_AGG))
+    _embed(wb, inputs.read_sheet(rates_path, C.SHEET_RATES))
+    return wb
+
+
+def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
+                  fx_last, consol_first, consol_last,
+                  is_subtotal=False) -> str | None:
+    """The difference formula for one cell, by block type."""
+    if info.block == C.CHECK_LC_BALANCE:
+        # subtotal rows have no GL account to look up — no LC tie-out
+        if is_subtotal or rule is None or not rule.source:
+            return None
+        match = f"{C.SHEET_CHECK}!{d}${ROW_TB_LABEL}"
+        if rule.source == "tb":
+            table = (f"'{C.SHEET_TB}'!$A${tb.header_row}:"
+                     f"${get_column_letter(tb.last_col)}${tb.last_data_row}")
+            return f"=IFERROR(VLOOKUP($C{r},{table},{match},FALSE),0)-{v}{r}"
+        blk = agg.blocks.get(rule.source)
+        if blk is None:
+            return None
+        match = f"{C.SHEET_CHECK}!{d}${ROW_AGG_LABEL}"
+        table = (f"'{C.SHEET_AGG}'!${get_column_letter(blk.acct_col)}"
+                 f"${blk.subheader_row}:${get_column_letter(blk.last_entity_col)}"
+                 f"${blk.last_data_row}")
+        return f"=IFERROR(VLOOKUP($C{r},{table},{match},FALSE),0)-{v}{r}"
+
+    if info.block == C.CHECK_GC_BALANCE:
+        rate = f"{C.SHEET_CHECK}!{d}${ROW_AGG_LABEL}"
+        rng_hdr = f"${COL_CLASS}${ROW_SUBHEADER}:${fx_last}${ROW_SUBHEADER}"
+        rng_row = f"${COL_CLASS}{r}:${fx_last}{r}"
+        return (f"=SUMIF({rng_hdr},{v}${ROW_SUBHEADER},{rng_row})*{rate}-{v}{r}")
+
+    if info.block == C.CHECK_GC_TOTAL:
+        rng_hdr = f"${consol_first}${ROW_SUBHEADER}:${consol_last}${ROW_SUBHEADER}"
+        rng_row = f"${consol_first}{r}:${consol_last}{r}"
+        return f"=SUMIF({rng_hdr},{v}${ROW_SUBHEADER},{rng_row})-{v}{r}"
+    return None
+
+
+def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
+                      tb_entfirst, tb_lastcol, last_data_row) -> None:
+    start = last_data_row + 2
+    r_inc, r_exp, r_np = start, start + 1, start + 2
+    r_calc = start + 4
+    r_tbnp = start + 6
+    r_chk = start + 7
+    ws[f"{COL_DESC}{r_inc}"] = "Income"
+    ws[f"{COL_DESC}{r_exp}"] = "Expense"
+    ws[f"{COL_DESC}{r_np}"] = "Net Profit"
+    ws[f"{COL_DESC}{r_calc}"] = "Calc Check"
+    ws[f"{COL_DESC}{r_tbnp}"] = "Net Profit as per Real Time TB"
+    ws[f"{COL_DESC}{r_chk}"] = "Check"
+    tb_idx = tb.sum_row - tb.header_row + 1
+    for e in report.entities:
+        v = layout.value_col(C.CHECK_LC_BALANCE, e.code)   # value column (E/G/I)
+        d = layout.diff_col(C.CHECK_LC_BALANCE, e.code)    # output column (F/H/J)
+        ws[f"{d}{r_inc}"] = f"=SUMIF($A:$A,$D{r_inc},{v}:{v})"
+        ws[f"{d}{r_exp}"] = f"=SUMIF($A:$A,$D{r_exp},{v}:{v})"
+        ws[f"{d}{r_np}"] = f"=SUMIF($A:$A,$D{r_np},{v}:{v})"
+        ws[f"{d}{r_calc}"] = f"={d}{r_inc}+{d}{r_exp}+{d}{r_np}"
+        ws[f"{d}{r_tbnp}"] = (
+            f"=HLOOKUP({v}${ROW_SUBHEADER},'{C.SHEET_TB}'!"
+            f"${tb_entfirst}${tb.header_row}:${tb_lastcol}${tb.sum_row},"
+            f"{tb_idx},FALSE)")
+        ws[f"{d}{r_chk}"] = f"={d}{r_np}+{d}{r_tbnp}"
+    for rr in (r_inc, r_exp, r_np, r_calc, r_tbnp, r_chk):
+        ws[f"{COL_DESC}{rr}"].font = HDR_FONT
+
+
+def _highlight(ws, diff_cols, first_row, last_row, tol) -> None:
+    # data rows, the Sum-of-Differences row, and the bottom block share the
+    # difference columns; flag any cell whose absolute value exceeds tolerance.
+    for d in diff_cols:
+        top = f"{d}{ROW_SUMDIFF}"
+        rng = f"{d}{ROW_SUMDIFF}:{d}{last_row + 12}"
+        # the formula is relative to the top-left of the range, so it adjusts
+        # row-by-row down the column.
+        rule = FormulaRule(formula=[f"AND({top}<>\"\",ABS({top})>{tol})"],
+                           fill=RED_FILL, font=RED_FONT)
+        ws.conditional_formatting.add(rng, rule)
+
+
+def _cosmetics(ws, layout: CheckLayout) -> None:
+    ws.freeze_panes = f"{get_column_letter(5)}{FIRST_DATA_ROW}"
+    widths = {COL_CLASS: 16, COL_CATEGORY: 22, COL_ACCOUNT: 11, COL_DESC: 34}
+    for col, w in widths.items():
+        ws.column_dimensions[col].width = w
+    for info in layout.cols:
+        ws.column_dimensions[info.value_col].width = 15
+        if info.diff_col:
+            ws.column_dimensions[info.diff_col].width = 11
+            ws[f"{info.diff_col}{ROW_BLOCKLABEL}"] = "Diff"
+            ws[f"{info.diff_col}{ROW_BLOCKLABEL}"].font = HELP_FONT

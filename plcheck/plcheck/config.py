@@ -1,0 +1,126 @@
+"""Configuration that encodes the *logic* of the IFRS INR P&L check.
+
+The check file reconciles a consolidated IFRS P&L report against the three
+inputs it was built from.  Everything that is specific to *this* report — how
+the columns are laid out, which P&L category is an income vs. an expense, and
+where each category's local-currency figures should tie back to — lives here so
+it can be reviewed and adjusted in one place without touching the engine.
+
+Three reconciliations are performed (each expressed as a *difference* that
+should be zero):
+
+1. **LC tie-out** — every local-currency figure in the report must equal its
+   source: income / tax / interest accounts tie to the *Real Time TB*; the
+   functionally-split expense accounts tie to the relevant block of the
+   *Aggregate Expenses* report.
+2. **GC (INR) conversion** — each group-currency *Balance* figure must equal
+   ``(LC Balance + LC Consol) x FX rate`` from the *MA Rates* table.
+3. **GC consolidation** — each group-currency *Total* must equal
+   ``GC Balance + Reclass + Elimination + Consol``.
+
+Plus a net-profit reconciliation: the report's net profit must tie to the net
+profit implied by the Real Time TB, and Income + Expense + Net Profit must net
+to zero internally.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+# --- Sheet names used inside the generated check workbook -------------------
+# These must match the names the formulas reference.
+SHEET_CHECK = "Check"
+SHEET_TB = "Real Time TB"
+SHEET_AGG = "Aggregate Exp"
+SHEET_RATES = "MA rates"
+
+# --- Report layout ----------------------------------------------------------
+# Row numbers (1-based) of the header band in the *input* IFRS P&L report.
+REPORT_BLOCK_LABEL_ROW = 2     # "LC - Balance", "GC - Total", ...
+REPORT_SUBHEADER_ROW = 3       # "BALSCH" / "BALSDE" / "BALSDK" / "Overall Result"
+REPORT_ENTITY_NAME_ROW = 4     # "Base life science AG", ...
+REPORT_CURRENCY_ROW = 5        # "CHF" / "EUR" / "DKK"
+REPORT_FIRST_DATA_ROW = 6
+REPORT_CATEGORY_COL = "A"      # P&L category (Revenue, Cost of Production, ...)
+REPORT_ACCOUNT_COL = "B"       # GL account number
+REPORT_DESC_COL = "C"          # GL description
+REPORT_FIRST_NUMERIC_COL = "D"
+
+# The label that marks an entity's "total of the block" column (no check).
+OVERALL_LABEL = "Overall Result"
+
+# The three column blocks that are reconciled, by their block label, and how.
+#   "lc_source"  -> tie each entity figure back to TB / Aggregate Exp
+#   "fx"         -> (LC Balance + LC Consol) * rate
+#   "consol"     -> GC Balance + Reclass + Elimination + Consol
+CHECK_LC_BALANCE = "LC - Balance"
+CHECK_GC_BALANCE = "GC - Balance"
+CHECK_GC_TOTAL = "GC - Total"
+
+# Blocks summed for the GC-Balance FX check (everything before GC - Balance
+# carrying a local-currency figure for the entity).
+FX_SOURCE_BLOCKS = ("LC - Balance", "LC - Consol")
+# Blocks summed for the GC-Total consolidation check.
+CONSOL_SOURCE_BLOCKS = ("GC - Balance", "GC - Reclass", "GC - Elimination",
+                        "GC - Consol")
+
+
+# --- Category mapping -------------------------------------------------------
+@dataclass(frozen=True)
+class CategoryRule:
+    """How one P&L category behaves in the check.
+
+    classification: top-level grouping used by the net-profit reconciliation
+        ("Income", "Expense", "Net Profit", or "" to exclude, e.g. Minority
+        Interest, which nets out and is not part of P&L).
+    source: where the local-currency figures tie back to —
+        "tb"             -> Real Time TB
+        "<Agg block>"    -> a named block of the Aggregate Expenses report
+        ""               -> no LC source tie-out (derived/net-profit lines)
+    """
+
+    classification: str
+    source: str = ""
+
+
+# Aggregate-Expenses block labels (the functional split of expenses).
+AGG_COST = "Cost of revenue"
+AGG_SALES = "Sales & Marketing"
+AGG_GA = "General Administration"
+
+# Default mapping for the Base life science IFRS INR P&L.  Categories are
+# matched case-insensitively; unknown categories are reported, not guessed.
+DEFAULT_CATEGORY_RULES: dict[str, CategoryRule] = {
+    "Revenue": CategoryRule("Income", "tb"),
+    "Other Income": CategoryRule("Income", "tb"),
+    "Cost of Production": CategoryRule("Expense", AGG_COST),
+    "Sales": CategoryRule("Expense", AGG_SALES),
+    "General Administration": CategoryRule("Expense", AGG_GA),
+    "Provision for Tax": CategoryRule("Expense", "tb"),
+    "Interest": CategoryRule("Expense", "tb"),
+    "Provision for Investment": CategoryRule("Expense", "tb"),
+    "Minority Interest": CategoryRule("", ""),  # nets out, excluded from P&L
+    "Net Profit": CategoryRule("Net Profit", ""),
+}
+
+# Net-profit reconciliation classifications, in display order.
+RECON_CLASSES = ("Income", "Expense", "Net Profit")
+
+
+@dataclass
+class CheckConfig:
+    """Bundle of all tunables, so callers can override the defaults."""
+
+    category_rules: dict[str, CategoryRule] = field(
+        default_factory=lambda: dict(DEFAULT_CATEGORY_RULES)
+    )
+    # Absolute slack (in the figure's own units) before a difference is flagged.
+    tolerance: float = 0.5
+
+    def rule_for(self, category: str) -> CategoryRule | None:
+        if not category:
+            return None
+        for name, rule in self.category_rules.items():
+            if name.strip().lower() == category.strip().lower():
+                return rule
+        return None
