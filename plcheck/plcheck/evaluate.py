@@ -73,9 +73,18 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     codes = [e.code for e in report.entities]
     currency = {e.code: e.currency for e in report.entities}
 
-    tb_accounts, tb_sums = inputs.tb_values(tb_path, codes)
+    tb_accounts, _ = inputs.tb_values(tb_path, codes)
     agg = inputs.agg_values(agg_path, codes)
     rates = inputs.parse_rates(rates_path).rates
+
+    # Net profit per TB = column-wise sum of the P&L-series GLs (computed from
+    # the accounts themselves, so it adapts to GLs being added or removed and
+    # excludes balance-sheet accounts).
+    tb_sums = {e.code: 0.0 for e in report.entities}
+    for acct, by_entity in tb_accounts.items():
+        if cfg.is_pl_account(acct):
+            for code, val in by_entity.items():
+                tb_sums[code] = tb_sums.get(code, 0.0) + val
 
     ev = Evaluation(tolerance=cfg.tolerance)
     unmapped: set[str] = set()

@@ -117,6 +117,21 @@ without code changes. The mapping that encodes *which* category is income vs.
 expense and *where* each ties back lives in `plcheck/config.py`
 (`DEFAULT_CATEGORY_RULES`); unknown categories are reported, never guessed.
 
+Two things this guarantees in particular:
+
+* **No GL is ever missed.** The report is read row by row, so however many GL
+  accounts a section contains — more or fewer than before — each one receives
+  the full set of checks for its section (LC tie-out, FX conversion,
+  consolidation). The Sum-of-Differences row and the net-profit block stretch
+  to cover them automatically.
+* **The TB net profit is computed, not borrowed.** "Net Profit as per Real Time
+  TB" is summed live (`SUMIFS`) over every P&L-series GL in the trial balance
+  (accounts `100000`–`399999`, i.e. the 1-, 2- and 3-series), **not** read from
+  the TB's own `SUM(...)` row. So if GLs are added to or removed from the TB the
+  net profit still ties, and balance-sheet accounts (4-, 8-, 9-series) are
+  correctly excluded. The range is configurable via `CheckConfig`
+  (`pl_account_low` / `pl_account_high`).
+
 ## Notes & assumptions
 
 * The MA-rate lookup uses the **Exchange Rate** column directly (matching the
@@ -125,6 +140,9 @@ expense and *where* each ties back lives in `plcheck/config.py`
   its ratio in the rate table first.
 * The local-currency *Overall Result* columns are carried through but not
   re-checked (they are the report's own row sums).
+* "P&L accounts" for the TB net-profit sum are defined by number range
+  (`100000`–`399999`). If your chart of accounts uses different series for the
+  P&L, adjust `pl_account_low` / `pl_account_high` in `CheckConfig`.
 * `--tolerance` (default `0.5`) is the absolute slack, in each figure's own
   units, before a difference is flagged.
 

@@ -98,3 +98,101 @@ def test_json_summary_shape(report):
     assert set(d) >= {"ok", "tolerance", "differences", "net_profit"}
     assert d["ok"] is False
     assert all("delta" in row for row in d["differences"])
+
+
+# --------------------------------------------------------------------------
+# Requirement #1: a different number of GL accounts must never be missed.
+# --------------------------------------------------------------------------
+
+def test_added_gl_account_gets_all_checks(tmp_path):
+    """A GL added to the report must receive LC / FX / consolidation checks."""
+    from plcheck.model import ReportRow
+    from plcheck.workbook import build_check_workbook, FIRST_DATA_ROW
+
+    report = inputs.read_report(REPORT)
+    # insert a brand-new Cost of Production GL right after the existing ones
+    new_row = ReportRow(
+        category="Cost of Production", account=110999,
+        description="Newly added salary GL",
+        values={(b.label, sub): 123.0
+                for b in report.blocks for sub in b.columns},
+    )
+    pos = max(i for i, r in enumerate(report.rows)
+              if r.category == "Cost of Production") + 1
+    report.rows.insert(pos, new_row)
+
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(out)
+    ws = openpyxl.load_workbook(out)["Check"]
+    r = FIRST_DATA_ROW + pos
+    assert ws[f"C{r}"].value == 110999                         # GL carried over
+    assert str(ws[f"F{r}"].value).startswith("=IFERROR(VLOOKUP")  # LC tie-out
+    assert str(ws[f"Q{r}"].value).startswith("=SUMIF")          # FX
+    assert str(ws[f"AJ{r}"].value).startswith("=SUMIF")         # consolidation
+
+
+def test_lc_checks_cover_every_sourced_detail_gl():
+    """Number of LC tie-out checks == sourced detail GLs x entities."""
+    from plcheck.config import CheckConfig
+    report = inputs.read_report(REPORT)
+    cfg = CheckConfig()
+    sourced = [r for r in report.rows
+               if not r.is_subtotal and r.category
+               and (cfg.rule_for(r.category) and cfg.rule_for(r.category).source)]
+    ev = evaluate(report, TB, AGG, RATES)
+    lc = [d for d in ev.diffs if d.kind == "lc"]
+    assert len(lc) == len(sourced) * len(report.entities)
+
+
+# --------------------------------------------------------------------------
+# Requirement #2: TB net profit is the column-wise sum of the P&L-series GLs,
+# computed from the accounts (not a fixed SUM row), excluding balance sheet.
+# --------------------------------------------------------------------------
+
+def _make_tb(path, extra_rows):
+    """Clone the sample TB and append extra (account, chf, eur, dkk) rows."""
+    wb = openpyxl.load_workbook(TB)
+    ws = wb.active
+    r = ws.max_row + 1
+    for acct, chf, eur, dkk in extra_rows:
+        ws.cell(r, 1, acct)            # Group Account Number (col A)
+        ws.cell(r, 4, chf); ws.cell(r, 5, eur); ws.cell(r, 6, dkk)
+        r += 1
+    wb.save(path)
+
+
+def test_tb_net_profit_excludes_balance_sheet(tmp_path):
+    from plcheck.config import CheckConfig
+    cfg = CheckConfig()
+    accounts, _ = inputs.tb_values(TB, ["BALSCH", "BALSDE", "BALSDK"])
+    expected = sum(v["BALSCH"] for a, v in accounts.items() if cfg.is_pl_account(a))
+
+    # adding a balance-sheet account (>=400000) must NOT change the net profit
+    tb2 = tmp_path / "TB_bs.xlsx"
+    _make_tb(tb2, [(456000, 9_999_999, 0, 0)])
+    acc2, _ = inputs.tb_values(str(tb2), ["BALSCH", "BALSDE", "BALSDK"])
+    got = sum(v["BALSCH"] for a, v in acc2.items() if cfg.is_pl_account(a))
+    assert round(got, 2) == round(expected, 2)
+
+
+def test_tb_net_profit_includes_added_pl_gl(tmp_path):
+    from plcheck.config import CheckConfig
+    cfg = CheckConfig()
+    accounts, _ = inputs.tb_values(TB, ["BALSCH", "BALSDE", "BALSDK"])
+    base = sum(v["BALSCH"] for a, v in accounts.items() if cfg.is_pl_account(a))
+
+    # a new P&L-series account (3-series) must flow into the net-profit sum
+    tb2 = tmp_path / "TB_pl.xlsx"
+    _make_tb(tb2, [(312000, 1000.0, 0, 0)])
+    acc2, _ = inputs.tb_values(str(tb2), ["BALSCH", "BALSDE", "BALSDK"])
+    got = sum(v["BALSCH"] for a, v in acc2.items() if cfg.is_pl_account(a))
+    assert round(got - base, 2) == 1000.0
+
+
+def test_is_pl_account_boundaries():
+    from plcheck.config import CheckConfig
+    cfg = CheckConfig()
+    assert cfg.is_pl_account(110200) and cfg.is_pl_account(311025)
+    assert not cfg.is_pl_account(445600)   # balance sheet
+    assert not cfg.is_pl_account(885900)
+    assert not cfg.is_pl_account(400000)   # boundary is exclusive

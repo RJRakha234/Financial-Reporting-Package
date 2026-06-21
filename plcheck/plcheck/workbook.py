@@ -54,7 +54,6 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     rates = inputs.parse_rates(rates_path)
 
     tb_lastcol = get_column_letter(tb.last_col)
-    tb_entfirst = get_column_letter(tb.entity_first_col)
     agg_mfirst = get_column_letter(agg.match_first_col)
     agg_mlast = get_column_letter(agg.match_last_col)
     rate_from = get_column_letter(rates.from_col)
@@ -148,8 +147,7 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
         ws[f"{d}{ROW_SUMDIFF}"] = f"=SUM({d}{FIRST_DATA_ROW}:{d}{last_data_row})"
 
     # ---- net-profit reconciliation block ---------------------------------
-    _net_profit_block(ws, report, layout, tb, tb_entfirst, tb_lastcol,
-                      last_data_row)
+    _net_profit_block(ws, report, layout, tb, last_data_row, cfg)
 
     # ---- highlighting + cosmetics ----------------------------------------
     _highlight(ws, diff_cols, FIRST_DATA_ROW, last_data_row, cfg.tolerance)
@@ -198,7 +196,7 @@ def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
 
 
 def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
-                      tb_entfirst, tb_lastcol, last_data_row) -> None:
+                      last_data_row, cfg: C.CheckConfig) -> None:
     start = last_data_row + 2
     r_inc, r_exp, r_np = start, start + 1, start + 2
     r_calc = start + 4
@@ -210,18 +208,23 @@ def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
     ws[f"{COL_DESC}{r_calc}"] = "Calc Check"
     ws[f"{COL_DESC}{r_tbnp}"] = "Net Profit as per Real Time TB"
     ws[f"{COL_DESC}{r_chk}"] = "Check"
-    tb_idx = tb.sum_row - tb.header_row + 1
+    # TB net profit is summed live from the P&L-series GLs, so it tracks GLs
+    # being added / removed and never depends on a fixed SUM range.
+    acct = get_column_letter(tb.acct_col)
+    first, last = tb.header_row + 1, tb.last_data_row
+    acct_rng = f"'{C.SHEET_TB}'!${acct}${first}:${acct}${last}"
     for e in report.entities:
         v = layout.value_col(C.CHECK_LC_BALANCE, e.code)   # value column (E/G/I)
         d = layout.diff_col(C.CHECK_LC_BALANCE, e.code)    # output column (F/H/J)
+        ent = get_column_letter(tb.entity_cols.get(e.code, tb.entity_first_col))
+        ent_rng = f"'{C.SHEET_TB}'!${ent}${first}:${ent}${last}"
         ws[f"{d}{r_inc}"] = f"=SUMIF($A:$A,$D{r_inc},{v}:{v})"
         ws[f"{d}{r_exp}"] = f"=SUMIF($A:$A,$D{r_exp},{v}:{v})"
         ws[f"{d}{r_np}"] = f"=SUMIF($A:$A,$D{r_np},{v}:{v})"
         ws[f"{d}{r_calc}"] = f"={d}{r_inc}+{d}{r_exp}+{d}{r_np}"
         ws[f"{d}{r_tbnp}"] = (
-            f"=HLOOKUP({v}${ROW_SUBHEADER},'{C.SHEET_TB}'!"
-            f"${tb_entfirst}${tb.header_row}:${tb_lastcol}${tb.sum_row},"
-            f"{tb_idx},FALSE)")
+            f'=SUMIFS({ent_rng},{acct_rng},">="&{cfg.pl_account_low},'
+            f'{acct_rng},"<"&{cfg.pl_account_high})')
         ws[f"{d}{r_chk}"] = f"={d}{r_np}+{d}{r_tbnp}"
     for rr in (r_inc, r_exp, r_np, r_calc, r_tbnp, r_chk):
         ws[f"{COL_DESC}{rr}"].font = HDR_FONT

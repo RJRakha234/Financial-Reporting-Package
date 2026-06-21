@@ -139,23 +139,28 @@ class TBGeometry:
     first_col: int             # first column of the used range (for MATCH)
     last_col: int              # last column (last entity)
     last_data_row: int         # last row to include in VLOOKUP table
-    sum_row: int               # the SUM-of-P&L row (for net-profit HLOOKUP)
+    sum_row: int               # the workbook's own SUM row (not relied upon)
     entity_first_col: int      # column of the first entity code in header_row
+    acct_col: int = 1          # the "Group Account Number" column
+    entity_cols: dict[str, int] = field(default_factory=dict)  # code -> col
 
 
 def parse_tb(path: str, codes) -> TBGeometry:
     wb = load_workbook(path, data_only=True)
     ws = wb.active
     hdr = _find_header_row(ws, codes) or C.REPORT_FIRST_DATA_ROW
-    cols = [c.column for c in ws[hdr]
-            if isinstance(c.value, str) and c.value.strip() in set(codes)]
+    ent_cols = {c.value.strip(): c.column for c in ws[hdr]
+                if isinstance(c.value, str) and c.value.strip() in set(codes)}
+    acct_rc = _find_cell(ws, "Group Account Number")
     return TBGeometry(
         header_row=hdr,
         first_col=1,
         last_col=ws.max_column,
         last_data_row=ws.max_row,
         sum_row=ws.max_row,
-        entity_first_col=min(cols) if cols else 1,
+        entity_first_col=min(ent_cols.values()) if ent_cols else 1,
+        acct_col=acct_rc[1] if acct_rc else 1,
+        entity_cols=ent_cols,
     )
 
 

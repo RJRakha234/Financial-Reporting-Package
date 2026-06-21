@@ -116,6 +116,13 @@ class CheckConfig:
     )
     # Absolute slack (in the figure's own units) before a difference is flagged.
     tolerance: float = 0.5
+    # P&L account range for the "Net Profit as per Real Time TB" sum: the tool
+    # sums every TB GL whose number is in [pl_account_low, pl_account_high)
+    # — i.e. the 1-, 2- and 3-series accounts — and excludes balance-sheet
+    # accounts (4-, 8-, 9-series). This is computed from the GLs themselves, so
+    # it adapts to accounts being added or removed in the Real Time TB.
+    pl_account_low: int = 100000
+    pl_account_high: int = 400000
 
     def rule_for(self, category: str) -> CategoryRule | None:
         if not category:
@@ -124,3 +131,7 @@ class CheckConfig:
             if name.strip().lower() == category.strip().lower():
                 return rule
         return None
+
+    def is_pl_account(self, account) -> bool:
+        return (isinstance(account, (int, float))
+                and self.pl_account_low <= account < self.pl_account_high)
