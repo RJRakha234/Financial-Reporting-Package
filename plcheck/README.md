@@ -103,7 +103,10 @@ The output is a real, recalculating Excel file — not a static dump:
 * a **Sum of Differences** row totals each Diff column (should be ~0);
 * a **net-profit reconciliation block** ties the report to the TB;
 * **conditional formatting** turns any cell whose absolute difference exceeds
-  the tolerance red, so issues are visible the moment you open it in Excel.
+  the tolerance red, so issues are visible the moment you open it in Excel;
+* a **Minority Interest sheet** derived live from the Check sheet — per company
+  code: Net Profit (GC-Balance), Dividend received (GL 332010, GC-Balance),
+  Profit before Dividend, Minority total (GC-Total) and the Current Period %.
 
 Because everything is a formula over the embedded inputs, an auditor can trace
 every number, and tweaking an input recalculates the check.

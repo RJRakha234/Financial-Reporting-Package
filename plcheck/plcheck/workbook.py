@@ -170,11 +170,78 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     _highlight(ws, diff_cols, FIRST_DATA_ROW, last_data_row, cfg.tolerance)
     _cosmetics(ws, layout)
 
+    # ---- derived Minority Interest sheet ---------------------------------
+    _minority_sheet(wb, report, layout, cfg)
+
     # ---- embed the source sheets -----------------------------------------
     _embed(wb, inputs.read_sheet(tb_path, C.SHEET_TB))
     _embed(wb, inputs.read_sheet(agg_path, C.SHEET_AGG))
     _embed(wb, inputs.read_sheet(rates_path, C.SHEET_RATES))
     return wb
+
+
+MINORITY_SHEET = "Minority Interest"
+
+
+def _minority_sheet(ws_wb, report: ReportTable, layout: CheckLayout,
+                    cfg: C.CheckConfig) -> None:
+    """Add the Minority Interest sheet, derived from the Check sheet.
+
+    Per company code (every entity in the LC section):
+      Net Profit as per GC Bal  = GC-Balance of the Net Profit line
+      Div received - <acct>     = GC-Balance of the dividend GL (0 if absent)
+      Profit before Div         = the two added
+      Minority - Total          = GC-Total of the Minority Interest line
+      Current Period %          = Minority-Total / Profit-before-Div
+    """
+    # needs the GC-Balance and GC-Total blocks, plus Net Profit / Minority lines
+    if (C.CHECK_GC_BALANCE not in layout.block_first_value
+            or C.CHECK_GC_TOTAL not in layout.block_first_value):
+        return
+
+    def _norm(s):
+        return str(s).strip().lower()
+
+    def section_row(name):
+        idxs = [i for i, r in enumerate(report.rows) if _norm(r.category) == name]
+        if not idxs:
+            return None
+        subs = [i for i in idxs if report.rows[i].is_subtotal]
+        return FIRST_DATA_ROW + (subs[0] if subs else idxs[0])
+
+    np_row = section_row("net profit")
+    mi_row = section_row("minority interest")
+    if np_row is None or mi_row is None:
+        return
+    div_idx = next((i for i, r in enumerate(report.rows)
+                    if inputs.account_key(r.account) == cfg.dividend_account),
+                   None)
+    div_row = FIRST_DATA_ROW + div_idx if div_idx is not None else None
+
+    ws = ws_wb.create_sheet(MINORITY_SHEET)
+    headers = ["Code", "Net Profit as per GC Bal",
+               f"Div received - {cfg.dividend_account}", "Profit before Div",
+               "Minority - Total", "Current Period %"]
+    for j, h in enumerate(headers, start=1):
+        ws.cell(1, j, h).font = HDR_FONT
+
+    chk = C.SHEET_CHECK
+    for k, e in enumerate(report.entities):
+        row = 2 + k
+        gcbal = layout.value_col(C.CHECK_GC_BALANCE, e.code)
+        gctot = layout.value_col(C.CHECK_GC_TOTAL, e.code)
+        ws.cell(row, 1, e.code)
+        ws.cell(row, 2).value = f"='{chk}'!{gcbal}{np_row}"
+        ws.cell(row, 3).value = (f"='{chk}'!{gcbal}{div_row}"
+                                 if div_row else 0)
+        ws.cell(row, 4).value = f"=B{row}+C{row}"
+        ws.cell(row, 5).value = f"='{chk}'!{gctot}{mi_row}"
+        ws.cell(row, 6).value = f"=IFERROR(E{row}/D{row},0)"
+        ws.cell(row, 6).number_format = "0.00%"
+
+    for col, w in {"A": 12, "B": 24, "C": 22, "D": 18, "E": 18,
+                   "F": 16}.items():
+        ws.column_dimensions[col].width = w
 
 
 def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,

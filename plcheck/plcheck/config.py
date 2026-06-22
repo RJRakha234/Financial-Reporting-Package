@@ -166,6 +166,9 @@ class CheckConfig:
     # so additional currencies (the table can have a varying number) are never
     # left out of the lookup range.
     rate_lookup_rows: int = 150
+    # GL account for "Dividend received" used in the Minority Interest sheet
+    # (its GC-Balance figure per company feeds Profit-before-Dividend).
+    dividend_account: int = 332010
 
     def rule_for(self, category: str) -> CategoryRule | None:
         if not category:

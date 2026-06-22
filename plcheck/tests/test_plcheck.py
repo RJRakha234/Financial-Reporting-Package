@@ -83,7 +83,8 @@ def test_build_writes_valid_workbook(tmp_path):
     assert out.is_file()
 
     wb = openpyxl.load_workbook(out)
-    assert wb.sheetnames == ["Check", "Real Time TB", "Aggregate Exp", "MA rates"]
+    assert wb.sheetnames == ["Check", "Minority Interest", "Real Time TB",
+                             "Aggregate Exp", "MA rates"]
     ws = wb["Check"]
     # difference formulas are present on detail rows, absent on subtotal rows
     assert str(ws["F9"].value).startswith("=IFERROR(VLOOKUP")
@@ -393,3 +394,50 @@ def test_entity_matching_is_case_insensitive(tmp_path):
     report = inputs.read_report(str(rep))
     ev = evaluate(report, TB, AGG, RATES)
     assert ev.missing_entities == []           # still matched to the TB
+
+
+# --------------------------------------------------------------------------
+# Minority Interest sheet derived from the Check sheet.
+# --------------------------------------------------------------------------
+
+def test_minority_interest_sheet(tmp_path):
+    from plcheck.workbook import build_check_workbook, MINORITY_SHEET
+    report = inputs.read_report(REPORT)
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(out)
+    wb = openpyxl.load_workbook(out)
+    assert MINORITY_SHEET in wb.sheetnames
+    ws = wb[MINORITY_SHEET]
+    # one row per company code from the LC section
+    codes = [ws.cell(2 + k, 1).value for k in range(len(report.entities))]
+    assert codes == [e.code for e in report.entities]
+    assert ws.cell(1, 1).value == "Code"
+    assert ws.cell(1, 6).value == "Current Period %"
+    # B = GC-Balance Net Profit, E = GC-Total Minority, D = B+C, F = E/D
+    assert ws.cell(2, 2).value.startswith("='Check'!")
+    assert ws.cell(2, 4).value == "=B2+C2"
+    assert ws.cell(2, 5).value.startswith("='Check'!")
+    assert ws.cell(2, 6).value == "=IFERROR(E2/D2,0)"
+
+
+def test_minority_dividend_account_picked_up(tmp_path):
+    from plcheck.model import ReportRow
+    from plcheck.workbook import build_check_workbook, MINORITY_SHEET
+    report = inputs.read_report(REPORT)
+    # a dividend-received GL 332010 should feed column C from GC-Balance
+    report.rows.insert(0, ReportRow(
+        category="Other Income", account=332010, description="Dividend received",
+        values={(b.label, sub): 0.0
+                for b in report.blocks for sub in b.columns}))
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(out)
+    ws = openpyxl.load_workbook(out)[MINORITY_SHEET]
+    assert str(ws.cell(2, 3).value).startswith("='Check'!")   # not the literal 0
+
+
+def test_minority_interest_for_indas(tmp_path):
+    from plcheck.workbook import build_check_workbook, MINORITY_SHEET
+    report = inputs.read_report(INDAS)
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(out)
+    assert MINORITY_SHEET in openpyxl.load_workbook(out).sheetnames
