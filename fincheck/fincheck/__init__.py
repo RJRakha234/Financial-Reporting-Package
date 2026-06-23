@@ -9,12 +9,16 @@ Public API::
 
 from dataclasses import dataclass, field
 
+from .casting import CastCheck, CastResult, cast, extract_period_tables
 from .checks import Inconsistency, TotalCheck, run_checks
 from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 
-__all__ = ["analyze", "AnalysisResult", "Inconsistency", "TotalCheck"]
+__all__ = [
+    "analyze", "AnalysisResult", "Inconsistency", "TotalCheck",
+    "cast", "CastResult", "CastCheck", "extract_period_tables",
+]
 
 
 @dataclass

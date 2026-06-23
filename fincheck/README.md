@@ -71,12 +71,90 @@ for issue in result.issues:
 print(result.as_json())
 ```
 
+## Casting — current vs prior period (interim statements)
+
+`fincheck` also **casts** an interim statement: it checks that, in the current
+period, every **year-to-date (six-month) figure equals the current quarter
+(three-month) figure plus the same line item's three-month figure from the prior
+interim statement** — for both the current year and the comparative year shown:
+
+```
+six months ended 30-Sep-2025  ==  three months ended 30-Sep-2025  (current PDF)
+                                 + three months ended 30-Jun-2025  (prior PDF)
+```
+
+You give it the two PDFs — the current statement (which carries both a
+three-month and a six-month column) and the prior statement (which carries the
+earlier three-month column):
+
+```bash
+# Console summary + Excel report + highlighted PDF (defaults next to the input)
+python -m fincheck.cast current_q2.pdf prior_q1.pdf
+
+# Choose outputs explicitly; 'none' skips one
+python -m fincheck.cast --current q2.pdf --prior q1.pdf -o casting.xlsx --pdf flagged.pdf
+python -m fincheck.cast q2.pdf q1.pdf -o casting.xlsx --pdf none --json
+
+# ±1 rounding drift passes by default; use 0 for a strict, exact cast
+python -m fincheck.cast q2.pdf q1.pdf --tolerance 0
+```
+
+Example output:
+
+```
+✗ 2 figure(s) do not cast
+
+Cast 249 additive figures (tolerance ±1): 247 OK, 2 mismatch; 8 per-share/
+share-count figures not cast.
+
+Mismatches (year-to-date ≠ current 3M + prior 3M):
+  1. Note 2.24 · Total operating expenses  [2025]
+       6-month          8,587
+       3M(cur)          4,337  + 3M(prior) 4,252  = 8,589   (off by -2)
+```
+
+It produces three things:
+
+* an **Excel workbook** (`Summary` + `Casting` sheets) listing every line item
+  with its six-month, current-quarter and prior-quarter figures, the expected
+  sum, the exact difference and a colour-coded status — filterable and sortable;
+* a **highlighted copy of the current PDF** — each six-month figure is coloured
+  green (casts) / red (does not cast, outlined with a note) / orange (could not
+  be verified), and each current-quarter figure that fed the check is yellow;
+* a non-zero **exit code** when anything fails to cast (handy in a pipeline).
+
+Library use:
+
+```python
+from fincheck import cast
+from fincheck.casting_report import write_excel
+from fincheck.casting_highlight import write_highlighted_pdf
+
+result = cast("current_q2.pdf", "prior_q1.pdf", tolerance=1.0)
+print(result.consistent, len(result.mismatches))
+write_excel(result, "casting.xlsx")
+write_highlighted_pdf(result, "flagged.pdf")
+```
+
+**How the line items are matched.** Column geometry is learned *per table* from
+that table's own `Three months ended` / `Six months ended` header and year row
+(so stray figures elsewhere on the page can't shift the columns), tables are
+paired across the two PDFs by the line-item labels they share, and rows are
+matched by label with a positional fallback for labels that wrapped or were
+dropped in one PDF. Per-share amounts and weighted-average share counts are
+detected and **not** cast (they are averages, not additive flows).
+
+*Known limitation:* segment-reporting matrices (note 2.23) use a two-line
+current-year / prior-year layout with no plain year row, so they are not
+auto-cast — review those by hand.
+
 ## Offline & data privacy
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It
 only uses local libraries (`pdfplumber`/`pdfminer` to read text, `PyMuPDF` to
-annotate). Your financial statements are read from disk and the highlighted PDF
-is written back to disk — nothing is uploaded, sent to any API, logged remotely,
+annotate, `openpyxl` to write the casting workbook). Your financial statements
+are read from disk and the outputs are written back to disk — nothing is
+uploaded, sent to any API, logged remotely,
 or cached anywhere outside the folder you run it in. It is safe to run on an
 air-gapped machine. (You can verify: there is no `requests`/`urllib`/`http`/
 `socket`/API-client import anywhere in `fincheck/`.)

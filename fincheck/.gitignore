@@ -4,6 +4,11 @@ __pycache__/
 sample_financials.pdf
 *.highlighted.pdf
 preview_*.png
+# Casting: generated test samples and outputs
+cast_current.pdf
+cast_prior.pdf
+*.casting.pdf
+*.casting.xlsx
 # Never commit user-supplied statements or rendered previews
 real_infy*.pdf
 rinfy_*.png
