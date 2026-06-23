@@ -11,10 +11,15 @@ from dataclasses import dataclass, field
 
 from .checks import Inconsistency, TotalCheck, run_checks
 from .extract import extract_pages
-from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 
-__all__ = ["analyze", "AnalysisResult", "Inconsistency", "TotalCheck"]
+__all__ = [
+    "analyze",
+    "AnalysisResult",
+    "Inconsistency",
+    "TotalCheck",
+    "convert_to_excel",
+]
 
 
 @dataclass
@@ -65,9 +70,23 @@ def analyze(
     issues, checks = run_checks(pages, base_tolerance=tolerance)
     written = None
     if output_pdf is not None:
+        # Imported lazily so the Excel converter does not require PyMuPDF.
+        from .highlight import write_highlighted_pdf
+
         written = write_highlighted_pdf(
             source_pdf, output_pdf, checks, show_components=show_components
         )
     return AnalysisResult(
         source_pdf=source_pdf, issues=issues, checks=checks, output_pdf=written
     )
+
+
+def __getattr__(name):
+    # Lazy re-export so importing fincheck.to_excel as ``python -m`` does not
+    # trigger a circular import warning, while ``from fincheck import
+    # convert_to_excel`` still works.
+    if name == "convert_to_excel":
+        from .to_excel import convert_to_excel
+
+        return convert_to_excel
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

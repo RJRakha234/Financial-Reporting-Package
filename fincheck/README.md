@@ -18,6 +18,13 @@ It is built for real-world statements: figures with thousands separators,
 parenthesised negatives, currency symbols/codes, nil dashes, and nested
 balance-sheet / income-statement hierarchies.
 
+> **Also included: a PDF → Excel converter.** XBRL filings are often circulated
+> as a *rendered PDF*. Validating the numbers in that form is painful, so
+> `fincheck.to_excel` rebuilds the table grid of every page into an `.xlsx`
+> workbook with figures stored as **real Excel numbers** — so you can sum,
+> cross-foot and reconcile the data directly in Excel. See
+> [Convert a PDF to Excel](#convert-a-pdf-to-excel-for-validation) below.
+
 ## Install
 
 ```bash
@@ -71,12 +78,60 @@ for issue in result.issues:
 print(result.as_json())
 ```
 
+## Convert a PDF to Excel (for validation)
+
+XBRL filings are frequently shared as a rendered PDF (an MCA AOC-4 / IFRS filing
+printed to PDF). To validate the figures it helps to have them back as a
+spreadsheet. The converter rebuilds the tabular grid of every page and writes an
+Excel workbook:
+
+* an **"All Data"** sheet with every row across all pages (a leading *Page*
+  column), so you can filter, sort and total the whole filing in one place;
+* one **"Page N"** sheet per page, mirroring that page's layout;
+* figures stored as **real numbers** — `1,24,500` → `124500`, `(2,300)` →
+  `-2300`, `INR 41,250` → `41250` — so `=SUM(...)`, cross-footing and
+  reconciliation work straight away, while dates, notes and nil dashes are kept
+  as text.
+
+```bash
+# Writes filing.xlsx next to the input
+python -m fincheck.to_excel filing.pdf
+
+# Choose the output path
+python -m fincheck.to_excel filing.pdf -o validated.xlsx
+
+# Keep every value as the original text (no number conversion)
+python -m fincheck.to_excel filing.pdf --raw
+
+# Only the combined sheet, or only per-page sheets
+python -m fincheck.to_excel filing.pdf --no-pages
+python -m fincheck.to_excel filing.pdf --no-combined
+```
+
+As a library:
+
+```python
+from fincheck import convert_to_excel
+
+convert_to_excel("filing.pdf", "validated.xlsx")
+```
+
+The grid is recovered the same robust way the checker reads statements — words
+are clustered into rows by vertical position, and columns are found from the
+vertical whitespace gaps that persist down the page — so it works on the
+whitespace-aligned tables typical of filings, not just ruled ones. Tip: run the
+footing checker (above) on the same PDF to catch totals that don't add up, then
+open the Excel to drill into why.
+
+> Works on text-based PDFs. A scanned/image-only PDF would need OCR first.
+
 ## Offline & data privacy
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It
 only uses local libraries (`pdfplumber`/`pdfminer` to read text, `PyMuPDF` to
-annotate). Your financial statements are read from disk and the highlighted PDF
-is written back to disk — nothing is uploaded, sent to any API, logged remotely,
+annotate, `openpyxl` to write Excel). Your financial statements are read from
+disk and the highlighted PDF / Excel workbook is written back to disk — nothing
+is uploaded, sent to any API, logged remotely,
 or cached anywhere outside the folder you run it in. It is safe to run on an
 air-gapped machine. (You can verify: there is no `requests`/`urllib`/`http`/
 `socket`/API-client import anywhere in `fincheck/`.)
