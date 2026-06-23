@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+*.facts.xlsx
+.pytest_cache/
