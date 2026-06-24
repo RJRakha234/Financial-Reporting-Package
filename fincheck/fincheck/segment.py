@@ -19,13 +19,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import pdfplumber
-
 from .casting import (
     Cell,
-    _cluster_rows,
+    _NUMWORD,
     _looks_like_heading,
-    _merge_numberish,
+    _pdf_rows,
     _row_text,
     normalize_label,
 )
@@ -34,10 +32,11 @@ from .numbers import parse_number
 # "Three months ended September 30, 2025 and September 30, 2024:" — the two-date
 # header that introduces a segment matrix (distinct from the generic period
 # header, which lists the periods side by side, and from the geography table,
-# whose header starts with "For the ...").
+# whose header starts with "For the ..."). The year-to-date matrix may be six,
+# nine or twelve months ("year ended") depending on the quarter.
 _SEG_HEADER_RE = re.compile(
-    r"(?i)^(three|six)\s+months?\s+ended\s+\w+\s+\d{1,2},\s*(\d{4})\s+and\s+"
-    r"\w+\s+\d{1,2},\s*(\d{4})\s*:?\s*$"
+    r"(?i)^(?:(three|six|nine|twelve)\s+months?|year)\s+ended\s+\w+\s+\d{1,2},"
+    r"\s*(\d{4})\s+and\s+\w+\s+\d{1,2},\s*(\d{4})\s*:?\s*$"
 )
 _STOP_RE = re.compile(
     r"(?i)^(\(\d+\)\s|\*|significant clients|disclosure of revenue|"
@@ -121,30 +120,37 @@ def _assign(row: list[dict], centres: list[float]) -> dict[int, Cell]:
 
 def extract_segment_tables(pdf_path: str) -> list[SegmentTable]:
     tables: list[SegmentTable] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_index, page in enumerate(pdf.pages):
-            rows = [_merge_numberish(r) for r in _cluster_rows(page.extract_words())]
+    if True:
+        for page_index, page_rows in enumerate(_pdf_rows(pdf_path)):
+            rows = list(page_rows)
             i = 0
             while i < len(rows):
                 m = _SEG_HEADER_RE.match(_row_text(rows[i]).strip())
                 if not m:
                     i += 1
                     continue
-                months = 3 if m.group(1).lower() == "three" else 6
+                months = _NUMWORD[m.group(1).lower()] if m.group(1) else 12
                 cy_year, py_year = int(m.group(2)), int(m.group(3))
 
-                # Header/name band runs up to the first wide figure row.
-                j = i + 1
-                name_rows: list[list[dict]] = []
-                while j < len(rows):
-                    figs = [w for w in rows[j] if parse_number(w["text"]) is not None]
-                    if len(figs) >= _MIN_WIDE:
+                # Find the canonical data row that defines the columns: the row
+                # with the *most* figures in the band below the header (the first
+                # full metric, e.g. Revenue). Using the row with the maximum
+                # count — not merely the first row with a few figures — avoids a
+                # header line that happens to carry a handful of footnote markers
+                # setting too few columns.
+                end = min(i + 15, len(rows))
+                jmax, best = -1, 0
+                for r in range(i + 1, end):
+                    if _SEG_HEADER_RE.match(_row_text(rows[r]).strip()):
                         break
-                    name_rows.append(rows[j])
-                    j += 1
-                if j >= len(rows):
-                    i = j
+                    figs = sum(parse_number(w["text"]) is not None for w in rows[r])
+                    if figs > best:
+                        best, jmax = figs, r
+                if jmax < 0 or best < _MIN_WIDE:
+                    i = end
                     continue
+                j = jmax
+                name_rows = rows[i + 1:jmax]
 
                 centres = sorted(_centre(w) for w in rows[j]
                                  if parse_number(w["text"]) is not None)
@@ -194,18 +200,30 @@ def segment_checks(current_pdf: str, prior_pdf: str):
 
     cur = extract_segment_tables(current_pdf)
     pri = extract_segment_tables(prior_pdf)
-    six = _pick(cur, 6)
+    # The year-to-date matrix is the longest period in the current statement
+    # (6/9/12 months); the prior statement supplies the matrix three months
+    # shorter. The current/prior comparative columns line up by band (cy/py).
+    n = max((t.months for t in cur), default=0)
+    if n <= 3:
+        return []
+    six = _pick(cur, n)
     three_cur = _pick(cur, 3)
-    three_pri = _pick(pri, 3)
+    three_pri = _pick(pri, n - 3)
     if not (six and three_cur and three_pri):
         return []
 
+    # Match metric rows across the three matrices by label, not by position — a
+    # line item renamed or inserted in one quarter (e.g. "Segment operating
+    # income" becoming "Segment Profit") must not drag every later row out of
+    # alignment.
+    cur_by = {normalize_label(m.label): m for m in three_cur.metrics}
+    pri_by = {normalize_label(m.label): m for m in three_pri.metrics}
+
     checks: list[CastCheck] = []
-    n = min(len(six.metrics), len(three_cur.metrics), len(three_pri.metrics))
-    for idx in range(n):
-        m6, m3c, m3p = six.metrics[idx], three_cur.metrics[idx], three_pri.metrics[idx]
-        # Only line items that clearly correspond across the matrices.
-        if normalize_label(m6.label).split()[:2] != normalize_label(m3c.label).split()[:2]:
+    for m6 in six.metrics:
+        key = normalize_label(m6.label)
+        m3c, m3p = cur_by.get(key), pri_by.get(key)
+        if m3c is None or m3p is None:
             continue
         name = six.names
         for band, y in ((("cy", six.cy_year)), (("py", six.py_year))):

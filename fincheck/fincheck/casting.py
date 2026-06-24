@@ -25,8 +25,10 @@ table's own period header and year row, so stray figures elsewhere on the page
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 import pdfplumber
 
@@ -40,8 +42,12 @@ _ROW_TOLERANCE = 3.0      # points: words within this vertical band are one row
 _MERGE_GAP = 7.0          # points: glue space-separated thousands ("1 234")
 _COLUMN_MATCH = 16.0      # points: a figure this close to a column edge belongs
 
-# A period header row: "... Three months ended September 30, Six months ended ..."
-_MONTHS_RE = re.compile(r"(?i)(three|six)\s+months?\s+ended")
+# A period header row: "... Three months ended December 31, Nine months ended ..."
+# Interim statements use three-month and a year-to-date column that is six, nine
+# or twelve months ("year ended") depending on the quarter.
+_MONTHS_RE = re.compile(
+    r"(?i)(three|six|nine|twelve)\s+months?\s+ended|year\s+ended")
+_NUMWORD = {"three": 3, "six": 6, "nine": 9, "twelve": 12}
 
 # A note heading such as "2.16 REVENUE FROM OPERATIONS" or "2.21.2 Legal ...".
 # A few statements prefix headings with an internal tag like "X13AO"; tolerate it.
@@ -166,6 +172,22 @@ def _row_text(words: list[dict]) -> str:
     return " ".join(w["text"] for w in words)
 
 
+@lru_cache(maxsize=8)
+def _pdf_rows(pdf_path: str) -> tuple[tuple[list[dict], ...], ...]:
+    """Word boxes of a PDF, clustered into merged rows per page (cached).
+
+    Reading and laying out a big scanned filing is the slow step, and the
+    period, segment and schedule passes each need the same rows, so the result
+    is memoised per path — one parse of each statement instead of six.
+    """
+    pages: list[tuple[list[dict], ...]] = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+            pages.append(tuple(_merge_numberish(r) for r in _cluster_rows(words)))
+    return tuple(pages)
+
+
 def _is_year_row(words: list[dict]) -> bool:
     """A row made up only of bare years, e.g. ``2025 2024 2025 2024``."""
     years = [w for w in words if _is_year(w["text"])]
@@ -189,12 +211,31 @@ def _header_above(rows: list[list[dict]], year_index: int) -> int | None:
     return None
 
 
-def _six_boundary(header_words: list[dict]) -> float | None:
-    """x where the six-month block begins, or ``None`` if there is none."""
+def _period_blocks(header_words: list[dict]) -> list[tuple[float, int]]:
+    """The (x-start, months) of each period block named in a column header.
+
+    A header reads e.g. "Three months ended ... Nine months ended ..." or
+    "Three months ended ... Year ended ...". Each leading word ("Three", "Nine",
+    "Year", …) marks where that block's columns begin; "year" counts as twelve
+    months. Returned sorted left-to-right.
+    """
+    blocks: list[tuple[float, int]] = []
     for w in header_words:
-        if w["text"].strip().lower() == "six":
-            return w["x0"]
-    return None
+        t = w["text"].strip().lower()
+        if t in _NUMWORD:
+            blocks.append((w["x0"], _NUMWORD[t]))
+        elif t == "year":
+            blocks.append((w["x0"], 12))
+    return sorted(blocks)
+
+
+def _months_at(x: float, blocks: list[tuple[float, int]]) -> int:
+    """Months of the period block a column at right-edge ``x`` sits under."""
+    months = blocks[0][1] if blocks else 3
+    for x_start, m in blocks:
+        if x_start <= x:
+            months = m
+    return months
 
 
 _COLUMN_GAP = 18.0   # points between numeric right-edges that start a new column
@@ -223,14 +264,14 @@ def _build_columns(header_words, year_words, body_rows) -> list[PeriodColumn]:
     that recur on most rows, so when more edge clusters appear than there are
     year headers (a stray figure in a footnote, a wide share count) we keep the
     busiest clusters. Each kept column is then labelled with a year (from the
-    year row) and a period: the word "Six" in the column header marks where the
-    six-month block begins; everything left of it is three-month. Prior-statement
-    tables have no six-month block, so every column is three-month.
+    year row) and a period: the period blocks named in the header ("Three months
+    ended", "Nine months ended", "Year ended", …) say how many months each column
+    covers. A prior interim statement's only block is its own year-to-date one.
     """
     years = sorted(year_words, key=lambda w: w["x1"])
     if not years:
         return []
-    six_x = _six_boundary(header_words)
+    blocks = _period_blocks(header_words)
 
     # Right edges of figures in the value region (right of the leftmost year), so
     # note references like "2.16" in the label area are excluded.
@@ -254,11 +295,10 @@ def _build_columns(header_words, year_words, body_rows) -> list[PeriodColumn]:
     columns: list[PeriodColumn] = []
     for idx, edge in enumerate(edges):
         yw = min(years, key=lambda w: abs(w["x1"] - edge))
-        months = 6 if (six_x is not None and yw["x1"] > six_x) else 3
         columns.append(
             PeriodColumn(
                 index=idx,
-                months=months,
+                months=_months_at(edge, blocks),
                 year=int(yw["text"].strip().rstrip(",.")),
                 edge_x1=edge,
             )
@@ -315,10 +355,8 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
     rows, learning the column geometry from that table alone.
     """
     tables: list[PeriodTable] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_index, page in enumerate(pdf.pages):
-            words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
-            rows = [_merge_numberish(r) for r in _cluster_rows(words)]
+    for page_index, page_rows in enumerate(_pdf_rows(pdf_path)):
+            rows = list(page_rows)
 
             # Running note context for titling tables (display only).
             note_at: list[str] = [""] * len(rows)
@@ -362,6 +400,17 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
                     i = k
                     continue
 
+                # Skip tables that aren't additive ₹ figures — share counts and
+                # option-pricing grids (grants made, share reconciliations, fair
+                # value assumptions) share the period-header shape but must not be
+                # cast. They are flagged by the sentence introducing them.
+                context = " ".join(
+                    _row_text(rows[r]) for r in range(max(0, header_j - 3), header_j + 1)
+                )
+                if _EXCLUDE_TABLE_RE.search(context):
+                    i = k
+                    continue
+
                 note, title = _table_note(note_at[header_j], _row_text(rows[header_j]))
                 table = PeriodTable(
                     page_index=page_index, note=note, title=title,
@@ -389,17 +438,28 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
 # Matching line items across the two statements
 # ---------------------------------------------------------------------------
 
-# Per-share amounts and weighted-average share counts are ratios / averages, not
-# additive flows, so the three-plus-three == six identity does not hold for them.
+# Per-share amounts, weighted-average share counts and option-pricing inputs are
+# ratios / averages / point-in-time assumptions, not additive flows, so the
+# three-plus-prior == year-to-date identity does not hold for them.
 _NON_ADDITIVE_RE = re.compile(
     r"(?i)(per share|per equity share|earnings per|weighted average|in shares|"
-    r"number of shares|shares outstanding|par value|\bbasic\b|\bdiluted\b)"
+    r"number of shares|shares outstanding|par value|\bbasic\b|\bdiluted\b|"
+    r"exercise price|share price|expected volatility|expected life|expected term|"
+    r"expected dividend|risk.?free|fair value of|weighted average fair value)"
 )
 
 
 def is_additive_label(label: str) -> bool:
     """False for per-share / share-count rows that must not be cast by addition."""
     return not _NON_ADDITIVE_RE.search(label)
+
+
+# A whole table is skipped when its introducing sentence shows it is share
+# counts or option-pricing inputs rather than additive ₹ figures.
+_EXCLUDE_TABLE_RE = re.compile(
+    r"(?i)(grants?\s+(made\s+)?during|summary of grants|granted in|"
+    r"reconciliation of the number|number of (equity )?shares|"
+    r"fair value of each|following assumptions|share price)")
 
 
 def normalize_label(label: str) -> str:
@@ -482,12 +542,17 @@ def _match_rows(
             matched_prior.add(id(match))
         out.append((r, match))
 
-    leftover = [r for r in prior.rows if id(r) not in matched_prior]
-    li = 0
-    for n, (cur_row, match) in enumerate(out):
-        if match is None and li < len(leftover):
-            out[n] = (cur_row, leftover[li])
-            li += 1
+    # Positional fallback for labels that wrapped or were dropped in one PDF —
+    # but only when the two tables have the *same* unmatched rows in the same
+    # order (a label glitch), never when their structure differs (a line item
+    # added or renamed between quarters), which would force a wrong pairing.
+    cur_unmatched = [(n, row) for n, (row, m) in enumerate(out) if m is None]
+    pri_unmatched = [r for r in prior.rows if id(r) not in matched_prior]
+    if len(cur_unmatched) == len(pri_unmatched):
+        for (n, cur_row), cand in zip(cur_unmatched, pri_unmatched):
+            a, b = normalize_label(cur_row.label), normalize_label(cand.label)
+            if not a or not b or difflib.SequenceMatcher(None, a, b).ratio() >= 0.5:
+                out[n] = (cur_row, cand)
     return out
 
 
@@ -576,22 +641,42 @@ class CastResult:
 def _checks_for_pair(
     current: PeriodTable, prior: PeriodTable | None
 ) -> list[CastCheck]:
+    """Cast a current table's year-to-date column against 3M current + prior YTD.
+
+    The current statement's long column may be six, nine or twelve months; the
+    prior statement supplies the year-to-date column three months shorter (the
+    half-year before a nine-month period, etc.). The current and prior period-end
+    years can differ (a twelve-month "year ended March 2026" reconciles against a
+    "nine months ended December 2025"), so the prior year-to-date columns are
+    paired with the current ones by recency rank rather than by year value.
+    """
+    n = max((c.months for c in current.columns), default=0)
+    if n <= 3:
+        return []
+    long_years = sorted({c.year for c in current.columns if c.months == n},
+                        reverse=True)
+    prior_ytd = (
+        sorted([c for c in prior.columns if c.months == n - 3],
+               key=lambda c: c.year, reverse=True)
+        if prior is not None else []
+    )
+
     checks: list[CastCheck] = []
     row_matches = (
         _match_rows(current, prior) if prior is not None
         else [(r, None) for r in current.rows]
     )
     for cur_row, prior_row in row_matches:
-        for year in current.years:
-            six = current.column(6, year)
+        for rank, year in enumerate(long_years):
+            ytd = current.column(n, year)
             three = current.column(3, year)
-            if six is None or three is None:
+            if ytd is None or three is None:
                 continue
-            six_cell = cur_row.cells.get(six.index)
+            six_cell = cur_row.cells.get(ytd.index)
             three_cell = cur_row.cells.get(three.index)
             if six_cell is None and three_cell is None:
                 continue
-            prior_col = prior.column(3, year) if prior is not None else None
+            prior_col = prior_ytd[rank] if rank < len(prior_ytd) else None
             prior_cell = (
                 prior_row.cells.get(prior_col.index)
                 if (prior_row is not None and prior_col is not None)
@@ -622,9 +707,17 @@ def cast(
 ) -> CastResult:
     """Cast a current-period statement against the prior-period statement.
 
+    Works for any interim quarter: the current statement carries a three-month
+    column and a year-to-date column (six, nine or twelve months — "year ended"),
+    and the prior statement supplies the year-to-date column three months shorter
+    (Q2 adds the prior three-month, Q3 the prior six-month, Q4 the prior
+    nine-month). The two statements' period-end years may differ (a twelve-month
+    "year ended March 2026" reconciles against "nine months ended December 2025"),
+    so columns pair by recency, not by the year printed.
+
     Args:
-        current_pdf: the current interim statement (three- and six-month columns).
-        prior_pdf: the immediately preceding interim statement (three-month).
+        current_pdf: the current interim statement (3-month + year-to-date column).
+        prior_pdf: the immediately preceding interim statement.
         tolerance: absolute slack (in the statement's units, e.g. ₹ crore) before
             a difference is reported as a mismatch. ``1.0`` absorbs the ±1
             rounding drift that is normal when quarters are rounded
@@ -633,7 +726,7 @@ def cast(
     current_tables = [
         t for t in extract_period_tables(current_pdf)
         if any(c.months == 3 for c in t.columns)
-        and any(c.months == 6 for c in t.columns)
+        and any(c.months > 3 for c in t.columns)
     ]
     prior_tables = extract_period_tables(prior_pdf)
 

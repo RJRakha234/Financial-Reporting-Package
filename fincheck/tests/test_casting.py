@@ -44,7 +44,31 @@ def test_per_share_rows_are_not_additive():
     assert not is_additive_label("Basic (₹)")
     assert not is_additive_label("Weighted average equity shares (Basic)")
     assert not is_additive_label("Diluted (in shares)")
+    assert not is_additive_label("Exercise price (₹) / ($ ADS)")
+    assert not is_additive_label("Risk-free interest rate (%)")
     assert is_additive_label("Revenue from operations")
+
+
+# --- period generalisation: 6 / 9 / 12-month year-to-date columns -----------
+
+def test_period_header_matches_nine_and_year():
+    from fincheck.casting import _MONTHS_RE
+    assert _MONTHS_RE.search("Three months ended December 31, Nine months ended")
+    assert _MONTHS_RE.search("Three months ended March 31, Year ended March 31,")
+
+
+def test_period_blocks_classify_columns_by_block():
+    from fincheck.casting import _period_blocks, _months_at
+    # tokens with x positions like a "Three months ended ... Year ended" header
+    words = [
+        {"text": "Three", "x0": 341}, {"text": "months", "x0": 360},
+        {"text": "ended", "x0": 383}, {"text": "Year", "x0": 460},
+        {"text": "ended", "x0": 476},
+    ]
+    blocks = _period_blocks(words)
+    assert blocks == [(341.0, 3), (460.0, 12)]
+    assert _months_at(367, blocks) == 3        # a three-month column edge
+    assert _months_at(492, blocks) == 12       # a year (twelve-month) column edge
 
 
 # --- extraction ------------------------------------------------------------

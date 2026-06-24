@@ -24,15 +24,16 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-import pdfplumber
-
-from .casting import Cell, _cluster_rows, _merge_numberish, _row_text
+from .casting import Cell, _NUMWORD, _pdf_rows, _row_text
 from .numbers import parse_number
 
 _SCHED_RE = re.compile(
     r"(?i)changes in the carrying value of (right-of-use|property)")
+# "... for the three months ended ..." / "... nine months ended ..." /
+# "... year ended ..." — the schedule's period, current quarter or year-to-date.
 _PERIOD_RE = re.compile(
-    r"(?i)(three|six)\s+months?\s+ended\s+([A-Za-z]+)\s+\d{1,2},?\s*(\d{4})")
+    r"(?i)(?:(three|six|nine|twelve)\s+months?|year)\s+ended\s+"
+    r"([A-Za-z]+)\s+\d{1,2},?\s*(\d{4})")
 _BALANCE_RE = re.compile(r"(?i)\bas\s+(?:at|of)\b")
 _MONTH_RE = re.compile(
     r"(?i)\b(january|february|march|april|may|june|july|august|september|"
@@ -142,9 +143,9 @@ def _column_names(name_rows, centres) -> list[str]:
 
 def extract_schedules(pdf_path: str) -> list[Schedule]:
     schedules: list[Schedule] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_index, page in enumerate(pdf.pages):
-            rows = [_merge_numberish(r) for r in _cluster_rows(page.extract_words())]
+    if True:
+        for page_index, page_rows in enumerate(_pdf_rows(pdf_path)):
+            rows = list(page_rows)
             i = 0
             while i < len(rows):
                 m = _SCHED_RE.search(_row_text(rows[i]))
@@ -161,7 +162,7 @@ def extract_schedules(pdf_path: str) -> list[Schedule]:
                 if not pm:
                     i += 1
                     continue
-                months = 3 if pm.group(1).lower() == "three" else 6
+                months = _NUMWORD[pm.group(1).lower()] if pm.group(1) else 12
                 end_month = pm.group(2).lower()
                 year = int(pm.group(3))
 
@@ -272,11 +273,21 @@ def schedule_checks(current_pdf: str, prior_pdf: str):
     checks: list[CastCheck] = []
 
     for kind, note in (("PPE", "2.2"), ("ROU", "2.19")):
-        years = sorted({s.year for s in cur if s.kind == kind}, reverse=True)
-        for year in years:
-            six = _pick(cur, kind, 6, year)
+        # The current statement's longest schedule is its year-to-date one
+        # (6/9/12 months); the prior statement supplies the one three months
+        # shorter. Current and prior period-end years can differ (a year ended
+        # March vs nine months ended December), so they pair by recency rank.
+        n = max((s.months for s in cur if s.kind == kind), default=0)
+        if n <= 3:
+            continue
+        long_scheds = sorted([s for s in cur if s.kind == kind and s.months == n],
+                             key=lambda s: s.year, reverse=True)
+        prior_ytd = sorted([s for s in pri if s.kind == kind and s.months == n - 3],
+                           key=lambda s: s.year, reverse=True)
+        for rank, six in enumerate(long_scheds):
+            year = six.year
             cur3 = _pick(cur, kind, 3, year)
-            pri3 = _pick(pri, kind, 3, year)
+            pri3 = prior_ytd[rank] if rank < len(prior_ytd) else None
             if not (six and cur3 and pri3):
                 continue
             title = ("Property, plant & equipment schedule" if kind == "PPE"

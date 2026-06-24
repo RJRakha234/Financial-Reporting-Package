@@ -74,14 +74,22 @@ print(result.as_json())
 ## Casting — current vs prior period (interim statements)
 
 `fincheck` also **casts** an interim statement: it checks that, in the current
-period, every **year-to-date (six-month) figure equals the current quarter
-(three-month) figure plus the same line item's three-month figure from the prior
-interim statement** — for both the current year and the comparative year shown:
+period, every **year-to-date figure equals the current quarter (three-month)
+figure plus the same line item's year-to-date figure from the prior interim
+statement** — for both the current year and the comparative year shown. It works
+for every quarter, with the year-to-date column being six, nine or twelve months
+("year ended"):
 
 ```
-six months ended 30-Sep-2025  ==  three months ended 30-Sep-2025  (current PDF)
-                                 + three months ended 30-Jun-2025  (prior PDF)
+Q2:  six months  ended 30-Sep-2025 == 3M ended 30-Sep-2025 + 3M ended 30-Jun-2025
+Q3:  nine months ended 31-Dec-2025 == 3M ended 31-Dec-2025 + 6M ended 30-Sep-2025
+Q4:  year (12m)  ended 31-Mar-2026 == 3M ended 31-Mar-2026 + 9M ended 31-Dec-2025
 ```
+
+The current and prior statements' period-end years can differ (a twelve-month
+"year ended March 2026" reconciles against a "nine months ended December 2025"),
+which the tool handles by pairing columns by recency rather than by the printed
+year.
 
 You give it the two PDFs — the current statement (which carries both a
 three-month and a six-month column) and the prior statement (which carries the
