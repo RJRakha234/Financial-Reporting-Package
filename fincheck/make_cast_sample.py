@@ -52,6 +52,29 @@ def _segment(c, y, header, rows):
     return y
 
 
+# Movement schedule (ROU): three asset-category columns; balance rows carry an
+# inline date that lands left of the value columns. Every figure casts.
+_SCH_CENTRES = [320, 410, 500]
+_SCH_NAMES = ["Land", "Buildings", "Total"]
+
+
+def _schedule(c, y, header, rows):
+    c.setFont("Helvetica", 9)
+    c.drawString(_LABEL_X, y, "Changes in the carrying value of right-of-use assets")
+    y -= 12
+    c.drawString(_LABEL_X, y, header)
+    y -= 14
+    for name, x in zip(_SCH_NAMES, _SCH_CENTRES):
+        c.drawCentredString(x, y, name)
+    y -= 16
+    for label, vals in rows:
+        c.drawString(_LABEL_X, y, label)
+        for v, x in zip(vals, _SCH_CENTRES):
+            c.drawRightString(x, y, v)
+        y -= 14
+    return y
+
+
 def _current(path):
     c = canvas.Canvas(path, pagesize=A4)
     _, height = A4
@@ -90,6 +113,24 @@ def _current(path):
         [("Revenue from operations", ["65", "45", "110"], ["60", "38", "98"]),
          ("Segment operating income", ["22", "12", "34"], ["20", "9", "29"])],
     )
+    # Movement schedules on a fresh page (three- and six-month).
+    c.showPage()
+    y = height - 70
+    y = _schedule(
+        c, y, "for the three months ended September 30, 2025:",
+        [("Balance as at July 1, 2025", ["100", "200", "300"]),
+         ("Additions", ["10", "20", "30"]),
+         ("Depreciation", ["(5)", "(10)", "(15)"]),
+         ("Balance as at September 30, 2025", ["105", "210", "315"])],
+    )
+    y -= 24
+    _schedule(
+        c, y, "for the six months ended September 30, 2025:",
+        [("Balance as at April 1, 2025", ["90", "180", "270"]),
+         ("Additions", ["25", "50", "75"]),
+         ("Depreciation", ["(10)", "(20)", "(30)"]),
+         ("Balance as at September 30, 2025", ["105", "210", "315"])],
+    )
     c.showPage()
     c.save()
 
@@ -121,6 +162,15 @@ def _prior(path):
         c, y, "Three months ended June 30, 2025 and June 30, 2024:",
         [("Revenue from operations", ["35", "25", "60"], ["32", "20", "52"]),
          ("Segment operating income", ["12", "7", "19"], ["11", "5", "16"])],
+    )
+    c.showPage()
+    y = height - 70
+    _schedule(
+        c, y, "for the three months ended June 30, 2025:",
+        [("Balance as at April 1, 2025", ["90", "180", "270"]),
+         ("Additions", ["15", "30", "45"]),
+         ("Depreciation", ["(5)", "(10)", "(15)"]),
+         ("Balance as at June 30, 2025", ["100", "200", "300"])],
     )
     c.showPage()
     c.save()

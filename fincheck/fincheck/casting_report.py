@@ -42,6 +42,7 @@ def to_dict(result: CastResult) -> dict:
             "prior_quarter": c.prior_quarter,
             "expected": c.expected,
             "difference": c.difference,
+            "basis": c.basis,
             "status": c.status(result.tolerance),
         })
     counts: dict[str, int] = {}
@@ -99,7 +100,7 @@ def to_console(result: CastResult) -> str:
                 f"  {n}. Note {c.note} · {c.label.strip()}  [{c.year}]"
             )
             lines.append(
-                f"       6-month {_fmt(c.six_month):>14}"
+                f"       6-month {_fmt(c.six_month):>14}   ({c.basis})"
             )
             lines.append(
                 f"       3M(cur) {_fmt(c.current_quarter):>14}"
@@ -199,7 +200,7 @@ def write_excel(result: CastResult, path: str) -> str:
     headers = [
         "Note", "Statement / table", "Line item", "Year", "Page",
         "Year-to-date (6M)", "Current qtr (3M)", "Prior qtr (3M)",
-        "Expected (3M+3M)", "Difference", "Status",
+        "Expected", "Difference", "Basis", "Status",
     ]
     ws.append(headers)
     for col in range(1, len(headers) + 1):
@@ -214,7 +215,7 @@ def write_excel(result: CastResult, path: str) -> str:
         ws.append([
             c.note, c.title, c.label.strip(), c.year, c.page_index + 1,
             c.six_month, c.current_quarter, c.prior_quarter,
-            c.expected, c.difference, _STATUS_LABEL.get(status, status),
+            c.expected, c.difference, c.basis, _STATUS_LABEL.get(status, status),
         ])
         r = ws.max_row
         for col in range(1, len(headers) + 1):
@@ -224,13 +225,13 @@ def write_excel(result: CastResult, path: str) -> str:
                 cell.number_format = num_fmt
         fill = fills.get(status)
         if fill:
-            for col in (10, 11):
+            for col in (10, 12):
                 ws.cell(row=r, column=col).fill = fill
         f = status_font.get(status)
         if f:
-            ws.cell(row=r, column=11).font = f
+            ws.cell(row=r, column=12).font = f
 
-    widths = [8, 30, 46, 7, 6, 17, 16, 15, 16, 11, 11]
+    widths = [8, 30, 46, 7, 6, 17, 16, 15, 14, 11, 22, 11]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"

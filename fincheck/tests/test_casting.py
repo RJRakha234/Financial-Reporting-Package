@@ -162,6 +162,49 @@ def test_segment_quarter_cell_on_its_own_page(result):
     assert any(c.quarter_page_index is not None for c in seg)
 
 
+# --- movement schedules (PP&E note 2.2 / ROU note 2.19) --------------------
+
+def test_schedule_tables_extracted():
+    from fincheck.schedule import extract_schedules
+    scheds = extract_schedules(str(CURRENT))
+    assert sorted(s.months for s in scheds) == [3, 6]
+    assert all(s.kind == "ROU" and s.names[-1] == "Total" for s in scheds)
+
+
+def test_schedule_flow_lines_cast_additively(result):
+    flows = [c for c in result.checks if c.note == "2.19"
+             and c.mode == "sum" and c.label.startswith("Additions")]
+    assert flows
+    for c in flows:
+        assert c.status(1.0) == "ok"
+        assert c.expected == c.current_quarter + c.prior_quarter
+
+
+def test_schedule_closing_balance_equals_current(result):
+    close = next(c for c in result.checks if c.note == "2.19"
+                 and c.mode == "equal_current" and "Total" in c.label)
+    assert close.six_month == 315 and close.expected == 315   # same date as 3M
+    assert close.prior_quarter is None
+    assert close.status(1.0) == "ok"
+
+
+def test_schedule_opening_balance_equals_prior(result):
+    opening = next(c for c in result.checks if c.note == "2.19"
+                   and c.mode == "equal_prior" and "Total" in c.label)
+    assert opening.six_month == 270 and opening.expected == 270
+    assert opening.current_quarter is None
+    assert opening.status(1.0) == "ok"
+
+
+def test_basis_appears_in_reports(result):
+    from fincheck.casting_report import to_dict
+    from fincheck.casting_html import to_html
+    bases = {r["basis"] for r in to_dict(result)["checks"]}
+    assert "= 3M current (same date)" in bases     # closing balance
+    assert "= 3M prior (same date)" in bases        # opening balance
+    assert "Basis" in to_html(result)
+
+
 def test_cli_exits_nonzero_on_mismatch(tmp_path):
     proc = subprocess.run(
         [sys.executable, "-m", "fincheck.cast", str(CURRENT), str(PRIOR),

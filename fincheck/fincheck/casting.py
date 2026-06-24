@@ -507,13 +507,31 @@ class CastCheck:
     prior_quarter: float | None      # prior 3-month figure (from prior PDF)
 
     additive: bool = True            # False for per-share / share-count rows
+    mode: str = "sum"                # how the six-month figure is reconciled:
+                                     #   "sum"           -> 3M current + 3M prior
+                                     #   "equal_current" -> equals 3M current
+                                     #                      (closing balance, same date)
+                                     #   "equal_prior"   -> equals 3M prior
+                                     #                      (opening balance, same date)
     six_cell: Cell | None = None
     current_quarter_cell: Cell | None = None
     quarter_page_index: int | None = None   # page of the current-quarter cell
                                              # (differs from page_index for segments)
 
     @property
+    def basis(self) -> str:
+        return {
+            "sum": "3M current + 3M prior",
+            "equal_current": "= 3M current (same date)",
+            "equal_prior": "= 3M prior (same date)",
+        }.get(self.mode, "3M current + 3M prior")
+
+    @property
     def expected(self) -> float | None:
+        if self.mode == "equal_current":
+            return self.current_quarter
+        if self.mode == "equal_prior":
+            return self.prior_quarter
         if self.current_quarter is None or self.prior_quarter is None:
             return None
         return self.current_quarter + self.prior_quarter
@@ -630,6 +648,11 @@ def cast(
     # Segment-reporting matrices (note 2.23) need their own two-line parser.
     from .segment import segment_checks
     checks.extend(segment_checks(current_pdf, prior_pdf))
+
+    # Movement schedules (PP&E note 2.2, ROU note 2.19) cast flow lines and
+    # reconcile opening/closing balances by date.
+    from .schedule import schedule_checks
+    checks.extend(schedule_checks(current_pdf, prior_pdf))
 
     return CastResult(
         current_pdf=current_pdf,

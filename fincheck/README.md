@@ -157,6 +157,23 @@ plus a Total — so it has a dedicated parser (`fincheck.segment`) that casts ev
 segment cell across the three-month and six-month matrices; segment names are
 recovered best-effort from the wrapped header.
 
+**Movement schedules — PP&E (note 2.2) and right-of-use assets (note 2.19)** —
+are roll-forwards whose columns are asset categories, so they get their own
+parser (`fincheck.schedule`) and cast each row by what it represents (shown in
+the *Basis* column of the reports):
+
+* **flow lines** (additions, deletions, depreciation, translation, …) add up:
+  `six-month = three-month current + three-month prior`;
+* a **closing balance** (period-end) must equal the current-quarter schedule's
+  closing — same date, so `six-month = three-month current`;
+* an **opening balance** must equal the prior-quarter schedule's opening —
+  `six-month = three-month prior`.
+
+Each gross-block, accumulated-depreciation and net-block section is cast
+separately, and a movement line disclosed in only one quarter is treated as nil
+in the other (so e.g. an acquisition that hit only the first quarter still
+casts).
+
 ## Offline & data privacy
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It

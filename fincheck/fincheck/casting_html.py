@@ -54,6 +54,7 @@ tr.warn{background:var(--amberbg)} tr.muted td{color:var(--muted)}
 .pill.warn{background:var(--amberbg);color:var(--amber)}
 .pill.muted{background:#eee;color:var(--muted)}
 .diff0{color:var(--muted)} .diffx{color:var(--red);font-weight:700}
+td.basis{color:var(--muted);font-size:12px}
 footer{color:var(--muted);font-size:12px;margin-top:30px}
 .legend{font-size:12px;color:var(--muted);margin:8px 0 0}
 """
@@ -81,6 +82,7 @@ def _row_html(c: CastResult, check) -> str:
         f'<td class="op">=</td>'
         f'<td class="num">{_num(check.expected)}</td>'
         f'<td class="num {diff_cls}">{_num(diff)}</td>'
+        f'<td class="l basis">{html.escape(check.basis)}</td>'
         f'<td><span class="pill {pill_cls}">{html.escape(pill_label)}</span></td>'
         f'</tr>'
     )
@@ -92,7 +94,8 @@ def _section(result: CastResult, title: str, checks: list) -> str:
         '<th>Year-to-date<br>(6M)</th><th class="op"></th>'
         '<th>Current qtr<br>(3M)</th><th class="op"></th>'
         '<th>Prior qtr<br>(3M)</th><th class="op"></th>'
-        '<th>Expected<br>(3M+3M)</th><th>Diff</th><th>Status</th></tr>'
+        '<th>Expected</th><th>Diff</th><th class="l">Basis</th>'
+        '<th>Status</th></tr>'
     )
     rows = "".join(_row_html(result, c) for c in checks)
     return f'<h2>{html.escape(title)}</h2><table>{head}{rows}</table>'
