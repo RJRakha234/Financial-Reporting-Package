@@ -28,6 +28,30 @@ def _row(c, y, label, *values, right_edges):
         c.drawRightString(x, y, value)
 
 
+# Segment matrix: three columns drawn centred so the casting extractor (which
+# clusters figures by horizontal centre) sees clean columns. Every figure casts.
+_SEG_CENTRES = [294, 394, 494]
+_SEG_NAMES = ["Segment A", "Segment B", "Total"]
+
+
+def _segment(c, y, header, rows):
+    c.setFont("Helvetica", 9)
+    c.drawString(_LABEL_X, y, header)
+    y -= 14
+    for name, x in zip(_SEG_NAMES, _SEG_CENTRES):
+        c.drawCentredString(x, y, name)
+    y -= 16
+    for label, cy, py in rows:
+        c.drawString(_LABEL_X, y, label)
+        for v, x in zip(cy, _SEG_CENTRES):
+            c.drawCentredString(x, y, v)
+        y -= 12
+        for v, x in zip(py, _SEG_CENTRES):           # comparative year, unlabelled
+            c.drawCentredString(x, y, v)
+        y -= 16
+    return y
+
+
 def _current(path):
     c = canvas.Canvas(path, pagesize=A4)
     _, height = A4
@@ -53,6 +77,19 @@ def _current(path):
     for label, *vals in rows:
         _row(c, y, label, *vals, right_edges=edges)
         y -= 16
+    # Two segment matrices (three- and six-month) on the same page.
+    y -= 20
+    y = _segment(
+        c, y, "Three months ended September 30, 2025 and September 30, 2024:",
+        [("Revenue from operations", ["30", "20", "50"], ["28", "18", "46"]),
+         ("Segment operating income", ["10", "5", "15"], ["9", "4", "13"])],
+    )
+    y -= 14
+    _segment(
+        c, y, "Six months ended September 30, 2025 and September 30, 2024:",
+        [("Revenue from operations", ["65", "45", "110"], ["60", "38", "98"]),
+         ("Segment operating income", ["22", "12", "34"], ["20", "9", "29"])],
+    )
     c.showPage()
     c.save()
 
@@ -79,6 +116,12 @@ def _prior(path):
     for label, *vals in rows:
         _row(c, y, label, *vals, right_edges=edges)
         y -= 16
+    y -= 20
+    _segment(
+        c, y, "Three months ended June 30, 2025 and June 30, 2024:",
+        [("Revenue from operations", ["35", "25", "60"], ["32", "20", "52"]),
+         ("Segment operating income", ["12", "7", "19"], ["11", "5", "16"])],
+    )
     c.showPage()
     c.save()
 

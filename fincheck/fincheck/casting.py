@@ -509,6 +509,8 @@ class CastCheck:
     additive: bool = True            # False for per-share / share-count rows
     six_cell: Cell | None = None
     current_quarter_cell: Cell | None = None
+    quarter_page_index: int | None = None   # page of the current-quarter cell
+                                             # (differs from page_index for segments)
 
     @property
     def expected(self) -> float | None:
@@ -624,6 +626,10 @@ def cast(
         if prior is None:
             uncast.append(cur)
         checks.extend(pair_checks)
+
+    # Segment-reporting matrices (note 2.23) need their own two-line parser.
+    from .segment import segment_checks
+    checks.extend(segment_checks(current_pdf, prior_pdf))
 
     return CastResult(
         current_pdf=current_pdf,

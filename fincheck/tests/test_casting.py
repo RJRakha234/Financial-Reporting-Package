@@ -125,6 +125,43 @@ def test_highlighted_pdf_written(tmp_path, result):
     assert out.exists() and out.stat().st_size > 0
 
 
+def test_html_report_written(tmp_path, result):
+    from fincheck.casting_html import write_html
+    out = tmp_path / "casting.html"
+    write_html(result, str(out))
+    text = out.read_text(encoding="utf-8")
+    assert "Casting report" in text
+    assert "Segment reporting" in text       # segment section is rendered
+    assert "Year-to-date" in text
+
+
+# --- segment reporting (note 2.23) -----------------------------------------
+
+def test_segment_tables_extracted():
+    from fincheck.segment import extract_segment_tables
+    tables = extract_segment_tables(str(CURRENT))
+    months = sorted(t.months for t in tables)
+    assert months == [3, 6]                   # both the 3M and 6M matrices
+    assert all(t.names[-1] == "Total" for t in tables)
+
+
+def test_segment_casts_every_cell(result):
+    seg = [c for c in result.checks if c.note == "2.23"]
+    assert len(seg) == 12                      # 2 metrics x 3 cols x 2 years
+    assert all(c.status(1.0) == "ok" for c in seg)
+    total = next(c for c in seg if "Total" in c.label and c.year == 2025
+                 and c.label.startswith("Revenue"))
+    assert total.six_month == 110              # 50 (3M cur) + 60 (3M prior)
+    assert total.expected == 110
+
+
+def test_segment_quarter_cell_on_its_own_page(result):
+    # the six-month and current-quarter figures live on different pages, so the
+    # check must remember each cell's page for highlighting
+    seg = [c for c in result.checks if c.note == "2.23"]
+    assert any(c.quarter_page_index is not None for c in seg)
+
+
 def test_cli_exits_nonzero_on_mismatch(tmp_path):
     proc = subprocess.run(
         [sys.executable, "-m", "fincheck.cast", str(CURRENT), str(PRIOR),

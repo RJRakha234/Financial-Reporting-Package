@@ -1,15 +1,17 @@
 """Annotate the current-period PDF with the casting result.
 
-For every line item the year-to-date (six-month) figure is the one being
-verified, so it is coloured by outcome; the current-quarter figure that feeds
-into it is marked as a checked component:
+Both figures that make up a successful cast are coloured **green**, so every
+number that has been cast and agrees is green at a glance:
 
-* **green**  — the six-month figure casts (3M current + 3M prior, within tolerance);
-* **red**    — it does NOT cast (outlined, with the expected value in a note);
-* **orange** — it could not be verified (the prior figure was missing);
-* **yellow** — a current-quarter figure that was added into the check.
+* **green**  — a figure that casts (the six-month total and the current-quarter
+  figure that feeds it, when 3M current + 3M prior agrees within tolerance);
+* **red**    — a six-month figure that does NOT cast (outlined, with the
+  expected value in a note);
+* **orange** — could not be verified, or a figure feeding a failed cast.
 
-A summary page with a legend and the list of mismatches is prepended.
+(The third figure in each cast — the prior quarter — lives in the *other* PDF,
+so it is reported in the Excel/HTML rather than highlighted here.) A summary
+page with a legend and the list of mismatches is prepended.
 """
 
 from __future__ import annotations
@@ -19,57 +21,61 @@ import fitz  # PyMuPDF
 from .casting import CastResult
 from .numbers import format_number
 
-_YELLOW = (0.99, 0.86, 0.30)
 _GREEN = (0.30, 0.66, 0.36)
 _RED = (0.86, 0.20, 0.18)
 _ORANGE = (0.95, 0.60, 0.15)
 _PAD = 1.5
 
-_PRIORITY = {"component": 0, "ok": 1, "unverified": 2, "mismatch": 3}
-_COLOR = {
-    "component": _YELLOW,
-    "ok": _GREEN,
-    "unverified": _ORANGE,
-    "mismatch": _RED,
-}
+_PRIORITY = {"ok": 0, "feeds_fail": 1, "unverified": 2, "mismatch": 3}
+_COLOR = {"ok": _GREEN, "feeds_fail": _ORANGE, "unverified": _ORANGE, "mismatch": _RED}
 
 
 def _key(cell):
     return (round(cell.x0), round(cell.top))
 
 
-def _annotate_page(page, items) -> None:
-    kind: dict[tuple, tuple] = {}     # key -> (priority, role, cell)
-    notes: dict[tuple, str] = {}
+def _collect(result: CastResult):
+    """Return {page_index: {cell_key: (role, cell, note)}} resolving by priority."""
+    pages: dict[int, dict[tuple, tuple]] = {}
 
-    def put(cell, role, note=None):
-        if cell is None:
+    def put(page_index, cell, role, note=None):
+        if cell is None or page_index is None:
             return
+        bucket = pages.setdefault(page_index, {})
         key = _key(cell)
-        prio = _PRIORITY[role]
-        if key not in kind or prio > kind[key][0]:
-            kind[key] = (prio, role, cell)
-        if note:
-            notes[key] = note
+        if key not in bucket or _PRIORITY[role] > _PRIORITY[bucket[key][0]]:
+            bucket[key] = (role, cell, note)
+        elif note and bucket[key][2] is None:
+            bucket[key] = (bucket[key][0], bucket[key][1], note)
 
-    for status, check in items:
-        put(check.current_quarter_cell, "component")
-        msg = None
-        if status == "mismatch":
-            msg = (
-                f"Does not cast: 6M {format_number(check.six_month)} vs "
-                f"3M+3M {format_number(check.expected)} "
-                f"(off by {format_number(check.difference)})"
+    for c in result.checks:
+        status = c.status(result.tolerance)
+        if status == "not_additive":
+            continue
+        q_page = c.quarter_page_index if c.quarter_page_index is not None else c.page_index
+        if status == "ok":
+            put(c.page_index, c.six_cell, "ok")
+            put(q_page, c.current_quarter_cell, "ok")
+        elif status == "mismatch":
+            note = (
+                f"Does not cast: 6M {format_number(c.six_month)} vs "
+                f"3M+3M {format_number(c.expected)} "
+                f"(off by {format_number(c.difference)})"
             )
-        elif status == "unverified":
-            msg = "Could not verify: prior-period figure not found."
-        put(check.six_cell, status if status in _COLOR else "ok", msg)
+            put(c.page_index, c.six_cell, "mismatch", note)
+            put(q_page, c.current_quarter_cell, "feeds_fail")
+        else:  # unverified
+            put(c.page_index, c.six_cell, "unverified",
+                "Could not verify: prior-period figure not found.")
+    return pages
 
-    for prio, role, cell in kind.values():
-        rect = fitz.Rect(cell.x0 - _PAD, cell.top - _PAD, cell.x1 + _PAD, cell.bottom + _PAD)
+
+def _annotate(page, cells) -> None:
+    for role, cell, note in cells.values():
+        rect = fitz.Rect(cell.x0 - _PAD, cell.top - _PAD,
+                         cell.x1 + _PAD, cell.bottom + _PAD)
         annot = page.add_highlight_annot(rect)
         annot.set_colors(stroke=_COLOR[role])
-        note = notes.get(_key(cell))
         if note:
             annot.set_info(content=note)
         annot.update()
@@ -104,10 +110,9 @@ def _add_summary_page(doc, result: CastResult) -> None:
         fontsize=11, fontname="helv",
     )
     y += 24
-    _swatch(page, 54, y, _YELLOW, "current-quarter figure added into the check"); y += 16
-    _swatch(page, 54, y, _GREEN, "year-to-date figure that casts"); y += 16
-    _swatch(page, 54, y, _RED, "year-to-date figure that does NOT cast"); y += 16
-    _swatch(page, 54, y, _ORANGE, "could not be verified"); y += 26
+    _swatch(page, 54, y, _GREEN, "figure that casts (6M = 3M current + 3M prior)"); y += 16
+    _swatch(page, 54, y, _RED, "six-month figure that does NOT cast"); y += 16
+    _swatch(page, 54, y, _ORANGE, "could not be verified / feeds a failed cast"); y += 26
 
     for n, c in enumerate(mism, 1):
         if y > page.rect.height - 70:
@@ -131,18 +136,13 @@ def _add_summary_page(doc, result: CastResult) -> None:
 
 def write_highlighted_pdf(result: CastResult, output_pdf: str) -> str:
     """Write an annotated copy of the *current-period* PDF."""
+    # Real filings sometimes carry a slightly malformed xref that MuPDF repairs
+    # while printing noisy warnings; silence those — the repaired copy is fine.
+    fitz.TOOLS.mupdf_display_errors(False)
     doc = fitz.open(result.current_pdf)
-    by_page: dict[int, list] = {}
-    for c in result.checks:
-        status = c.status(result.tolerance)
-        if status == "not_additive":
-            continue
-        by_page.setdefault(c.page_index, []).append((status, c))
-
-    for page_index, items in by_page.items():
+    for page_index, cells in _collect(result).items():
         if 0 <= page_index < len(doc):
-            _annotate_page(doc[page_index], items)
-
+            _annotate(doc[page_index], cells)
     _add_summary_page(doc, result)
     doc.save(output_pdf, garbage=4, deflate=True)
     doc.close()

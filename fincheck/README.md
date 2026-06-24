@@ -88,11 +88,12 @@ three-month and a six-month column) and the prior statement (which carries the
 earlier three-month column):
 
 ```bash
-# Console summary + Excel report + highlighted PDF (defaults next to the input)
+# Console summary + Excel + HTML + highlighted PDF (defaults next to the input)
 python -m fincheck.cast current_q2.pdf prior_q1.pdf
 
 # Choose outputs explicitly; 'none' skips one
-python -m fincheck.cast --current q2.pdf --prior q1.pdf -o casting.xlsx --pdf flagged.pdf
+python -m fincheck.cast --current q2.pdf --prior q1.pdf -o casting.xlsx \
+    --html casting.html --pdf flagged.pdf
 python -m fincheck.cast q2.pdf q1.pdf -o casting.xlsx --pdf none --json
 
 # ±1 rounding drift passes by default; use 0 for a strict, exact cast
@@ -113,14 +114,18 @@ Mismatches (year-to-date ≠ current 3M + prior 3M):
        3M(cur)          4,337  + 3M(prior) 4,252  = 8,589   (off by -2)
 ```
 
-It produces three things:
+It produces four things:
 
 * an **Excel workbook** (`Summary` + `Casting` sheets) listing every line item
   with its six-month, current-quarter and prior-quarter figures, the expected
   sum, the exact difference and a colour-coded status — filterable and sortable;
-* a **highlighted copy of the current PDF** — each six-month figure is coloured
-  green (casts) / red (does not cast, outlined with a note) / orange (could not
-  be verified), and each current-quarter figure that fed the check is yellow;
+* an **HTML report** that shows the working — each row laid out as
+  `year-to-date (6M) = current 3M + prior 3M = expected`, grouped by note and
+  colour-coded, so a reviewer can see *how* every figure was cast;
+* a **highlighted copy of the current PDF** — every figure that casts is
+  **green** (both the six-month total and the current-quarter figure feeding
+  it), a six-month figure that does **not** cast is **red** (outlined, with the
+  expected value in a note), and anything unverified is **orange**;
 * a non-zero **exit code** when anything fails to cast (handy in a pipeline).
 
 Library use:
@@ -128,11 +133,13 @@ Library use:
 ```python
 from fincheck import cast
 from fincheck.casting_report import write_excel
+from fincheck.casting_html import write_html
 from fincheck.casting_highlight import write_highlighted_pdf
 
 result = cast("current_q2.pdf", "prior_q1.pdf", tolerance=1.0)
 print(result.consistent, len(result.mismatches))
 write_excel(result, "casting.xlsx")
+write_html(result, "casting.html")
 write_highlighted_pdf(result, "flagged.pdf")
 ```
 
@@ -144,9 +151,11 @@ matched by label with a positional fallback for labels that wrapped or were
 dropped in one PDF. Per-share amounts and weighted-average share counts are
 detected and **not** cast (they are averages, not additive flows).
 
-*Known limitation:* segment-reporting matrices (note 2.23) use a two-line
-current-year / prior-year layout with no plain year row, so they are not
-auto-cast — review those by hand.
+**Segment reporting (note 2.23)** uses a different two-line layout — the current
+year and the comparative year on separate rows, one column per business segment
+plus a Total — so it has a dedicated parser (`fincheck.segment`) that casts every
+segment cell across the three-month and six-month matrices; segment names are
+recovered best-effort from the wrapped header.
 
 ## Offline & data privacy
 

@@ -31,6 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
                    "(default: <current>.casting.xlsx; 'none' to skip)")
     p.add_argument("--pdf", help="highlighted PDF path "
                    "(default: <current>.casting.pdf; 'none' to skip)")
+    p.add_argument("--html", help="HTML report path "
+                   "(default: <current>.casting.html; 'none' to skip)")
     p.add_argument("--tolerance", type=float, default=1.0,
                    help="absolute rounding slack before a difference is a "
                    "mismatch (default: 1.0; use 0 for an exact cast)")
@@ -57,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     excel = args.output if args.output is not None else str(
         src.with_suffix(".casting.xlsx"))
     pdf = args.pdf if args.pdf is not None else str(src.with_suffix(".casting.pdf"))
+    html_path = args.html if args.html is not None else str(
+        src.with_suffix(".casting.html"))
 
     if args.json:
         print(to_json(result))
@@ -66,7 +70,13 @@ def main(argv: list[str] | None = None) -> int:
     if excel and excel.lower() != "none":
         write_excel(result, excel)
         if not args.json:
-            print(f"\nExcel report written to: {excel}")
+            print(f"\nExcel report written to:    {excel}")
+
+    if html_path and html_path.lower() != "none":
+        from .casting_html import write_html
+        write_html(result, html_path)
+        if not args.json:
+            print(f"HTML report written to:     {html_path}")
 
     if pdf and pdf.lower() != "none":
         # Imported lazily so the report still works without PyMuPDF installed.

@@ -9,6 +9,7 @@ cast_current.pdf
 cast_prior.pdf
 *.casting.pdf
 *.casting.xlsx
+*.casting.html
 # Never commit user-supplied statements or rendered previews
 real_infy*.pdf
 rinfy_*.png
