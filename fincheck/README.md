@@ -18,6 +18,13 @@ It is built for real-world statements: figures with thousands separators,
 parenthesised negatives, currency symbols/codes, nil dashes, and nested
 balance-sheet / income-statement hierarchies.
 
+> **Comparing notes across statements?** See
+> [`notes_README.md`](notes_README.md) for `python -m fincheck.notes`, which
+> compares the **common notes** across the four quarter-end statements
+> (Consol/Standalone Ind AS, IFRS INR/USD), neutralizes the expected
+> entity/framework/currency differences, and produces an interactive offline
+> report where a checker accepts or ignores each remaining difference.
+
 ## Install
 
 ```bash

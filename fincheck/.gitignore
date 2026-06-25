@@ -7,3 +7,8 @@ preview_*.png
 # Never commit user-supplied statements or rendered previews
 real_infy*.pdf
 rinfy_*.png
+samples/
+scratch/
+# Generated comparison artifacts
+notes_diff*.html
+decisions*.json
