@@ -2,7 +2,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 sample_financials.pdf
+sample_filing.html
 *.highlighted.pdf
+*.compared.pdf
+sample_compared.*
 preview_*.png
 # Never commit user-supplied statements or rendered previews
 real_infy*.pdf

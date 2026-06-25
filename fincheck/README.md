@@ -1,4 +1,13 @@
-# fincheck — financial total & subtotal consistency checker
+# fincheck — financial statement checks
+
+`fincheck` does two jobs on financial statements:
+
+1. **`check`** — foot every total/subtotal in a PDF (see below).
+2. **`compare`** — compare a **published PDF** against the **HTML filed with the
+   SEC** and comment every difference, page by page, on a copy of the PDF.
+   Jump to [Compare published PDF vs filed HTML](#compare-published-pdf-vs-filed-html).
+
+## `check` — total & subtotal consistency
 
 `fincheck` reads a financial-statement PDF, verifies that **every total and
 subtotal actually foots** (i.e. equals the sum of its line items), and writes a
@@ -59,6 +68,75 @@ Highlighted PDF written to: sample_financials.highlighted.pdf
 The process exits with status `1` when inconsistencies are found and `0` when
 everything foots — handy in CI or a pipeline.
 
+## Compare published PDF vs filed HTML
+
+At quarter end, after the financials are published as a PDF, the **same**
+document is converted to **HTML** for the SEC filing. That conversion can
+silently transpose a digit, drop a line, lose a minus sign, or change a word.
+`fincheck compare` reads both documents, aligns them, and **comments every
+difference on a copy of the published PDF, with a page reference** — so a
+reviewer opens the PDF at the flagged page and checks.
+
+```bash
+# Generate the sample PDF and a matching HTML filing (with planted errors)
+python make_sample.py
+python make_sample_html.py
+
+# Compare them — writes sample_financials.compared.pdf next to the PDF
+python -m fincheck compare sample_financials.pdf sample_filing.html
+
+# Choose outputs, add a standalone HTML report, or skip the PDF
+python -m fincheck compare published.pdf filed.html -o flagged.pdf --html-report diff.html
+python -m fincheck compare published.pdf filed.html -o none --json
+python -m fincheck compare published.pdf filed.html --no-text   # figures only
+```
+
+What it reports, each anchored to the PDF page it came from:
+
+* **figure changed** (red, boxed) — same line, different number in the HTML
+  (e.g. PDF `8,750` → HTML `8,570`);
+* **figure missing from HTML** (orange) — a figure published in the PDF that the
+  HTML does not have in the matching place;
+* **figure only in HTML** (blue) — a figure the conversion introduced that is not
+  in the PDF;
+* **wording differs** (amber) — a word that changed between the two documents.
+
+```
+✗ Found 3 differences (3 figure, 0 wording):
+
+  1. Page 1  ·  [figure missing from HTML]
+     Figure 1,200 is in the published PDF but missing from the HTML here.  ·  Goodwill
+
+  2. Page 1  ·  [figure changed in HTML]
+     Figure mismatch: PDF shows 8,750, HTML shows 8,570.  ·  Cash and cash equivalents
+
+  3. Page 1  ·  [figure only in HTML (not in PDF)]
+     Figure 250 appears in the HTML but not in the published PDF here.  ·  Prepaid expenses
+
+Annotated PDF written to: sample_financials.compared.pdf
+```
+
+The annotated PDF highlights each discrepancy **in place** on the published
+document and attaches a sticky-note comment; a summary page listing every
+finding (with its page number) is prepended. The process exits `1` when any
+difference is found, `0` when the documents match.
+
+How the alignment works: figures and words are read from both documents in
+reading order and matched with a sequence aligner, so only the stretches that
+fail to line up are reported — matched figures are never flagged. Within a
+mismatched run, figures are paired by their line label first and nearest value
+second, so a transposed digit lines up with its own line while a genuinely
+added/removed figure is left over and reported as such.
+
+```python
+from fincheck import compare
+
+result = compare("published.pdf", "filed.html", output_pdf="flagged.pdf")
+print(result.consistent)                 # False
+for d in result.differences:
+    print(d.page_label, d.kind, d.message())
+```
+
 ## Use it (library)
 
 ```python
@@ -74,10 +152,12 @@ print(result.as_json())
 ## Offline & data privacy
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It
-only uses local libraries (`pdfplumber`/`pdfminer` to read text, `PyMuPDF` to
-annotate). Your financial statements are read from disk and the highlighted PDF
-is written back to disk — nothing is uploaded, sent to any API, logged remotely,
-or cached anywhere outside the folder you run it in. It is safe to run on an
+only uses local libraries (`pdfplumber`/`pdfminer` to read PDF text, `PyMuPDF` to
+annotate, and the Python standard library's `html.parser` to read the filed
+HTML — no third-party HTML dependency, no remote fetch). Your financial
+statements are read from disk and the annotated PDF is written back to disk —
+nothing is uploaded, sent to any API, logged remotely, or cached anywhere
+outside the folder you run it in. It is safe to run on an
 air-gapped machine. (You can verify: there is no `requests`/`urllib`/`http`/
 `socket`/API-client import anywhere in `fincheck/`.)
 

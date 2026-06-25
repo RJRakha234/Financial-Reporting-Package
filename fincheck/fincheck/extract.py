@@ -231,3 +231,62 @@ def extract_pages(pdf_path: str) -> list[Page]:
         for i, page in enumerate(pdf.pages):
             pages.append(_build_page(i, page))
     return pages
+
+
+@dataclass
+class LineToken:
+    """A single word on a PDF line, carrying its bounding box for annotation."""
+
+    text: str
+    x0: float
+    x1: float
+    top: float
+    bottom: float
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        return (self.x0, self.top, self.x1, self.bottom)
+
+
+@dataclass
+class PageLines:
+    index: int
+    width: float
+    height: float
+    lines: list[list[LineToken]]
+
+
+def _page_lines(page_index: int, page) -> PageLines:
+    words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+    lines: list[list[LineToken]] = []
+    for raw_row in _cluster_rows(words):
+        merged = _merge_numberish(raw_row)
+        tokens = [
+            LineToken(
+                text=w["text"].strip(),
+                x0=w["x0"],
+                x1=w["x1"],
+                top=w["top"],
+                bottom=w["bottom"],
+            )
+            for w in merged
+            if w["text"].strip()
+        ]
+        if tokens:
+            lines.append(tokens)
+    return PageLines(page_index, page.width, page.height, lines)
+
+
+def extract_lines(pdf_path: str) -> list[PageLines]:
+    """Return every page's text as reading-ordered lines of word tokens.
+
+    Unlike :func:`extract_pages` (which reconstructs columns for footing checks),
+    this keeps the raw line stream with each word's bounding box. It is the input
+    to the PDF↔HTML comparison, where numbers and words are matched against the
+    filed HTML and any difference is annotated back onto the page it came from.
+    """
+    out: list[PageLines] = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages):
+            out.append(_page_lines(i, page))
+    return out
