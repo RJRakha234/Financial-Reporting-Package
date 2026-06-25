@@ -51,13 +51,19 @@ def _add_compare_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("html", help="the HTML filed with the SEC (same document)")
     p.add_argument(
         "-o",
-        "--output",
-        help="path for the annotated PDF "
-        "(default: <pdf>.compared.pdf; use 'none' to skip)",
+        "--out-pdf",
+        dest="out_pdf",
+        help="path for the validated PDF, green-highlighted where checked "
+        "(default: <pdf>.validated.pdf; use 'none' to skip)",
+    )
+    p.add_argument(
+        "--out-html",
+        help="path for the commented HTML, ✓/✗ on every row "
+        "(default: <html>.commented.html; use 'none' to skip)",
     )
     p.add_argument(
         "--html-report",
-        help="also write a standalone HTML report of the differences here",
+        help="also write a standalone HTML summary table of the differences here",
     )
     p.add_argument(
         "--no-text",
@@ -126,6 +132,14 @@ def _run_check(args) -> int:
     return 1 if result.issues else 0
 
 
+def _resolve_out(value, default: str) -> str | None:
+    if value is None:
+        return default
+    if value.lower() == "none":
+        return None
+    return value
+
+
 def _run_compare(args) -> int:
     pdf = Path(args.pdf)
     html = Path(args.html)
@@ -136,17 +150,16 @@ def _run_compare(args) -> int:
         print(f"error: file not found: {html}", file=sys.stderr)
         return 2
 
-    if args.output is None:
-        output = str(pdf.with_suffix(".compared.pdf"))
-    elif args.output.lower() == "none":
-        output = None
-    else:
-        output = args.output
+    out_pdf = _resolve_out(args.out_pdf, str(pdf.with_suffix(".validated.pdf")))
+    out_html = _resolve_out(
+        args.out_html, str(html.with_suffix(".commented.html"))
+    )
 
     result = compare(
         str(pdf),
         str(html),
-        output_pdf=output,
+        output_pdf=out_pdf,
+        output_html=out_html,
         compare_text=not args.no_text,
     )
 
@@ -155,16 +168,20 @@ def _run_compare(args) -> int:
     else:
         print(compare_console(result))
         if result.output_pdf:
-            print(f"\nAnnotated PDF written to: {result.output_pdf}")
+            print(f"\nValidated PDF written to: {result.output_pdf}")
             print(
-                "  red = figure changed · orange = figure missing from HTML · "
-                "blue = figure only in HTML · amber = wording differs"
+                "  green = validated (matches HTML) · red = figure changed · "
+                "orange = cell/row missing from HTML · blue = only in HTML · "
+                "amber = wording differs"
             )
+        if result.output_html:
+            print(f"Commented HTML written to: {result.output_html}")
+            print("  ✓ on every matching row, ✗/⚠ where it differs from the PDF")
 
     if args.html_report:
         Path(args.html_report).write_text(compare_html(result), encoding="utf-8")
         if not args.json:
-            print(f"HTML report written to: {args.html_report}")
+            print(f"HTML summary report written to: {args.html_report}")
 
     return 1 if result.differences else 0
 

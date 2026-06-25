@@ -10,6 +10,8 @@ from fincheck.compare import (
     CHANGED,
     EXTRA_IN_HTML,
     MISSING_IN_HTML,
+    ROW_EXTRA,
+    ROW_MISSING,
     TEXT_CHANGED,
     Num,
     Word,
@@ -119,31 +121,68 @@ def ensure_samples():
 
 def test_end_to_end_catches_every_planted_discrepancy():
     result = compare(str(PDF), str(HTML))
-    kinds = {d.kind for d in result.differences}
-    assert {CHANGED, MISSING_IN_HTML, EXTRA_IN_HTML, TEXT_CHANGED} <= kinds
 
-    changed = result.by_kind(CHANGED)
-    assert any(d.pdf_text == "8,750" and d.html_text == "8,570" for d in changed)
-    assert any(d.pdf_text == "1,200" for d in result.by_kind(MISSING_IN_HTML))
-    assert any(d.html_text == "250" for d in result.by_kind(EXTRA_IN_HTML))
-    # every difference points at a real PDF page
-    assert all(d.page is not None for d in result.number_differences)
+    # changed figure inside an otherwise-matching row
+    assert any(
+        d.pdf_text == "8,750" and d.html_text == "8,570"
+        for d in result.by_kind(CHANGED)
+    )
+    # a whole table row dropped from the HTML (table-formatting miss)
+    assert any("1,200" in d.pdf_text and "Goodwill" in d.pdf_text
+               for d in result.by_kind(ROW_MISSING))
+    # a row present only in the HTML
+    assert any("250" in d.html_text and "Prepaid" in d.html_text
+               for d in result.by_kind(ROW_EXTRA))
+    # wording change inside a matched row
+    assert any("Manufacturing" in d.pdf_text and "Manufacturers" in d.html_text
+               for d in result.by_kind(TEXT_CHANGED))
+    # every row difference is anchored to a real PDF page (missing rows) or
+    # the nearest one (extra rows)
+    assert all(d.page is not None for d in result.by_kind(ROW_MISSING))
 
 
-def test_end_to_end_writes_annotated_pdf(tmp_path):
-    out = tmp_path / "compared.pdf"
-    result = compare(str(PDF), str(HTML), output_pdf=str(out))
-    assert out.exists()
+def test_end_to_end_writes_both_outputs(tmp_path):
+    out_pdf = tmp_path / "validated.pdf"
+    out_html = tmp_path / "commented.html"
+    result = compare(
+        str(PDF), str(HTML), output_pdf=str(out_pdf), output_html=str(out_html)
+    )
+    assert out_pdf.exists() and out_html.exists()
+    assert result.output_pdf == str(out_pdf)
+    assert result.output_html == str(out_html)
+
+    import fitz
+
+    doc = fitz.open(str(out_pdf))
+    assert doc.page_count == 2  # summary page prepended to the 1-page sample
+    annots = list(doc[1].annots() or [])
+    contents = [a.info.get("content", "") for a in annots]
+    # the changed figure carries its comment, and validated greens are present
+    assert any("8,570" in c for c in contents)
+    assert any("Validated" in c for c in contents)
+
+    text = out_html.read_text(encoding="utf-8")
+    assert "✓" in text and "✗" in text          # pass/fail comments present
+    assert "fincheck comparison" in text        # legend injected
+    assert "8,570" in text                       # original HTML content preserved
+
+
+def test_validated_pdf_has_green_coverage(tmp_path):
+    out = tmp_path / "validated.pdf"
+    compare(str(PDF), str(HTML), output_pdf=str(out))
     import fitz
 
     doc = fitz.open(str(out))
-    assert doc.page_count == 2  # summary page prepended to the 1-page sample
-    contents = [a.info.get("content", "") for a in (doc[1].annots() or [])]
-    assert any("8,570" in c for c in contents)
-    assert result.output_pdf == str(out)
+    greens = [
+        a
+        for a in (doc[1].annots() or [])
+        if a.type[1] == "Highlight"
+        and tuple(round(c, 2) for c in a.colors["stroke"]) == (0.3, 0.66, 0.36)
+    ]
+    assert len(greens) > 5  # many validated figures highlighted green
 
 
 def test_text_comparison_can_be_disabled():
     result = compare(str(PDF), str(HTML), compare_text=False)
     assert result.text_differences == []
-    assert result.number_differences  # figures still compared
+    assert result.differences  # rows/figures still compared

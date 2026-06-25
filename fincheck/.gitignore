@@ -5,8 +5,13 @@ sample_financials.pdf
 sample_filing.html
 *.highlighted.pdf
 *.compared.pdf
+*.validated.pdf
+*.commented.html
 sample_compared.*
 preview_*.png
 # Never commit user-supplied statements or rendered previews
 real_infy*.pdf
 rinfy_*.png
+
+# Never commit user-supplied real filings
+_docs/

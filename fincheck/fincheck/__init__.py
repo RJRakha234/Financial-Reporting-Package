@@ -10,7 +10,7 @@ Public API::
 from dataclasses import dataclass, field
 
 from .checks import Inconsistency, TotalCheck, run_checks
-from .compare import ComparisonResult, Difference, compare
+from .compare import ComparisonResult, Difference, LineResult, compare
 from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
@@ -23,6 +23,7 @@ __all__ = [
     "compare",
     "ComparisonResult",
     "Difference",
+    "LineResult",
 ]
 
 
