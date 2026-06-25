@@ -1,0 +1,38 @@
+# signaltrader configuration — copy to config.yaml and edit.
+# Secrets (API keys, tokens) come from ENVIRONMENT VARIABLES, never this file.
+
+# Which exchange adapter to use: paper | binance | coindcx | zerodha
+broker: paper
+
+# Live trading is OFF by default. Leave this true to paper-trade.
+# Set to false (or export SIGNALTRADER_LIVE=1) ONLY when you truly want
+# real orders — and after you have tested thoroughly on paper.
+dry_run: true
+
+# Pre-trade risk limits.
+risk:
+  risk_per_trade: 0.02      # allocate ~2% of equity per trade
+  max_notional: 1000        # never send an order larger than this (quote ccy)
+  max_leverage: 10          # cap leverage from signals
+  require_stop_loss: false  # set true to ignore signals without an SL
+  symbol_allowlist: []      # e.g. [BTCUSDT, ETHUSDT] — empty = allow all
+
+# Non-secret broker settings. Secrets are read from the environment:
+#   EXCHANGE_API_KEY, EXCHANGE_API_SECRET, EXCHANGE_ACCESS_TOKEN
+broker_config:
+  # paper broker only: starting balance and a price book for simulation
+  starting_cash: 10000
+  prices:
+    BTCUSDT: 65000
+    ETHUSDT: 3200
+  # zerodha only:
+  # exchange: NSE
+  # product: MIS
+
+# Telegram source. api_id/api_hash come from https://my.telegram.org
+# (or set TELEGRAM_API_ID / TELEGRAM_API_HASH in the environment).
+telegram:
+  # api_id: 123456
+  # api_hash: "your-api-hash"
+  session: signaltrader
+  chats: []   # channel/group usernames or ids to watch; empty = all

@@ -1,0 +1,10 @@
+# Core package has NO required runtime dependencies — the parser, risk engine,
+# paper broker and CLI run on the standard library alone.
+#
+# The integrations below are OPTIONAL and only needed for live/real sources:
+telethon>=1.34        # Telegram signal source
+python-binance>=1.0   # Binance exchange adapter
+kiteconnect>=4.2      # Zerodha (Kite Connect) adapter
+requests>=2.31        # CoinDCX adapter
+PyYAML>=6.0           # only needed to load a YAML config file
+pytest>=7.0           # only needed to run the tests
