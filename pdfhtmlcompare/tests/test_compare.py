@@ -85,6 +85,31 @@ def test_end_to_end_writes_both_outputs(tmp_path):
     assert "8,570" in text                             # original HTML preserved
 
 
+def test_single_pdf_as_list_matches_string():
+    a = compare(str(PDF), str(HTML))
+    b = compare([str(PDF)], str(HTML))
+    assert len(a.findings) == len(b.findings)
+    assert a.validated_rows == b.validated_rows
+
+
+def test_multiple_pdfs_are_concatenated(tmp_path):
+    # Two PDFs in -> page count is the sum; comparison still runs end to end.
+    from pdfhtmlcompare.pdfdoc import merge_pdfs
+    import fitz
+
+    merged = merge_pdfs([str(PDF), str(PDF)])
+    try:
+        assert fitz.open(merged).page_count == 2 * fitz.open(str(PDF)).page_count
+    finally:
+        import os
+
+        os.remove(merged)
+
+    result = compare([str(PDF), str(PDF)], str(HTML))
+    # the planted number change is still found when the statements are doubled
+    assert result.by_kind(FIGURE_CHANGED)
+
+
 def test_validated_pdf_has_green_coverage(tmp_path):
     out = tmp_path / "v.pdf"
     compare(str(PDF), str(HTML), output_pdf=str(out))

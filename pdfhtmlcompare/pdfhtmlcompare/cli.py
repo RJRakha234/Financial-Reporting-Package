@@ -15,7 +15,11 @@ def build_parser() -> argparse.ArgumentParser:
         "HTML filed with the SEC: check numbers, wordings, and that no table line "
         "is missing. Writes a green-validated PDF and a ✓/✗ commented HTML.",
     )
-    p.add_argument("pdf", help="the published financial-statement PDF")
+    p.add_argument(
+        "pdf", nargs="+",
+        help="the published PDF(s), in order — several (e.g. auditor's report "
+        "then statements) are concatenated to line up with one filed HTML",
+    )
     p.add_argument("html", help="the HTML filed with the SEC (same document)")
     p.add_argument(
         "-o", "--out-pdf", dest="out_pdf",
@@ -39,18 +43,19 @@ def _resolve(value, default):
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    pdf, html = Path(args.pdf), Path(args.html)
-    if not pdf.is_file():
-        print(f"error: file not found: {pdf}", file=sys.stderr)
-        return 2
-    if not html.is_file():
-        print(f"error: file not found: {html}", file=sys.stderr)
-        return 2
+    pdfs = [Path(p) for p in args.pdf]
+    html = Path(args.html)
+    for p in pdfs + [html]:
+        if not p.is_file():
+            print(f"error: file not found: {p}", file=sys.stderr)
+            return 2
 
-    out_pdf = _resolve(args.out_pdf, str(pdf.with_suffix(".validated.pdf")))
+    out_pdf = _resolve(args.out_pdf, str(pdfs[0].with_suffix(".validated.pdf")))
     out_html = _resolve(args.out_html, str(html.with_suffix(".commented.html")))
 
-    result = compare(str(pdf), str(html), output_pdf=out_pdf, output_html=out_html)
+    result = compare(
+        [str(p) for p in pdfs], str(html), output_pdf=out_pdf, output_html=out_html
+    )
 
     if args.json:
         print(to_json(result))

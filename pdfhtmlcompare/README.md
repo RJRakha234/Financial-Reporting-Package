@@ -40,6 +40,17 @@ python -m pdfhtmlcompare published.pdf filed.html -o validated.pdf --out-html co
 python -m pdfhtmlcompare published.pdf filed.html --out-html none --json
 ```
 
+If the published document spans **several PDFs** (e.g. the auditor's report and
+the financial statements) that together correspond to one filed HTML, pass them
+all, in order, before the HTML — they are concatenated internally and page
+numbers run continuously across them:
+
+```bash
+python -m pdfhtmlcompare auditorsreport.pdf finstatement.pdf filed.html
+# …or compare just the statements:
+python -m pdfhtmlcompare finstatement.pdf filed.html
+```
+
 ## Two outputs
 
 **1. A validated PDF** — a copy of the published PDF in which every figure that

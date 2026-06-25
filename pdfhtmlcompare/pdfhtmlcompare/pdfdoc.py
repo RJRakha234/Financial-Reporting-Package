@@ -6,6 +6,9 @@ their vertical position, glue space-separated thousands back together, and keep
 every figure's bounding box so it can later be highlighted on the page.
 """
 
+import os
+import tempfile
+
 import pdfplumber
 
 from .model import Line, build_line
@@ -81,3 +84,24 @@ def read_pdf_lines(pdf_path: str) -> list[Line]:
         for i, page in enumerate(pdf.pages):
             out.extend(_page_lines(i, page, len(out)))
     return out
+
+
+def merge_pdfs(paths: list[str]) -> str:
+    """Concatenate PDFs (in order) into a temporary file; return its path.
+
+    Lets the published document be supplied as several PDFs — e.g. the auditor's
+    report and the financial statements — that together correspond to one filed
+    HTML. Page numbers in the result then run continuously across them.
+    """
+    import fitz  # PyMuPDF
+
+    out = fitz.open()
+    for p in paths:
+        src = fitz.open(p)
+        out.insert_pdf(src)
+        src.close()
+    fd, tmp = tempfile.mkstemp(suffix=".pdf", prefix="pdfhtmlcompare_")
+    os.close(fd)
+    out.save(tmp)
+    out.close()
+    return tmp

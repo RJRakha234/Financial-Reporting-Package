@@ -17,10 +17,12 @@ counterpart is a line missing from (or added to) a table.
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
+import os
+
 from .htmldoc import read_html_lines
 from .model import Figure, Line
 from .numbers import format_number
-from .pdfdoc import read_pdf_lines
+from .pdfdoc import merge_pdfs, read_pdf_lines
 
 # Finding kinds.
 FIGURE_CHANGED = "figure_changed"
@@ -295,13 +297,32 @@ def _anchor_missing(results: list[RowResult]) -> None:
 
 
 def compare(
-    pdf_path: str,
+    pdf_path: "str | list[str]",
     html_path: str,
     output_pdf: str | None = None,
     output_html: str | None = None,
 ) -> ComparisonResult:
-    """Compare the financial tables of ``pdf_path`` against ``html_path``."""
-    pdf_lines = read_pdf_lines(pdf_path)
+    """Compare the financial tables of the PDF(s) against ``html_path``.
+
+    ``pdf_path`` may be a single path or a list of paths. Several PDFs (e.g. the
+    auditor's report and the financial statements) are concatenated in order so
+    they line up with one filed HTML, with page numbers running continuously.
+    """
+    pdf_paths = [pdf_path] if isinstance(pdf_path, str) else list(pdf_path)
+    if not pdf_paths:
+        raise ValueError("at least one PDF path is required")
+    temp_pdf = merge_pdfs(pdf_paths) if len(pdf_paths) > 1 else None
+    effective_pdf = temp_pdf or pdf_paths[0]
+
+    try:
+        return _compare(effective_pdf, html_path, pdf_paths, output_pdf, output_html)
+    finally:
+        if temp_pdf and os.path.exists(temp_pdf):
+            os.remove(temp_pdf)
+
+
+def _compare(effective_pdf, html_path, pdf_paths, output_pdf, output_html):
+    pdf_lines = read_pdf_lines(effective_pdf)
     html_lines = read_html_lines(html_path)
     pdf_fin = [l for l in pdf_lines if l.is_financial]
     html_fin = [l for l in html_lines if l.is_financial]
@@ -326,7 +347,7 @@ def compare(
 
     pdf_figures = sum(len(l.figures) for l in pdf_fin)
     result = ComparisonResult(
-        source_pdf=pdf_path,
+        source_pdf=" + ".join(pdf_paths),
         source_html=html_path,
         rows=rows,
         findings=findings,
@@ -337,7 +358,7 @@ def compare(
     if output_pdf is not None:
         from .annotate_pdf import write_validated_pdf
 
-        result.output_pdf = write_validated_pdf(pdf_path, output_pdf, result)
+        result.output_pdf = write_validated_pdf(effective_pdf, output_pdf, result)
     if output_html is not None:
         from .annotate_html import write_commented_html
 
