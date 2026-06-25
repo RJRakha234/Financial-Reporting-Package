@@ -1,93 +1,46 @@
-"""Command-line interface.
-
-Two subcommands:
-
-* ``fincheck check  statements.pdf``           — foot every total/subtotal.
-* ``fincheck compare published.pdf filed.html`` — compare the published PDF
-  against the HTML filed with the SEC and comment every difference, page by
-  page, on a copy of the PDF.
-
-For backwards compatibility ``fincheck statements.pdf`` (no subcommand) still
-runs the footing check.
-"""
+"""Command-line interface: ``python -m fincheck statements.pdf``."""
 
 import argparse
 import sys
 from pathlib import Path
 
-from . import analyze, compare
-from .comparereport import to_console as compare_console
-from .comparereport import to_html as compare_html
-from .comparereport import to_json as compare_json
+from . import analyze
 from .report import to_console, to_json
-
-_SUBCOMMANDS = {"check", "compare"}
-
-
-def _add_check_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("pdf", help="path to the financial statement PDF")
-    p.add_argument(
-        "-o",
-        "--output",
-        help="path for the highlighted PDF "
-        "(default: <input>.highlighted.pdf; use 'none' to skip)",
-    )
-    p.add_argument(
-        "--tolerance",
-        type=float,
-        default=1.0,
-        help="absolute rounding slack before a total is flagged (default: 1.0)",
-    )
-    p.add_argument("--json", action="store_true", help="print the report as JSON")
-    p.add_argument(
-        "--no-components",
-        action="store_true",
-        help="highlight only the totals, not the figures summed into them",
-    )
-
-
-def _add_compare_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("pdf", help="the published financial-statement PDF")
-    p.add_argument("html", help="the HTML filed with the SEC (same document)")
-    p.add_argument(
-        "-o",
-        "--out-pdf",
-        dest="out_pdf",
-        help="path for the validated PDF, green-highlighted where checked "
-        "(default: <pdf>.validated.pdf; use 'none' to skip)",
-    )
-    p.add_argument(
-        "--out-html",
-        help="path for the commented HTML, ✓/✗ on every row "
-        "(default: <html>.commented.html; use 'none' to skip)",
-    )
-    p.add_argument(
-        "--html-report",
-        help="also write a standalone HTML summary table of the differences here",
-    )
-    p.add_argument(
-        "--no-text",
-        action="store_true",
-        help="compare figures only, skip the wording comparison",
-    )
-    p.add_argument("--json", action="store_true", help="print the report as JSON")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fincheck",
-        description="Check totals in a financial PDF, or compare a published "
-        "PDF against the HTML filed with the SEC.",
+        description="Check totals and subtotals in a financial-statement PDF "
+        "and produce a highlighted PDF of any inconsistencies.",
     )
-    sub = parser.add_subparsers(dest="command")
-    _add_check_args(sub.add_parser("check", help="foot totals/subtotals in a PDF"))
-    _add_compare_args(
-        sub.add_parser("compare", help="compare a published PDF against filed HTML")
+    parser.add_argument("pdf", help="path to the financial statement PDF")
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="path for the highlighted PDF "
+        "(default: <input>.highlighted.pdf; use 'none' to skip)",
+    )
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=1.0,
+        help="absolute rounding slack before a total is flagged (default: 1.0)",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print the report as JSON"
+    )
+    parser.add_argument(
+        "--no-components",
+        action="store_true",
+        help="highlight only the totals, not the figures summed into them",
     )
     return parser
 
 
-def _run_check(args) -> int:
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+
     src = Path(args.pdf)
     if not src.is_file():
         print(f"error: file not found: {src}", file=sys.stderr)
@@ -129,76 +82,8 @@ def _run_check(args) -> int:
                     "red = does not foot · orange = unverified"
                 )
 
+    # Exit non-zero when inconsistencies are found (handy for CI / pipelines).
     return 1 if result.issues else 0
-
-
-def _resolve_out(value, default: str) -> str | None:
-    if value is None:
-        return default
-    if value.lower() == "none":
-        return None
-    return value
-
-
-def _run_compare(args) -> int:
-    pdf = Path(args.pdf)
-    html = Path(args.html)
-    if not pdf.is_file():
-        print(f"error: file not found: {pdf}", file=sys.stderr)
-        return 2
-    if not html.is_file():
-        print(f"error: file not found: {html}", file=sys.stderr)
-        return 2
-
-    out_pdf = _resolve_out(args.out_pdf, str(pdf.with_suffix(".validated.pdf")))
-    out_html = _resolve_out(
-        args.out_html, str(html.with_suffix(".commented.html"))
-    )
-
-    result = compare(
-        str(pdf),
-        str(html),
-        output_pdf=out_pdf,
-        output_html=out_html,
-        compare_text=not args.no_text,
-    )
-
-    if args.json:
-        print(compare_json(result))
-    else:
-        print(compare_console(result))
-        if result.output_pdf:
-            print(f"\nValidated PDF written to: {result.output_pdf}")
-            print(
-                "  green = validated (matches HTML) · red = figure changed · "
-                "orange = cell/row missing from HTML · blue = only in HTML · "
-                "amber = wording differs"
-            )
-        if result.output_html:
-            print(f"Commented HTML written to: {result.output_html}")
-            print("  ✓ on every matching row, ✗/⚠ where it differs from the PDF")
-
-    if args.html_report:
-        Path(args.html_report).write_text(compare_html(result), encoding="utf-8")
-        if not args.json:
-            print(f"HTML summary report written to: {args.html_report}")
-
-    return 1 if result.differences else 0
-
-
-def main(argv: list[str] | None = None) -> int:
-    raw = list(sys.argv[1:] if argv is None else argv)
-    # Backwards compatibility: a bare path (no subcommand) means `check`.
-    if raw and raw[0] not in _SUBCOMMANDS and not raw[0].startswith("-"):
-        raw = ["check", *raw]
-
-    args = build_parser().parse_args(raw)
-    if args.command == "compare":
-        return _run_compare(args)
-    if args.command == "check":
-        return _run_check(args)
-    build_parser().print_help()
-    return 2
 
 
 if __name__ == "__main__":

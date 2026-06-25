@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated demo + output artifacts
+sample_statement.pdf
+sample_filing.html
+*.validated.pdf
+*.commented.html
+preview_*.png
+
+# Never commit user-supplied real filings
+_docs/

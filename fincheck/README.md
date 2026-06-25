@@ -1,14 +1,4 @@
-# fincheck — financial statement checks
-
-`fincheck` does two jobs on financial statements:
-
-1. **`check`** — foot every total/subtotal in a PDF (see below).
-2. **`compare`** — compare a **published PDF** against the **HTML filed with the
-   SEC**, producing a PDF green-highlighted where validated and an HTML with a
-   ✓/✗ comment on every row.
-   Jump to [Compare published PDF vs filed HTML](#compare-published-pdf-vs-filed-html).
-
-## `check` — total & subtotal consistency
+# fincheck — financial total & subtotal consistency checker
 
 `fincheck` reads a financial-statement PDF, verifies that **every total and
 subtotal actually foots** (i.e. equals the sum of its line items), and writes a
@@ -69,110 +59,6 @@ Highlighted PDF written to: sample_financials.highlighted.pdf
 The process exits with status `1` when inconsistencies are found and `0` when
 everything foots — handy in CI or a pipeline.
 
-## Compare published PDF vs filed HTML
-
-At quarter end, after the financials are published as a PDF, the **same**
-document is converted to **HTML** for the SEC filing. That conversion can
-silently transpose a digit, drop a whole table row, lose a minus sign, or change
-a word. `fincheck compare` reads both documents, aligns them **row by row**, and
-produces **two** outputs:
-
-1. a **validated PDF** — a copy of the published PDF in which every figure that
-   was checked against the HTML is highlighted **green**, and each discrepancy is
-   marked in colour with a sticky-note comment (anchored to the page it is on);
-2. a **commented HTML** — a copy of the filed HTML with an inline **✓** on every
-   row that matches the PDF and a **✗ / ⚠** note on every row that does not.
-
-```bash
-# Generate the sample PDF and a matching HTML filing (with planted errors)
-python make_sample.py
-python make_sample_html.py
-
-# Compare them — writes sample_financials.validated.pdf and
-# sample_filing.commented.html next to the inputs
-python -m fincheck compare sample_financials.pdf sample_filing.html
-
-# Choose paths, add a standalone HTML summary, skip an output, or print JSON
-python -m fincheck compare published.pdf filed.html \
-    -o validated.pdf --out-html commented.html --html-report summary.html
-python -m fincheck compare published.pdf filed.html --out-html none --json
-python -m fincheck compare published.pdf filed.html --no-text   # figures only
-```
-
-What it reports, each anchored to the PDF page it came from:
-
-* **row dropped in HTML** (orange, boxed) — a whole table line that is in the PDF
-  but missing from the HTML (a table-formatting miss);
-* **row only in HTML** (blue) — a line the conversion introduced that is not in
-  the PDF;
-* **figure changed** (red, boxed) — same row, different number (e.g. `8,750` →
-  `8,570`);
-* **figure missing from HTML / only in HTML** (orange / blue) — a cell dropped
-  from or added to an otherwise-matching row;
-* **wording differs** (amber) — a word that changed inside a matching row;
-* everything that checks out is highlighted **green** (validated).
-
-```
-✗ Found 4 differences:
-    1 row(s) dropped in HTML, 1 row(s) only in HTML, 1 figure, 1 wording.
-
-  1. Page 1  ·  [row dropped in HTML]
-     Row dropped in HTML (present in the PDF): Goodwill 1,200
-
-  2. Page 1  ·  [row only in HTML]
-     Row only in HTML (not in the published PDF): Prepaid expenses 250
-
-  3. Page 1  ·  [figure changed in HTML]
-     Figure mismatch: PDF shows 8,750, HTML shows 8,570.  ·  Cash and cash equivalents
-
-  4. Page 1  ·  [wording differs]
-     Wording differs: PDF "Manufacturing" vs HTML "Manufacturers".  ·  Manufacturing
-
-Rows validated: 23. Figures: 19 matched of 21 in the PDF.
-Validated PDF written to: sample_financials.validated.pdf
-Commented HTML written to: sample_filing.commented.html
-```
-
-The process exits `1` when any difference is found, `0` when the documents match.
-
-How the alignment works — two passes:
-
-1. **Line level.** The logical lines (table rows, headings) of the two documents
-   are aligned. A figure-bearing PDF line with no match in the HTML is a *dropped
-   row*; the reverse is an *extra row*. Running page headers/footers, index
-   (dot-leader) lines, and prose paragraphs are excluded so the row check stays on
-   actual table rows; displaced-but-identical rows are reconciled rather than
-   double-reported.
-2. **Cell level.** Within a matched row, figures and words are aligned, so a
-   changed figure, a dropped/added cell, or a changed word is pinpointed. Figures
-   are paired by their line label first and nearest value second, so a transposed
-   digit lines up with its own line while a genuinely added/removed figure is left
-   over and reported as such.
-
-```python
-from fincheck import compare
-
-result = compare(
-    "published.pdf", "filed.html",
-    output_pdf="validated.pdf", output_html="commented.html",
-)
-print(result.consistent, result.validated_rows)
-for d in result.differences:
-    print(d.page_label, d.kind, d.message())
-```
-
-### Scope & limitations of `compare`
-
-The figure and table-row checks on the **primary statements** (balance sheet,
-P&L, cash flows, changes in equity) are the reliable core — validated on a real
-41-page Ind AS consolidated filing where every balance-sheet figure in both
-periods reconciled to the HTML. Because PDF and HTML break **prose** differently
-(the PDF wraps to the page; the HTML keeps one paragraph per block), the row
-check is deliberately limited to figure-bearing rows; narrative-heavy **notes**
-where figures are embedded in sentences, and heavily cross-tabulated note
-matrices, are best-effort — treat a flag there as "review this", not a definitive
-error. Works on text-based PDFs; scanned/image PDFs need OCR first.
-
 ## Use it (library)
 
 ```python
@@ -188,12 +74,10 @@ print(result.as_json())
 ## Offline & data privacy
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It
-only uses local libraries (`pdfplumber`/`pdfminer` to read PDF text, `PyMuPDF` to
-annotate, and the Python standard library's `html.parser` to read the filed
-HTML — no third-party HTML dependency, no remote fetch). Your financial
-statements are read from disk and the annotated PDF is written back to disk —
-nothing is uploaded, sent to any API, logged remotely, or cached anywhere
-outside the folder you run it in. It is safe to run on an
+only uses local libraries (`pdfplumber`/`pdfminer` to read text, `PyMuPDF` to
+annotate). Your financial statements are read from disk and the highlighted PDF
+is written back to disk — nothing is uploaded, sent to any API, logged remotely,
+or cached anywhere outside the folder you run it in. It is safe to run on an
 air-gapped machine. (You can verify: there is no `requests`/`urllib`/`http`/
 `socket`/API-client import anywhere in `fincheck/`.)
 
