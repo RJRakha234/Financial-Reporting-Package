@@ -15,7 +15,7 @@ import re
 from html.parser import HTMLParser
 
 from .model import Line, build_line
-from .numbers import is_figure
+from .numbers import is_numberish, parse_number
 
 # Tags whose start or end ends the current logical line.
 BREAK_TAGS = {
@@ -34,25 +34,34 @@ WS_RE = re.compile(r"[\s   ]+")
 def _line_tokens(raw: str):
     triples = []
     for tok in raw.split():
-        real, value = is_figure(tok)
-        triples.append((tok, value if real else None, None))
+        value = parse_number(tok) if is_numberish(tok) else None
+        triples.append((tok, value, None))
     return triples
 
 
+def gate_on_body(html_text: str) -> bool:
+    """Whether to restrict reading to inside <body> (skip EDGAR/SGML wrapper)."""
+    return "<body" in html_text.lower()
+
+
 class _LineCollector(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, gate_body: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self.lines: list[str] = []
         self._buf: list[str] = []
         self._skip = 0
+        self._gate_body = gate_body
+        self._in_body = not gate_body
 
     def _flush(self) -> None:
         text = WS_RE.sub(" ", " ".join(self._buf)).strip()
-        if text:
+        if text and self._in_body:
             self.lines.append(text)
         self._buf = []
 
     def handle_starttag(self, tag, attrs):
+        if tag == "body":
+            self._in_body = True
         if tag in SKIP_TAGS:
             self._skip += 1
         elif tag in BREAK_TAGS:
@@ -73,7 +82,7 @@ class _LineCollector(HTMLParser):
             self._buf.append(" ")
 
     def handle_data(self, data):
-        if self._skip == 0 and data.strip():
+        if self._skip == 0 and self._in_body and data.strip():
             self._buf.append(data)
 
     def close(self):
@@ -83,7 +92,7 @@ class _LineCollector(HTMLParser):
 
 def extract_html_lines(html_text: str) -> list[str]:
     """The filing's text as ordered logical lines (one per row/block)."""
-    parser = _LineCollector()
+    parser = _LineCollector(gate_body=gate_on_body(html_text))
     parser.feed(html_text)
     parser.close()
     return parser.lines

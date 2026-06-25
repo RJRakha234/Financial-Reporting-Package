@@ -1,4 +1,4 @@
-from pdfhtmlcompare.numbers import format_number, is_figure, parse_number
+from pdfhtmlcompare.numbers import format_number, is_numberish, parse_number
 
 
 def test_parse_thousands_and_negatives():
@@ -16,27 +16,17 @@ def test_parse_currency_and_nil():
     assert parse_number("Total") is None
 
 
-def test_is_figure_accepts_real_figures():
-    assert is_figure("12,450") == (True, 12450.0)
-    assert is_figure("(1,200)") == (True, -1200.0)
-    assert is_figure("800")[0] is True
-    assert is_figure("332")[0] is True
+def test_value_comparison_ignores_formatting():
+    # numbers are compared by value, so formatting never matters
+    assert parse_number("8,750") == parse_number("8750")
+    assert parse_number("00041245") == 41245  # leading-zero identifier -> value
 
 
-def test_is_figure_rejects_non_statement_numbers():
-    # four-digit years
-    assert is_figure("2025")[0] is False
-    assert is_figure("2024")[0] is False
-    # identifier numbers with a leading zero (DIN / membership / reg no.)
-    assert is_figure("00041245")[0] is False
-    assert is_figure("060408")[0] is False
-    # clause / note references
-    assert is_figure("2.5")[0] is False
-    assert is_figure("2.10")[0] is False
-    # footnote markers
-    assert is_figure("(1)")[0] is False
-    # not a number at all
-    assert is_figure("Loans")[0] is False
+def test_is_numberish():
+    assert is_numberish("1,234")
+    assert is_numberish("(500)")
+    assert not is_numberish("Total")
+    assert not is_numberish("")
 
 
 def test_format_number():

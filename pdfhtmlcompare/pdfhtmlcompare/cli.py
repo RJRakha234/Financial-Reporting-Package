@@ -11,9 +11,10 @@ from .report import to_console, to_json
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pdfhtmlcompare",
-        description="Compare the financial tables of a published PDF against the "
-        "HTML filed with the SEC: check numbers, wordings, and that no table line "
-        "is missing. Writes a green-validated PDF and a ✓/✗ commented HTML.",
+        description="Compare the whole content of a published PDF against the HTML "
+        "filed with the SEC — every word and number — and report whatever is "
+        "changed, missing, or added. Writes a green-validated PDF and a ✓/✗ "
+        "commented HTML.",
     )
     p.add_argument(
         "pdf", nargs="+",
@@ -63,11 +64,11 @@ def main(argv: list[str] | None = None) -> int:
         print(to_console(result))
         if result.output_pdf:
             print(f"\nValidated PDF written to: {result.output_pdf}")
-            print("  green = validated · red = number changed · orange = number/line "
-                  "missing from HTML · amber = wording differs")
+            print("  green = line fully matched · red = content differs · "
+                  "orange = missing from HTML")
         if result.output_html:
             print(f"Commented HTML written to: {result.output_html}")
-            print("  ✓ on each matching financial row, ✗/⚠ where it differs from the PDF")
+            print("  ✓ on each matching line, ✗/⚠ where it differs from the PDF")
 
     return 1 if result.findings else 0
 

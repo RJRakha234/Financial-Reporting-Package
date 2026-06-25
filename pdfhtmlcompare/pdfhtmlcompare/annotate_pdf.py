@@ -1,104 +1,62 @@
-"""Write a copy of the published PDF marked up with the comparison result.
+"""Write a copy of the published PDF marked up with the whole-content comparison.
 
-Every figure in a financial row that was validated against the HTML is
-highlighted **green**; a changed number is boxed red, a number missing from the
-HTML row is orange, a changed label is amber, and a whole table line dropped from
-the HTML is boxed orange. Each mark carries a sticky-note comment, and a summary
-page listing every finding (with its PDF page) is prepended. Non-financial
-content is left untouched — only the financial tables are in scope.
+Every line whose words and numbers were all found in the HTML is highlighted
+**green**; a token that differs is boxed **red**, and a token missing from the
+HTML is **orange** — each with a sticky-note comment. A summary page with the
+coverage figure and the list of findings is prepended.
 """
 
 import fitz  # PyMuPDF
 
-from .compare import (
-    CHANGED,
-    FIGURE_CHANGED,
-    FIGURE_MISSING,
-    LINE_MISSING,
-    VALIDATED,
-    WORD_CHANGED,
-    ComparisonResult,
-)
+from .compare import CHANGED, MISSING, ADDED, ComparisonResult
 
 _GREEN = (0.30, 0.66, 0.36)
 _RED = (0.86, 0.20, 0.18)
 _ORANGE = (0.95, 0.60, 0.15)
-_AMBER = (0.95, 0.80, 0.25)
-_PAD = 1.5
-
-_COLOR = {
-    VALIDATED: _GREEN,
-    FIGURE_CHANGED: _RED,
-    FIGURE_MISSING: _ORANGE,
-    WORD_CHANGED: _AMBER,
-    LINE_MISSING: _ORANGE,
-}
-_LABEL = {
-    VALIDATED: "validated (matches HTML)",
-    FIGURE_CHANGED: "number changed in HTML",
-    FIGURE_MISSING: "number missing from HTML row",
-    WORD_CHANGED: "wording differs",
-    LINE_MISSING: "table line missing from HTML",
-}
-_SUMMARY_CAP = 400
-
-
-def _label_region(line):
-    """The label part of a line's bbox (left of the first figure)."""
-    x0, top, x1, bottom = line.bbox
-    fig_x0 = [f.bbox[0] for f in line.figures if f.bbox]
-    right = min(fig_x0) - 2 if fig_x0 else x1
-    return (x0, top, max(right, x0 + 6), bottom)
+_PAD = 1.0
+_SUMMARY_CAP = 500
 
 
 def _collect(result: ComparisonResult):
-    """page -> list of (bbox, kind, note, boxed)."""
+    """page -> list of (bbox, color, note, boxed)."""
     pages: dict[int, list] = {}
 
-    def add(page, bbox, kind, note, boxed=False):
+    def add(page, bbox, color, note, boxed=False):
         if bbox is None or page is None:
             return
-        pages.setdefault(page, []).append((bbox, kind, note, boxed))
+        pages.setdefault(page, []).append((bbox, color, note, boxed))
 
-    for r in result.rows:
-        pl = r.pdf_line
-        if pl is None:
-            continue
-        if r.status == LINE_MISSING:
-            add(pl.page, pl.bbox, LINE_MISSING, r.findings[0].message(), boxed=True)
-            continue
-        if r.status not in (VALIDATED, CHANGED):
-            continue
-        flagged = set()
-        for f in r.findings:
-            if f.kind == WORD_CHANGED:
-                add(pl.page, _label_region(pl), WORD_CHANGED, f.message())
-            elif f.bbox is not None:
-                add(pl.page, f.bbox, f.kind, f.message(), boxed=(f.kind == FIGURE_CHANGED))
-                flagged.add(_key(f.bbox))
-        for fig in pl.figures:
-            if fig.bbox is not None and _key(fig.bbox) not in flagged:
-                add(pl.page, fig.bbox, VALIDATED, "Validated: matches the HTML filing.")
+    # Green every line whose tokens all matched (whole-content coverage).
+    for line in result.pdf_lines:
+        if line.tokens and all(t.status == "matched" for t in line.tokens):
+            add(line.page, line.bbox, _GREEN, None)
+
+    # Mark the differences token by token, with the finding's comment.
+    for f in result.findings:
+        if f.kind == CHANGED:
+            color, boxed = _RED, True
+        elif f.kind == MISSING:
+            color, boxed = _ORANGE, False
+        else:
+            continue  # added-in-HTML has no place on the PDF; summary only
+        for n, tok in enumerate(f.pdf_tokens):
+            add(f.page, tok.bbox, color, f.message() if n == 0 else None, boxed)
     return pages
 
 
-def _key(bbox):
-    return (round(bbox[0]), round(bbox[1]), round(bbox[2]))
-
-
 def _annotate_page(page, marks):
-    for bbox, kind, note, boxed in marks:
+    for bbox, color, note, boxed in marks:
         x0, top, x1, bottom = bbox
         rect = fitz.Rect(x0 - _PAD, top - _PAD, x1 + _PAD, bottom + _PAD)
         annot = page.add_highlight_annot(rect)
-        annot.set_colors(stroke=_COLOR[kind])
+        annot.set_colors(stroke=color)
         if note:
             annot.set_info(content=note)
         annot.update()
         if boxed:
             box = page.add_rect_annot(rect)
-            box.set_colors(stroke=_COLOR[kind])
-            box.set_border(width=1.2)
+            box.set_colors(stroke=color)
+            box.set_border(width=1.0)
             box.update()
 
 
@@ -124,35 +82,28 @@ def _summary(doc, result: ComparisonResult):
     page = doc.new_page(0)
     insert_at = 1
     y = 54
-    page.insert_text((54, y), "PDF vs HTML — financial-table check", fontsize=18, fontname="hebo")
+    page.insert_text((54, y), "PDF vs HTML — whole-content check", fontsize=18, fontname="hebo")
     y += 24
     page.insert_text(
         (54, y),
-        f"{result.validated_rows} financial rows validated · {len(result.findings)} finding(s).",
+        f"Coverage: {result.matched_tokens} of {result.pdf_tokens} PDF tokens "
+        f"({result.coverage * 100:.1f}%) matched the HTML.",
         fontsize=11, fontname="hebo",
     )
     y += 16
-    from .compare import FIGURE_CHANGED as FC, FIGURE_MISSING as FM, FIGURE_EXTRA as FE
-    from .compare import LINE_EXTRA as LE, WORD_CHANGED as WC
-
     page.insert_text(
         (54, y),
-        f"{len(result.by_kind(FC))} numbers changed · {len(result.by_kind(FM))} numbers missing · "
-        f"{len(result.by_kind(FE))} numbers only in HTML · {len(result.by_kind(WC))} wording · "
-        f"{len(result.by_kind(LINE_MISSING))} lines missing · {len(result.by_kind(LE))} lines only in HTML.",
-        fontsize=10, fontname="helv",
-    )
-    y += 16
-    page.insert_text(
-        (54, y),
-        f"Figures matched: {result.matched_figures} of {result.pdf_figures} in the PDF tables.",
+        f"{len(result.by_kind(CHANGED))} changed · {len(result.by_kind(MISSING))} missing "
+        f"from HTML · {len(result.by_kind(ADDED))} only in HTML.",
         fontsize=11, fontname="helv",
     )
     y += 24
-    for kind in (VALIDATED, FIGURE_CHANGED, FIGURE_MISSING, WORD_CHANGED, LINE_MISSING):
-        _swatch(page, 54, y, _COLOR[kind], _LABEL[kind])
-        y += 16
-    y += 12
+    _swatch(page, 54, y, _GREEN, "line fully matched the HTML")
+    y += 16
+    _swatch(page, 54, y, _RED, "content differs (changed)")
+    y += 16
+    _swatch(page, 54, y, _ORANGE, "missing from the HTML")
+    y += 22
 
     shown = result.findings[:_SUMMARY_CAP]
     for n, f in enumerate(shown, 1):
