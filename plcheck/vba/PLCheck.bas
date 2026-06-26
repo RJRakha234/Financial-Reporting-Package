@@ -168,7 +168,7 @@ Private Sub BuildCheck(wb As Workbook)
     Dim ckCol As Long: ckCol = 5
     Dim blk As String, key As String, isEnt As Boolean, checked As Boolean
     For c = RP_NUM0 To lastRCol
-        blk = Trim$(CStr(r.Cells(rBlock, c).Value))
+        blk = CanonicalBlock(CStr(r.Cells(rBlock, c).Value))
         sub_ = Trim$(CStr(r.Cells(rSub, c).Value))
         If Len(blk) > 0 Then
             isEnt = (StrComp(sub_, OVERALL, vbTextCompare) <> 0)
@@ -665,6 +665,22 @@ Private Function SheetExists(wb As Workbook, ByVal nm As String) As Boolean
     Set ws = wb.Worksheets(nm)
     On Error GoTo 0
     SheetExists = Not ws Is Nothing
+End Function
+
+' Normalise a block label to its canonical form, ignoring spacing/case, so
+' "GC-Total" / "gc - total" both match "GC - Total" (parity with the Python tool).
+Private Function CanonicalBlock(ByVal label As String) As String
+    Dim n As String: n = Replace(LCase$(Trim$(label)), " ", "")
+    Select Case n
+        Case "lc-balance": CanonicalBlock = "LC - Balance"
+        Case "lc-consol": CanonicalBlock = "LC - Consol"
+        Case "gc-balance": CanonicalBlock = "GC - Balance"
+        Case "gc-reclass": CanonicalBlock = "GC - Reclass"
+        Case "gc-elimination": CanonicalBlock = "GC - Elimination"
+        Case "gc-consol": CanonicalBlock = "GC - Consol"
+        Case "gc-total": CanonicalBlock = "GC - Total"
+        Case Else: CanonicalBlock = Trim$(label)
+    End Select
 End Function
 
 Private Function IsCheckedBlock(ByVal blk As String) As Boolean
