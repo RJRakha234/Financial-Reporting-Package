@@ -526,3 +526,39 @@ def test_default_rule_classifies_unmapped_as_expense():
     cfg = _naturewise_cfg()
     assert cfg.effective_rule("Some New Expense Line") == CategoryRule("Expense", "tb")
     assert cfg.effective_rule("Income").classification == "Income"   # explicit wins
+
+
+# --------------------------------------------------------------------------
+# IFRS USD: group currency is USD, so GC = local->INR / USD->INR (cross-rate),
+# auto-detected from the report.
+# --------------------------------------------------------------------------
+
+USD_REPORT = os.path.join(SAMPLE, "IFRS_USD_PL_Report.xlsx")
+
+
+def test_gc_currency_detection():
+    rates = inputs.parse_rates(RATES).rates
+    assert inputs.detect_gc_currency(inputs.read_report(REPORT), rates) == "INR"
+    assert inputs.detect_gc_currency(inputs.read_report(USD_REPORT), rates) == "USD"
+
+
+def test_usd_report_reconciles(tmp_path):
+    rep = inputs.read_report(USD_REPORT)
+    ev = evaluate(rep, TB, AGG, RATES)
+    # net profit (LC terms) ties internally, same as the INR report
+    assert all(abs(n.calc_check) < 0.01 for n in ev.net_profit)
+    # the depreciation rounding now shows in USD (~0.59), not INR (~54.99)
+    fx = {round(d.delta, 2) for d in ev.flagged() if d.kind == "fx"}
+    assert 0.59 in fx and 54.99 not in fx
+    out = tmp_path / "Check.xlsx"
+    analyze(USD_REPORT, TB, AGG, RATES, output_path=str(out))
+    assert out.is_file()
+
+
+def test_usd_rate_formula_uses_cross_rate(tmp_path):
+    from plcheck.workbook import build_check_workbook
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(inputs.read_report(USD_REPORT), TB, AGG, RATES).save(out)
+    ws = openpyxl.load_workbook(out)["Check"]
+    # the GC-Balance rate helper divides by the USD->INR rate
+    assert 'VLOOKUP("USD"' in str(ws["Q3"].value)

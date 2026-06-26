@@ -80,6 +80,9 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     agg = inputs.agg_values(agg_path, codes) if agg_path else {}
     rates = inputs.parse_rates(rates_path).rates
     tb_entity_cols = inputs.parse_tb(tb_path, codes).entity_cols
+    # group currency (INR / USD / ...): GC = local-rate / GC-rate (cross to INR)
+    gc_currency = cfg.gc_currency or inputs.detect_gc_currency(report, rates)
+    gc_divisor = rates.get(gc_currency, 1.0) or 1.0
 
     # Net profit per TB = column-wise sum of the P&L-series GLs (computed from
     # the accounts themselves, so it adapts to GLs being added or removed and
@@ -116,7 +119,7 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
             lc = (row.values.get((C.CHECK_LC_BALANCE, e.code), 0.0)
                   + row.values.get(("LC - Consol", e.code), 0.0))
             rate = rates.get(e.currency, 0.0)
-            expected = lc * rate
+            expected = lc * rate / gc_divisor
             stated = row.values.get((C.CHECK_GC_BALANCE, e.code), 0.0)
             ev.diffs.append(Diff("fx", i, row.category, row.account,
                                  row.description, e.code, expected, stated))

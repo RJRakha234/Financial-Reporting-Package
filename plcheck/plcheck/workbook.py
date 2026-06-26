@@ -52,6 +52,7 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     tb = inputs.parse_tb(tb_path, codes)
     agg = inputs.parse_agg(agg_path, codes) if agg_path else None
     rates = inputs.parse_rates(rates_path)
+    gc_currency = cfg.gc_currency or inputs.detect_gc_currency(report, rates.rates)
 
     tb_lastcol = get_column_letter(tb.last_col)
     agg_mfirst = get_column_letter(agg.match_first_col) if agg else None
@@ -120,9 +121,13 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
                     f"=MATCH({v}${ROW_SUBHEADER},'{C.SHEET_AGG}'!"
                     f"${agg_mfirst}${agg.subheader_row}:${agg_mlast}${agg.subheader_row},0)")
         elif info.block == C.CHECK_GC_BALANCE:
+            rng = (f"${rate_from}${rates.first_row}:"
+                   f"${rate_to}${rate_last_row}")
+            # local->INR / GC->INR cross-rate (GC->INR is 1 for an INR report)
             ws[f"{d}{ROW_AGG_LABEL}"] = (
-                f"=VLOOKUP({v}${ROW_CURR},'{C.SHEET_RATES}'!"
-                f"${rate_from}${rates.first_row}:${rate_to}${rate_last_row},"
+                f"=VLOOKUP({v}${ROW_CURR},'{C.SHEET_RATES}'!{rng},"
+                f"{rates.col_index},FALSE)"
+                f"/VLOOKUP(\"{gc_currency}\",'{C.SHEET_RATES}'!{rng},"
                 f"{rates.col_index},FALSE)")
         for hr in (ROW_TB_LABEL, ROW_AGG_LABEL):
             if ws[f"{d}{hr}"].value is not None:

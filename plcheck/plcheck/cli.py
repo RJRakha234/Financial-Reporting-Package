@@ -28,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output",
                    help="path for the generated check workbook "
                         "(default: <report>_Check.xlsx; 'none' to skip)")
+    p.add_argument("--gc-currency", default="",
+                   help="group/consolidation currency, e.g. USD "
+                        "(auto-detected from the report if omitted)")
     p.add_argument("--tolerance", type=float, default=0.5,
                    help="absolute slack before a difference is flagged "
                         "(default: 0.5)")
@@ -54,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = args.output
 
-    cfg = CheckConfig(tolerance=args.tolerance)
+    cfg = CheckConfig(tolerance=args.tolerance, gc_currency=args.gc_currency)
     if not args.agg:
         # Nature-wise report: no Aggregate Exp, every expense line ties to the TB
         cfg.default_rule = CategoryRule("Expense", "tb")

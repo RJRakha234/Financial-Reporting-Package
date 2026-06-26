@@ -177,6 +177,10 @@ class CheckConfig:
     # GL account for "Dividend received" used in the Minority Interest sheet
     # (its GC-Balance figure per company feeds Profit-before-Dividend).
     dividend_account: int = 332010
+    # Group/consolidation currency. The MA Rates table is quoted to INR, so the
+    # GC figures use the cross-rate  local->INR / GC->INR.  "" auto-detects it
+    # from the report (INR for an IFRS INR report, USD for an IFRS USD report).
+    gc_currency: str = ""
     # Fallback rule for a category that isn't explicitly mapped. Used for the
     # Nature-wise report (no Aggregate Exp): the CLI sets this to
     # CategoryRule("Expense", "tb") when --agg is omitted, so every expense

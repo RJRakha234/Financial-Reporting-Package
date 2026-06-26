@@ -377,3 +377,36 @@ def agg_values(path: str, codes):
                           for code, col in blk.entity_cols.items()}
         out[label] = table
     return out
+
+
+def detect_gc_currency(report, rates: dict, default: str = "INR") -> str:
+    """Infer the group/consolidation currency of the report.
+
+    The MA Rates table is quoted to INR, so for any row
+        GC-Balance = (LC-Balance + LC-Consol) * (local->INR) / (GC->INR)
+    => GC->INR = (LC + Consol) * local-rate / GC-Balance.  Match that implied
+    INR rate to a currency in the table (the mode across rows wins), so an IFRS
+    INR report resolves to INR and an IFRS USD report to USD - no flag needed.
+    """
+    from . import config as C
+    votes: dict[str, int] = {}
+    for row in report.rows:
+        for e in report.entities:
+            lc = (row.values.get((C.CHECK_LC_BALANCE, e.code), 0.0)
+                  + row.values.get(("LC - Consol", e.code), 0.0))
+            gc = row.values.get((C.CHECK_GC_BALANCE, e.code), 0.0)
+            lc_rate = rates.get(e.currency)
+            if not lc or not gc or not lc_rate:
+                continue
+            implied = lc * lc_rate / gc                      # GC -> INR
+            cur, err = None, None
+            for c, rate in rates.items():
+                if rate:
+                    rel = abs(rate - implied) / rate
+                    if err is None or rel < err:
+                        cur, err = c, rel
+            if cur is not None and err is not None and err < 0.01:
+                votes[cur] = votes.get(cur, 0) + 1
+    if not votes:
+        return default
+    return max(votes, key=votes.get)
