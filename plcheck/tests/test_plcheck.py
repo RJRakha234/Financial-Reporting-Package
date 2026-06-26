@@ -284,6 +284,68 @@ def test_rate_lookup_window_is_configurable():
     assert CheckConfig().rate_lookup_rows == 150
 
 
+def _make_consol_tracker(path, rows):
+    """Build a tracker in the real layout. rows = [(code, account, dr, cr)]."""
+    import openpyxl as _xl
+    wb = _xl.Workbook(); ws = wb.active; ws.title = "Entries- GR"
+    ws.append(["Company", "Comp code", "Concatenate", "Group Account Number",
+               "Functional Group", "GL Descriptions",
+               "Feb v1", "Feb v2", "Mar v1", "Mar v2", "Currency", "Type"])
+    for code, acct, dr, cr in rows:
+        ws.append([code, code, f"{code}{acct}", acct, "COS", "entry",
+                   "", "", dr, cr, "EUR", "BPC"])
+    wb.save(path)
+
+
+def test_consol_tracker_parsed_latest_month(tmp_path):
+    p = tmp_path / "consol.xlsx"
+    _make_consol_tracker(p, [("BALSCH", 290100, 222.0, ""),
+                             ("BALSCH", 804300, "", 222.0)])
+    g = inputs.parse_consol(str(p))
+    assert g.concat_col == 3
+    assert len(g.val_cols) == 2                 # latest month's Dr/Cr pair
+    assert g.totals["BALSCH290100"] == 222.0    # P&L leg, latest month only
+    assert inputs.consol_key("BALSCH", 290100) == "BALSCH290100"
+
+
+def test_consol_tieout_flags_unbacked_entry(tmp_path):
+    from plcheck.config import CheckConfig
+    p = tmp_path / "consol.xlsx"
+    # report LC-Consol for 290100/BALSCH is 0; tracker says 222 -> diff 222
+    _make_consol_tracker(p, [("BALSCH", 290100, 222.0, "")])
+    report = inputs.read_report(REPORT)
+    ev = evaluate(report, TB, AGG, RATES, CheckConfig(), str(p))
+    hits = [d for d in ev.flagged()
+            if d.kind == "lc_consol" and d.account == 290100
+            and d.entity == "BALSCH"]
+    assert hits and abs(hits[0].expected - 222.0) < 1e-9
+    assert hits[0].stated == 0.0
+
+
+def test_consol_check_builds_formula_and_embeds_sheet(tmp_path):
+    from plcheck.config import CheckConfig
+    from plcheck.workbook import build_check_workbook
+    p = tmp_path / "consol.xlsx"
+    _make_consol_tracker(p, [("BALSCH", 290100, 222.0, "")])
+    report = inputs.read_report(REPORT)
+    # without a tracker: no LC-Consol diff column at all
+    plain = tmp_path / "plain.xlsx"
+    build_check_workbook(report, TB, AGG, RATES).save(plain)
+    pw = openpyxl.load_workbook(plain)
+    assert "Consol Entries" not in pw.sheetnames
+    # with a tracker: sheet embedded + a SUMIF tie-out formula present
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, RATES,
+                         consol_path=str(p)).save(out)
+    wb = openpyxl.load_workbook(out)
+    assert "Consol Entries" in wb.sheetnames
+    ws = wb["Check"]
+    formulas = [c.value for row in ws.iter_rows() for c in row
+                if isinstance(c.value, str) and "Consol Entries" in c.value
+                and "SUMIF" in c.value]
+    assert formulas and formulas[0].count("SUMIF") == 2   # the Dr + Cr columns
+
+
 def test_rates_columns_found_by_currency_data(tmp_path):
     """The 'From' currency column is found by its data, so a 'To Currency'
     column sitting to its left/right (all INR) can't be picked by mistake,

@@ -43,15 +43,28 @@ def _embed(wb: Workbook, sheet: SheetData) -> None:
 
 def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
                          rates_path: str,
-                         cfg: C.CheckConfig | None = None) -> Workbook:
+                         cfg: C.CheckConfig | None = None,
+                         consol_path: str | None = None) -> Workbook:
     cfg = cfg or C.CheckConfig()
-    layout = plan(report)
+    # LC - Consol is reconciled to the entry tracker only when one is supplied.
+    extra_checked = {C.CHECK_LC_CONSOL} if consol_path else set()
+    layout = plan(report, extra_checked=extra_checked)
     codes = [e.code for e in report.entities]
     currency = {e.code: e.currency for e in report.entities}
 
     tb = inputs.parse_tb(tb_path, codes)
     agg = inputs.parse_agg(agg_path, codes) if agg_path else None
     rates = inputs.parse_rates(rates_path)
+    consol = inputs.parse_consol(consol_path) if consol_path else None
+    consol_ref = None
+    if consol:
+        cc = get_column_letter(consol.concat_col)
+        concat_rng = (f"'{C.SHEET_CONSOL}'!${cc}${consol.first_row}"
+                      f":${cc}${consol.last_row}")
+        val_rngs = [f"'{C.SHEET_CONSOL}'!${get_column_letter(vc)}${consol.first_row}"
+                    f":${get_column_letter(vc)}${consol.last_row}"
+                    for vc in consol.val_cols]
+        consol_ref = (concat_rng, val_rngs)
     gc_currency = cfg.gc_currency or inputs.detect_gc_currency(report, rates.rates)
 
     tb_lastcol = get_column_letter(tb.last_col)
@@ -167,7 +180,7 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
             diff_cols.add(d)
             f = _diff_formula(info, r, d, v, rule, agg, tb, layout,
                               fx_last, consol_first, consol_last,
-                              row.is_subtotal)
+                              row.is_subtotal, consol_ref)
             if f:
                 ws[f"{d}{r}"] = f
 
@@ -190,6 +203,9 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     if agg_path:
         _embed(wb, inputs.read_sheet(agg_path, C.SHEET_AGG))
     _embed(wb, inputs.read_sheet(rates_path, C.SHEET_RATES))
+    if consol_path:
+        _embed(wb, inputs.read_sheet(consol_path, C.SHEET_CONSOL,
+                                     sheet_name=consol.sheet_name))
     return wb
 
 
@@ -260,8 +276,19 @@ def _minority_sheet(ws_wb, report: ReportTable, layout: CheckLayout,
 
 def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
                   fx_last, consol_first, consol_last,
-                  is_subtotal=False) -> str | None:
+                  is_subtotal=False, consol_ref=None) -> str | None:
     """The difference formula for one cell, by block type."""
+    if info.block == C.CHECK_LC_CONSOL:
+        # tie LC - Consol back to the manual entry tracker: sum the latest
+        # month's entries for this company+account (comp-code & account = the
+        # tracker's "Concatenate" key). Subtotal rows have no account to match.
+        if is_subtotal or consol_ref is None:
+            return None
+        concat_rng, val_rngs = consol_ref
+        key = f"{v}${ROW_SUBHEADER}&$C{r}"
+        terms = "+".join(f"SUMIF({concat_rng},{key},{vr})" for vr in val_rngs)
+        return f"={terms}-{v}{r}"
+
     if info.block == C.CHECK_LC_BALANCE:
         # subtotal rows have no GL account to look up — no LC tie-out
         if is_subtotal or rule is None or not rule.source:

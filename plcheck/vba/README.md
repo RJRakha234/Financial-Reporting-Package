@@ -34,6 +34,7 @@ the TB.
    | 3 | Agg | `C:\…\Aggregate_Expenses.xlsx`  *(leave blank for Nature‑wise)* |
    | 4 | Rates | `C:\…\MA_Rates.xlsx` |
    | 5 | GC currency | *(optional — auto‑detected; only set to force `INR`/`USD`)* |
+   | 6 | Consol entries | `C:\…\Consolidation entries.xlsx`  *(optional — tie LC‑Consol to the tracker)* |
 
    **Function‑wise** reports (IFRS INR, Ind‑AS Function‑wise) need the Aggregate
    Expenses path in **B3**. For an **Ind‑AS Nature‑wise** report there is no
@@ -42,6 +43,13 @@ the TB.
    **auto‑detected** from the report, so you can leave **B5 blank**; set it
    (`INR`/`USD`) only if you want to force it. GC figures use the cross‑rate
    `local→INR ÷ GC→INR`.
+
+   The **consolidation‑entry tracker** (**B6**) is optional. When given, a new
+   **LC – Consol** difference column ties every consolidation figure in the
+   report back to the tracked manual entries: for each company + GL account it
+   sums that account's **latest‑month** entries (matched on the tracker's
+   **Concatenate** = comp‑code + account) and flags any difference red. Leave
+   **B6 blank** to skip this check.
 
 4. Save the workbook as **macro‑enabled** (`.xlsm`).
 

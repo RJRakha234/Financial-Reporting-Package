@@ -71,7 +71,8 @@ class Evaluation:
 
 
 def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
-             cfg: C.CheckConfig | None = None) -> Evaluation:
+             cfg: C.CheckConfig | None = None,
+             consol_path: str | None = None) -> Evaluation:
     cfg = cfg or C.CheckConfig()
     codes = [e.code for e in report.entities]
     currency = {e.code: e.currency for e in report.entities}
@@ -79,6 +80,7 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     tb_accounts, _ = inputs.tb_values(tb_path, codes)
     agg = inputs.agg_values(agg_path, codes) if agg_path else {}
     rates = inputs.parse_rates(rates_path).rates
+    consol_totals = inputs.parse_consol(consol_path).totals if consol_path else None
     tb_entity_cols = inputs.parse_tb(tb_path, codes).entity_cols
     # group currency (INR / USD / ...): GC = local-rate / GC-rate (cross to INR)
     gc_currency = cfg.gc_currency or inputs.detect_gc_currency(report, rates)
@@ -113,6 +115,15 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
                             acct, {}).get(e.code, 0.0)
                     ev.diffs.append(Diff("lc", i, row.category, row.account,
                                          row.description, e.code, expected, stated))
+
+        # --- 1b. LC - Consol tie-out to the entry tracker ------------------
+        if consol_totals is not None and not row.is_subtotal and row.account is not None:
+            for e in report.entities:
+                stated = row.values.get((C.CHECK_LC_CONSOL, e.code), 0.0)
+                expected = consol_totals.get(
+                    inputs.consol_key(e.code, row.account), 0.0)
+                ev.diffs.append(Diff("lc_consol", i, row.category, row.account,
+                                     row.description, e.code, expected, stated))
 
         # --- 2. FX conversion (every row) ----------------------------------
         for e in report.entities:

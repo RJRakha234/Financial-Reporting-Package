@@ -50,11 +50,12 @@ class CheckLayout:
         return self.diff_of.get((block, sub))
 
 
-def plan(report: ReportTable) -> CheckLayout:
+def plan(report: ReportTable, extra_checked=()) -> CheckLayout:
+    checked_blocks = CHECKED_BLOCKS | set(extra_checked)
     layout = CheckLayout()
     idx = FIRST_VALUE_COL
     for block in report.blocks:
-        checked = block.label in CHECKED_BLOCKS
+        checked = block.label in checked_blocks
         first_val = None
         last_val = None
         # preserve the report's column order within the block

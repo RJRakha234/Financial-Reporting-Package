@@ -12,11 +12,13 @@ Attribute VB_Name = "PLCheck"
 '    1. Open Excel, press Alt+F11 (Visual Basic editor).
 '    2. File > Import File... and pick this PLCheck.bas
 '       (or Insert > Module and paste this whole text in).
-'    3. Back in Excel, add a sheet named "Control" with the four file paths:
+'    3. Back in Excel, add a sheet named "Control" with the input file paths:
 '         B1: <full path to the P&L report .xlsx>
 '         B2: <full path to Real Time TB .xlsx>
-'         B3: <full path to Aggregate Expenses .xlsx>
+'         B3: <full path to Aggregate Expenses .xlsx>   (blank for Nature-wise)
 '         B4: <full path to MA Rates .xlsx>
+'         B5: <group currency INR/USD>                  (optional; auto-detected)
+'         B6: <full path to Consolidation entries .xlsx>(optional; LC-Consol tie-out)
 '    4. Run it: Developer > Macros > GenerateCheckFile > Run
 '       (or add a button on a sheet and assign GenerateCheckFile to it).
 '
@@ -33,6 +35,7 @@ Private Const SH_AGG As String = "Aggregate Exp"
 Private Const SH_RATES As String = "MA rates"
 Private Const SH_MIN As String = "Minority Interest"
 Private Const SH_REPORT As String = "PL Report"
+Private Const SH_CONSOL As String = "Consol Entries"   ' manual consol-entry tracker
 
 ' ---- tunables --------------------------------------------------------------
 Private Const TOL As Double = 0.5             ' highlight threshold
@@ -61,6 +64,10 @@ Private Const OVERALL As String = "Overall Result"
 Private gNpRow As Long, gMiRow As Long, gDivRow As Long
 Private gNoAgg As Boolean     ' True for a Nature-wise report (no Aggregate Exp)
 Private gGc As String         ' group/consolidation currency (INR default, or USD)
+Private gHasConsol As Boolean ' True when a consolidation-entry tracker is supplied
+' geometry of the consol tracker (set in GenerateCheckFile, used in WriteDiffs)
+Private gCcConcat As Long, gCcVal1 As Long, gCcVal2 As Long
+Private gCcFirst As Long, gCcLast As Long
 
 
 '============================================================================
@@ -77,7 +84,7 @@ Public Sub GenerateCheckFile()
                "B1:B4 (Report, TB, Agg, Rates).", vbExclamation: Exit Sub
     End If
 
-    Dim pReport As String, pTB As String, pAgg As String, pRates As String
+    Dim pReport As String, pTB As String, pAgg As String, pRates As String, pConsol As String
     pReport = Trim$(CStr(ctl.Range("B1").Value))
     pTB = Trim$(CStr(ctl.Range("B2").Value))
     pAgg = Trim$(CStr(ctl.Range("B3").Value))
@@ -96,6 +103,14 @@ Public Sub GenerateCheckFile()
     ' group/consolidation currency: Control!B5 overrides; blank = auto-detect
     ' from the report (INR vs USD). GC figures use  local->INR / GC->INR.
     gGc = UCase$(Trim$(CStr(ctl.Range("B5").Value)))
+    ' Consolidation-entry tracker (B6) is optional: when given, LC - Consol is
+    ' tied out to it (comp-code + account = the tracker's "Concatenate" key).
+    pConsol = Trim$(CStr(ctl.Range("B6").Value))
+    gHasConsol = (Len(pConsol) > 0)
+    If gHasConsol And Dir(pConsol) = "" Then
+        MsgBox "Consolidation entry tracker not found (Control!B6). Leave B6 " & _
+               "blank to skip the LC-Consol check.", vbExclamation: Exit Sub
+    End If
 
     ' Remember Excel's current state so we can restore it exactly afterwards.
     Dim savedCalc As XlCalculation, savedEvents As Boolean
@@ -114,12 +129,17 @@ Public Sub GenerateCheckFile()
 
     KillSheet wb, SH_CHECK: KillSheet wb, SH_MIN
     KillSheet wb, SH_TB: KillSheet wb, SH_AGG: KillSheet wb, SH_RATES
-    KillSheet wb, SH_REPORT
+    KillSheet wb, SH_REPORT: KillSheet wb, SH_CONSOL
 
     ImportFirstSheet wb, pTB, SH_TB
     If Not gNoAgg Then ImportFirstSheet wb, pAgg, SH_AGG
     ImportFirstSheet wb, pRates, SH_RATES
     ImportFirstSheet wb, pReport, SH_REPORT
+    If gHasConsol Then
+        ImportConsolSheet wb, pConsol, SH_CONSOL
+        GetConsolGeom wb.Worksheets(SH_CONSOL), gCcConcat, gCcVal1, gCcVal2, _
+                      gCcFirst, gCcLast
+    End If
 
     BuildCheck wb
     BuildMinority wb
@@ -382,6 +402,28 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
         End If
     End If
 
+    ' LC - Consol tie-out to the entry tracker (sum this company+account's
+    ' latest-month entries; comp-code & account = the tracker "Concatenate" key)
+    If diffCol.Exists("LC - Consol|" & code) Then
+        dc = diffCol("LC - Consol|" & code): vc = valCol("LC - Consol|" & code)
+        diffCols(dc) = 1: vL = ColL(vc)
+        If Not isSub Then
+            Dim ccR As String, crit As String, s1 As String, s2 As String
+            ccR = "'" & SH_CONSOL & "'!$" & ColL(gCcConcat) & "$" & gCcFirst & _
+                  ":$" & ColL(gCcConcat) & "$" & gCcLast
+            crit = vL & "$" & CK_SUB & "&$C" & cr
+            s1 = "SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
+                 ColL(gCcVal1) & "$" & gCcFirst & ":$" & ColL(gCcVal1) & "$" & gCcLast & ")"
+            If gCcVal2 > 0 Then
+                s2 = "+SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
+                     ColL(gCcVal2) & "$" & gCcFirst & ":$" & ColL(gCcVal2) & "$" & gCcLast & ")"
+            Else
+                s2 = ""
+            End If
+            ck.Cells(cr, dc).Formula = "=" & s1 & s2 & "-" & vL & cr
+        End If
+    End If
+
     If diffCol.Exists("GC - Balance|" & code) Then
         dc = diffCol("GC - Balance|" & code): vc = valCol("GC - Balance|" & code)
         diffCols(dc) = 1: vL = ColL(vc)
@@ -600,6 +642,51 @@ Private Function ColumnHasDecimals(rs As Worksheet, ByVal r1 As Long, ByVal r2 A
     Next r
     ColumnHasDecimals = False
 End Function
+
+' Locate the tracker's join key + latest-month value columns, by header/data so
+' it is immune to column count / wording (mirrors the Python parse_consol).
+Private Sub GetConsolGeom(cs As Worksheet, ByRef concatCol As Long, ByRef val1 As Long, _
+                          ByRef val2 As Long, ByRef firstRow As Long, ByRef lastRow As Long)
+    Dim ur As Range: Set ur = cs.UsedRange
+    Dim r0 As Long, c0 As Long, rN As Long, cN As Long
+    r0 = ur.Row: c0 = ur.Column
+    rN = ur.Row + ur.Rows.Count - 1
+    cN = ur.Column + ur.Columns.Count - 1
+
+    ' 'Concatenate' header -> join-key column + header row
+    Dim hdr As Long, r As Long, c As Long: hdr = 0: concatCol = 0
+    Dim scanN As Long: scanN = r0 + 39: If scanN > rN Then scanN = rN
+    For r = r0 To scanN
+        For c = c0 To cN
+            If NormHdr(CStr(cs.Cells(r, c).Value)) = "concatenate" Then
+                concatCol = c: hdr = r: Exit For
+            End If
+        Next c
+        If concatCol > 0 Then Exit For
+    Next r
+    If concatCol = 0 Then concatCol = 3: hdr = 1     ' fallback (column C)
+
+    ' right edge of the value area = just left of Currency / Type
+    Dim boundary As Long: boundary = cN
+    For c = concatCol + 1 To cN
+        Dim h As String: h = NormHdr(CStr(cs.Cells(hdr, c).Value))
+        If h = "currency" Or h = "type" Then boundary = c - 1: Exit For
+    Next c
+
+    ' latest month's Dr/Cr pair = the two right-most columns of the value area
+    If boundary - 1 > concatCol Then
+        val1 = boundary - 1: val2 = boundary
+    Else
+        val1 = boundary: val2 = 0
+    End If
+
+    firstRow = hdr + 1
+    lastRow = hdr
+    For r = hdr + 1 To rN
+        If Len(Trim$(CStr(cs.Cells(r, concatCol).Value))) > 0 Then lastRow = r
+    Next r
+    If lastRow < firstRow Then lastRow = firstRow
+End Sub
 
 Private Function GetAggGeom(ag As Worksheet, ByRef matchFirst As Long, _
                             ByRef matchLast As Long, ByRef subRow As Long) As Object
@@ -879,6 +966,7 @@ End Function
 Private Function IsCheckedBlock(ByVal blk As String) As Boolean
     Select Case LCase$(Trim$(blk))
         Case "lc - balance", "gc - balance", "gc - total": IsCheckedBlock = True
+        Case "lc - consol": IsCheckedBlock = gHasConsol   ' only with a tracker
         Case Else: IsCheckedBlock = False
     End Select
 End Function
@@ -990,6 +1078,33 @@ Private Sub ImportFirstSheet(wb As Workbook, ByVal path As String, ByVal newName
     Dim src As Workbook
     Set src = Workbooks.Open(Filename:=path, ReadOnly:=True, UpdateLinks:=0)
     src.Worksheets(1).Copy After:=wb.Worksheets(wb.Worksheets.Count)
+    wb.Worksheets(wb.Worksheets.Count).Name = newName
+    src.Close SaveChanges:=False
+End Sub
+
+' Import the tracker's data sheet (the one with a 'Concatenate' header), since
+' it may not be the first tab in the source workbook.
+Private Sub ImportConsolSheet(wb As Workbook, ByVal path As String, ByVal newName As String)
+    Dim src As Workbook
+    Set src = Workbooks.Open(Filename:=path, ReadOnly:=True, UpdateLinks:=0)
+    Dim sh As Worksheet, pick As Worksheet: Set pick = Nothing
+    Dim r As Long, c As Long, rMax As Long, cMax As Long, found As Boolean
+    For Each sh In src.Worksheets
+        found = False
+        rMax = sh.UsedRange.Row + sh.UsedRange.Rows.Count - 1
+        cMax = sh.UsedRange.Column + sh.UsedRange.Columns.Count - 1
+        If rMax > 40 Then rMax = 40
+        If cMax > 40 Then cMax = 40
+        For r = 1 To rMax
+            For c = 1 To cMax
+                If NormHdr(CStr(sh.Cells(r, c).Value)) = "concatenate" Then found = True: Exit For
+            Next c
+            If found Then Exit For
+        Next r
+        If found Then Set pick = sh: Exit For
+    Next sh
+    If pick Is Nothing Then Set pick = src.Worksheets(1)
+    pick.Copy After:=wb.Worksheets(wb.Worksheets.Count)
     wb.Worksheets(wb.Worksheets.Count).Name = newName
     src.Close SaveChanges:=False
 End Sub

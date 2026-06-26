@@ -135,10 +135,11 @@ def read_report(path: str) -> ReportTable:
     return ReportTable(entities=entities, blocks=blocks, rows=rows, errors=errors)
 
 
-def read_sheet(path: str, title: str, keep_formulas: bool = True) -> SheetData:
+def read_sheet(path: str, title: str, keep_formulas: bool = True,
+               sheet_name: str | None = None) -> SheetData:
     """Copy an input sheet verbatim so it can be embedded in the check file."""
     wb = load_workbook(path, data_only=not keep_formulas)
-    ws = wb.active
+    ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
     cells: dict[str, object] = {}
     for row in ws.iter_rows():
         for c in row:
@@ -467,3 +468,85 @@ def detect_gc_currency(report, rates: dict, default: str = "INR") -> str:
     if not votes:
         return default
     return max(votes, key=votes.get)
+
+
+# --- Consolidation entry tracker (LC - Consol tie-out) ----------------------
+
+@dataclass
+class ConsolGeometry:
+    """Where the columns sit in the manual consolidation-entry tracker.
+
+    The tracker is a separate workbook ("Consolidation entries …"). Each manual
+    entry is a Dr/Cr pair of rows; the figure that lands in the report's
+    LC - Consol block is the P&L leg's amount for the latest month. We locate
+    everything by header/data so it is immune to column count and wording.
+    """
+    sheet_name: str
+    concat_col: int               # "Concatenate" = comp-code + account (join key)
+    val_cols: tuple               # the latest month's two value columns (Dr/Cr)
+    first_row: int                # first data row
+    last_row: int
+    totals: dict = field(default_factory=dict)   # concat-key -> summed amount
+
+
+def _find_consol_sheet(wb):
+    """The worksheet that holds the tracker (has a 'Concatenate' header)."""
+    for ws in wb.worksheets:
+        for r in range(1, min(ws.max_row, 40) + 1):
+            for c in range(1, min(ws.max_column, 40) + 1):
+                if _norm_hdr(ws.cell(row=r, column=c).value) == "concatenate":
+                    return ws, r, c
+    return wb.active, 1, 0
+
+
+def parse_consol(path: str) -> ConsolGeometry:
+    wb = load_workbook(path, data_only=True)
+    ws, hdr_row, concat_col = _find_consol_sheet(wb)
+    if not concat_col:
+        raise ValueError("consol tracker: no 'Concatenate' column found")
+
+    # right boundary of the value area = just left of the 'Currency'/'Type' cols
+    boundary = ws.max_column
+    for c in range(concat_col + 1, ws.max_column + 1):
+        if _norm_hdr(ws.cell(row=hdr_row, column=c).value) in ("currency", "type"):
+            boundary = c - 1
+            break
+
+    last_row = hdr_row
+    for r in range(hdr_row + 1, ws.max_row + 1):
+        if str(ws.cell(row=r, column=concat_col).value or "").strip():
+            last_row = r
+    first_row = hdr_row + 1
+
+    # value columns = the latest month's Dr/Cr pair, i.e. the two right-most
+    # columns of the value area (just left of Currency/Type). Earlier columns
+    # (Group Account Number, prior months) are never the right-most pair, so a
+    # numeric account-number column can't be mistaken for a value.
+    if boundary - 1 > concat_col:
+        val_cols = (boundary - 1, boundary)
+    else:
+        val_cols = (boundary,)
+
+    totals: dict[str, float] = {}
+    for r in range(first_row, last_row + 1):
+        key = str(ws.cell(row=r, column=concat_col).value or "").strip()
+        if not key:
+            continue
+        amt = 0.0
+        for c in val_cols:
+            v = ws.cell(row=r, column=c).value
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                amt += float(v)
+        totals[key] = totals.get(key, 0.0) + amt
+
+    return ConsolGeometry(sheet_name=ws.title, concat_col=concat_col,
+                          val_cols=val_cols, first_row=first_row,
+                          last_row=last_row, totals=totals)
+
+
+def consol_key(code, account) -> str:
+    """Join key matching the tracker's 'Concatenate' (comp-code + account)."""
+    a = account
+    if isinstance(a, float) and a.is_integer():
+        a = int(a)
+    return f"{code}{a}".strip()

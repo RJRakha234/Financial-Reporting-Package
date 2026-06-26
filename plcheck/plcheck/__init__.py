@@ -40,7 +40,8 @@ class AnalysisResult:
 
 def analyze(report_path: str, tb_path: str, agg_path: str | None, rates_path: str,
             output_path: str | None = None,
-            cfg: CheckConfig | None = None) -> AnalysisResult:
+            cfg: CheckConfig | None = None,
+            consol_path: str | None = None) -> AnalysisResult:
     """Reconcile the report against its sources and optionally write the check.
 
     Args:
@@ -53,10 +54,11 @@ def analyze(report_path: str, tb_path: str, agg_path: str | None, rates_path: st
     """
     cfg = cfg or CheckConfig()
     report = inputs.read_report(report_path)
-    ev = evaluate(report, tb_path, agg_path, rates_path, cfg)
+    ev = evaluate(report, tb_path, agg_path, rates_path, cfg, consol_path)
     written = None
     if output_path is not None:
-        wb = build_check_workbook(report, tb_path, agg_path, rates_path, cfg)
+        wb = build_check_workbook(report, tb_path, agg_path, rates_path, cfg,
+                                  consol_path)
         wb.save(output_path)
         written = output_path
     return AnalysisResult(report=report, evaluation=ev, output_path=written)

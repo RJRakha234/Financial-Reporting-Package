@@ -241,9 +241,14 @@ Private Sub BuildCheck(wb As Workbook)
     End If
 
     ' group currency: auto-detect from the report unless Control!B5 set it
+    Dim ratesD As Object: Set ratesD = RatesDict(wb.Worksheets(SH_RATES))
     If Len(gGc) = 0 Then _
-        gGc = DetectGc(r, rData0, lastRRow, entOrder, ccy, repCol, _
-                       RatesDict(wb.Worksheets(SH_RATES)))
+        gGc = DetectGc(r, rData0, lastRRow, entOrder, ccy, repCol, ratesD)
+    ' Does the group currency have its own row in the rates table? The table
+    ' quotes everything TO the base currency (e.g. INR), which has no row, so the
+    ' rate already converts to it (no division). Only a quoted GC (e.g. USD) is
+    ' cross-divided.
+    Dim gcInTable As Boolean: gcInTable = ratesD.Exists(UCase$(Trim$(gGc)))
 
     ' per-entity helper cells
     Dim i As Long, code As String, dc As Long, vc As Long
@@ -260,14 +265,19 @@ Private Sub BuildCheck(wb As Workbook)
         End If
         If diffCol.Exists("GC - Balance|" & code) Then
             dc = diffCol("GC - Balance|" & code): vc = valCol("GC - Balance|" & code)
-            Dim rng As String
+            Dim rng As String, idx As Long, numr As String
             rng = "'" & SH_RATES & "'!$" & ColL(rateFrom) & "$" & (rateHdr + 1) & _
                   ":$" & ColL(rateCol) & "$" & (rateHdr + RATE_ROWS)
-            ' local->INR / GC->INR  (GC->INR is 1 for an INR report)
-            ck.Cells(CK_AGG, dc).Formula = _
-                "=VLOOKUP(" & ColL(vc) & "$" & CK_CCY & "," & rng & "," & _
-                (rateCol - rateFrom + 1) & ",FALSE)/VLOOKUP(""" & gGc & """," & rng & "," & _
-                (rateCol - rateFrom + 1) & ",FALSE)"
+            idx = rateCol - rateFrom + 1
+            numr = "VLOOKUP(" & ColL(vc) & "$" & CK_CCY & "," & rng & "," & idx & ",FALSE)"
+            If gcInTable Then
+                ' cross-rate: local->base / GC->base
+                ck.Cells(CK_AGG, dc).Formula = "=" & numr & _
+                    "/VLOOKUP(""" & gGc & """," & rng & "," & idx & ",FALSE)"
+            Else
+                ' GC is the table's base currency: the rate already converts to it
+                ck.Cells(CK_AGG, dc).Formula = "=" & numr
+            End If
         End If
     Next i
 
@@ -510,19 +520,86 @@ Private Sub GetTBGeom(tb As Worksheet, codes As Object, ByRef hdr As Long, ByRef
 End Sub
 
 Private Sub GetRatesGeom(rs As Worksheet, ByRef fromCol As Long, ByRef rateCol As Long, ByRef hdr As Long)
-    Dim f As Range, rc As Range
-    ' find the "From" (currency) and rate columns by header, case-insensitive,
-    ' so the table can sit on any columns / use slightly different wording.
-    Set f = rs.Cells.Find("From", , xlValues, xlWhole, , , False)
-    If f Is Nothing Then Set f = rs.Cells.Find("From Curr", , xlValues, xlWhole, , , False)
-    Set rc = rs.Cells.Find("Exch. Rate", , xlValues, xlWhole, , , False)
-    If rc Is Nothing Then Set rc = rs.Cells.Find("Exchange Rate", , xlValues, xlWhole, , , False)
-    If rc Is Nothing Then Set rc = rs.Cells.Find("Exch Rate", , xlValues, xlWhole, , , False)
-    If rc Is Nothing Then Set rc = rs.Cells.Find("Rate", , xlValues, xlWhole, , , False)
-    If f Is Nothing Then fromCol = 3 Else fromCol = f.Column
-    If rc Is Nothing Then rateCol = 5 Else rateCol = rc.Column
-    If f Is Nothing Then hdr = 1 Else hdr = f.Row
+    ' Locate the columns by their DATA, so it is immune to the number of columns
+    ' and to the header wording:
+    '   - the "From" currency column is the FIRST column whose cells are 3-letter
+    '     currency codes (the "To" column, all "INR", comes later);
+    '   - the rate column is the one headed like an exchange rate, or failing
+    '     that the first column to the right holding decimal numbers (a date or
+    '     a 1/100 "From Ratio" column is all integers, so it is skipped).
+    Dim ur As Range: Set ur = rs.UsedRange
+    Dim r0 As Long, c0 As Long, rN As Long, cN As Long, scanN As Long
+    r0 = ur.Row: c0 = ur.Column
+    rN = ur.Row + ur.Rows.Count - 1
+    cN = ur.Column + ur.Columns.Count - 1
+    scanN = r0 + 79: If scanN > rN Then scanN = rN
+
+    Dim c As Long, r As Long
+    fromCol = 0: hdr = 0
+    For c = c0 To cN
+        For r = r0 To scanN
+            If IsCurrencyCode(rs.Cells(r, c).Value) Then
+                fromCol = c
+                hdr = r - 1: If hdr < 1 Then hdr = 1
+                Exit For
+            End If
+        Next r
+        If fromCol > 0 Then Exit For
+    Next c
+    If fromCol = 0 Then fromCol = 3
+    If hdr = 0 Then hdr = 1
+
+    rateCol = 0
+    For c = fromCol To cN
+        If IsRateHeader(rs.Cells(hdr, c).Value) Then rateCol = c: Exit For
+    Next c
+    If rateCol = 0 Then
+        For c = fromCol + 1 To cN
+            If ColumnHasDecimals(rs, hdr + 1, scanN, c) Then rateCol = c: Exit For
+        Next c
+    End If
+    If rateCol = 0 Then rateCol = fromCol + 3
 End Sub
+
+' True for a 3-letter currency code (CHF, INR, USD ...) - text only.
+Private Function IsCurrencyCode(ByVal v As Variant) As Boolean
+    If IsError(v) Then IsCurrencyCode = False: Exit Function
+    Dim s As String: s = Trim$(CStr(v))
+    If Len(s) <> 3 Then IsCurrencyCode = False: Exit Function
+    Dim i As Long, ch As Long
+    For i = 1 To 3
+        ch = Asc(UCase$(Mid$(s, i, 1)))
+        If ch < 65 Or ch > 90 Then IsCurrencyCode = False: Exit Function
+    Next i
+    IsCurrencyCode = True
+End Function
+
+' True for an exchange-rate header, excluding "From Ratio" / "Rate Type".
+Private Function IsRateHeader(ByVal v As Variant) As Boolean
+    Dim s As String: s = NormHdr(CStr(v))
+    If Len(s) = 0 Then IsRateHeader = False: Exit Function
+    If InStr(s, "ratio") > 0 Or InStr(s, "type") > 0 Then IsRateHeader = False: Exit Function
+    IsRateHeader = (s = "exchange rate" Or s = "exch rate" Or s = "rate" Or InStr(s, "exch") > 0)
+End Function
+
+' lower-cased, dot-stripped, space-collapsed header text
+Private Function NormHdr(ByVal s As String) As String
+    Dim t As String: t = LCase$(Trim$(Replace(s, ".", " ")))
+    Do While InStr(t, "  ") > 0: t = Replace(t, "  ", " "): Loop
+    NormHdr = t
+End Function
+
+' True if the column holds a non-integer number (a rate, not a date / ratio).
+Private Function ColumnHasDecimals(rs As Worksheet, ByVal r1 As Long, ByVal r2 As Long, ByVal c As Long) As Boolean
+    Dim r As Long, v As Variant
+    For r = r1 To r2
+        v = rs.Cells(r, c).Value
+        If IsNumeric(v) Then
+            If CDbl(v) <> Int(CDbl(v)) Then ColumnHasDecimals = True: Exit Function
+        End If
+    Next r
+    ColumnHasDecimals = False
+End Function
 
 Private Function GetAggGeom(ag As Worksheet, ByRef matchFirst As Long, _
                             ByRef matchLast As Long, ByRef subRow As Long) As Object
@@ -626,9 +703,12 @@ Private Function CatClass(ByVal cat As String) As String
 End Function
 
 Private Function CatSource(ByVal cat As String) As String
-    ' Minority Interest has no LC tie-out (it nets out); recognised fuzzily so a
-    ' typo isn't given a TB source by the Nature-wise fallback below.
+    ' Net Profit and Minority Interest are summary lines, not GL detail: they
+    ' have NO LC tie-out. Guard them here so the Nature-wise fallback below
+    ' (which ties everything else to the TB) can't put a bogus TB lookup on the
+    ' Net Profit GL row.
     If IsMinority(cat) Then CatSource = "": Exit Function
+    If StrComp(Trim$(cat), "Net Profit", vbTextCompare) = 0 Then CatSource = "": Exit Function
     Select Case LCase$(Trim$(cat))
         Case "revenue", "income", "other income", "provision for tax", "interest", _
              "interest exp", "interest expense", "finance cost", "finance costs", _

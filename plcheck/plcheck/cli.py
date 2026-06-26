@@ -25,6 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agg", help="Aggregate Expenses (.xlsx). Omit for a "
                    "Nature-wise report, where every line ties to the TB.")
     p.add_argument("--rates", required=True, help="MA exchange rates (.xlsx)")
+    p.add_argument("--consol", help="consolidation-entry tracker (.xlsx). When "
+                   "given, LC - Consol is tied out to it (comp-code + account).")
     p.add_argument("-o", "--output",
                    help="path for the generated check workbook "
                         "(default: <report>_Check.xlsx; 'none' to skip)")
@@ -44,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     paths = {"report": args.report, "TB": args.tb, "MA rates": args.rates}
     if args.agg:
         paths["Aggregate Exp"] = args.agg
+    if args.consol:
+        paths["Consol Entries"] = args.consol
     for label, path in paths.items():
         if not Path(path).is_file():
             print(f"error: {label} file not found: {path}", file=sys.stderr)
@@ -64,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = analyze(args.report, args.tb, args.agg, args.rates,
-                         output_path=output, cfg=cfg)
+                         output_path=output, cfg=cfg, consol_path=args.consol)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

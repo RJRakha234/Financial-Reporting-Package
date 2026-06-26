@@ -34,6 +34,7 @@ SHEET_CHECK = "Check"
 SHEET_TB = "Real Time TB"
 SHEET_AGG = "Aggregate Exp"
 SHEET_RATES = "MA rates"
+SHEET_CONSOL = "Consol Entries"   # manual consolidation-entry tracker
 
 # --- Report layout ----------------------------------------------------------
 # Row numbers (1-based) of the header band in the *input* IFRS P&L report.
@@ -55,6 +56,7 @@ OVERALL_LABEL = "Overall Result"
 #   "fx"         -> (LC Balance + LC Consol) * rate
 #   "consol"     -> GC Balance + Reclass + Elimination + Consol
 CHECK_LC_BALANCE = "LC - Balance"
+CHECK_LC_CONSOL = "LC - Consol"
 CHECK_GC_BALANCE = "GC - Balance"
 CHECK_GC_TOTAL = "GC - Total"
 

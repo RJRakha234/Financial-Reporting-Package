@@ -6,7 +6,8 @@ import json
 
 from .evaluate import Evaluation
 
-_KIND = {"lc": "LC tie-out", "fx": "FX conversion", "consol": "GC consolidation"}
+_KIND = {"lc": "LC tie-out", "lc_consol": "LC-Consol tie-out",
+         "fx": "FX conversion", "consol": "GC consolidation"}
 
 
 def _fmt(n: float) -> str:
