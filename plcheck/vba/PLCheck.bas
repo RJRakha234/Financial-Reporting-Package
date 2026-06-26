@@ -60,6 +60,7 @@ Private Const OVERALL As String = "Overall Result"
 ' ---- module-level handoff (must be declared before any procedure) ----------
 Private gNpRow As Long, gMiRow As Long, gDivRow As Long
 Private gNoAgg As Boolean     ' True for a Nature-wise report (no Aggregate Exp)
+Private gGc As String         ' group/consolidation currency (INR default, or USD)
 
 
 '============================================================================
@@ -92,6 +93,10 @@ Public Sub GenerateCheckFile()
         MsgBox "Aggregate Expenses file not found (Control!B3). Leave B3 blank " & _
                "for a Nature-wise report.", vbExclamation: Exit Sub
     End If
+    ' group/consolidation currency in Control!B5 (default INR; use USD for a
+    ' USD report). GC figures use the cross-rate  local->INR / GC->INR.
+    gGc = UCase$(Trim$(CStr(ctl.Range("B5").Value)))
+    If Len(gGc) = 0 Then gGc = "INR"
 
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
@@ -222,9 +227,14 @@ Private Sub BuildCheck(wb As Workbook)
         End If
         If diffCol.Exists("GC - Balance|" & code) Then
             dc = diffCol("GC - Balance|" & code): vc = valCol("GC - Balance|" & code)
-            ck.Cells(CK_AGG, dc).Formula = "=VLOOKUP(" & ColL(vc) & "$" & CK_CCY & _
-                ",'" & SH_RATES & "'!$" & ColL(rateFrom) & "$" & (rateHdr + 1) & ":$" & _
-                ColL(rateCol) & "$" & (rateHdr + RATE_ROWS) & "," & (rateCol - rateFrom + 1) & ",FALSE)"
+            Dim rng As String
+            rng = "'" & SH_RATES & "'!$" & ColL(rateFrom) & "$" & (rateHdr + 1) & _
+                  ":$" & ColL(rateCol) & "$" & (rateHdr + RATE_ROWS)
+            ' local->INR / GC->INR  (GC->INR is 1 for an INR report)
+            ck.Cells(CK_AGG, dc).Formula = _
+                "=VLOOKUP(" & ColL(vc) & "$" & CK_CCY & "," & rng & "," & _
+                (rateCol - rateFrom + 1) & ",FALSE)/VLOOKUP(""" & gGc & """," & rng & "," & _
+                (rateCol - rateFrom + 1) & ",FALSE)"
         End If
     Next i
 
