@@ -129,6 +129,14 @@ DEFAULT_CATEGORY_RULES: dict[str, CategoryRule] = {
     # Depreciation is its own line in Ind-AS (full GL 290100); it ties to the
     # trial balance directly, like tax / interest.
     "Depreciation": CategoryRule("Expense", "tb"),
+    # --- Ind-AS Nature-wise section names (no Aggregate Exp; all tie to TB) -
+    "Employee Benefit Expenses": CategoryRule("Expense", "tb"),
+    "Cost of Technical sub-contractors": CategoryRule("Expense", "tb"),
+    "Travel expenses": CategoryRule("Expense", "tb"),
+    "Software packages for own use": CategoryRule("Expense", "tb"),
+    "Communication expenses": CategoryRule("Expense", "tb"),
+    "Professional Charges": CategoryRule("Expense", "tb"),
+    "Others": CategoryRule("Expense", "tb"),
     # --- common to both reports ------------------------------------------
     "Other Income": CategoryRule("Income", "tb"),
     "Provision for Tax": CategoryRule("Expense", "tb"),
@@ -169,6 +177,12 @@ class CheckConfig:
     # GL account for "Dividend received" used in the Minority Interest sheet
     # (its GC-Balance figure per company feeds Profit-before-Dividend).
     dividend_account: int = 332010
+    # Fallback rule for a category that isn't explicitly mapped. Used for the
+    # Nature-wise report (no Aggregate Exp): the CLI sets this to
+    # CategoryRule("Expense", "tb") when --agg is omitted, so every expense
+    # nature ties straight to the trial balance. Left None for function-wise
+    # reports, where an unmapped category is reported instead of guessed.
+    default_rule: CategoryRule | None = None
 
     def rule_for(self, category: str) -> CategoryRule | None:
         if not category:
@@ -177,6 +191,12 @@ class CheckConfig:
             if name.strip().lower() == category.strip().lower():
                 return rule
         return None
+
+    def effective_rule(self, category: str) -> CategoryRule | None:
+        """Explicit rule, or the default fallback (Nature-wise mode)."""
+        if not category or not category.strip():
+            return None
+        return self.rule_for(category) or self.default_rule
 
     def is_pl_account(self, account) -> bool:
         if account is None:

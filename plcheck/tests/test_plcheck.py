@@ -485,3 +485,44 @@ def test_report_excel_error_cell_is_flagged(tmp_path):
     assert any("#REF!" in e for e in report.errors)
     ev = evaluate(report, TB, AGG, RATES)
     assert any("#REF!" in e for e in ev.report_errors)
+
+
+# --------------------------------------------------------------------------
+# Ind-AS Nature-wise: no Aggregate Exp; every line ties to the Real Time TB.
+# --------------------------------------------------------------------------
+
+NATUREWISE = os.path.join(SAMPLE, "INDAS_Naturewise_PL_Report.xlsx")
+
+
+def _naturewise_cfg():
+    from plcheck.config import CheckConfig, CategoryRule
+    return CheckConfig(default_rule=CategoryRule("Expense", "tb"))
+
+
+def test_naturewise_runs_without_agg(tmp_path):
+    cfg = _naturewise_cfg()
+    report = inputs.read_report(NATUREWISE)
+    ev = evaluate(report, TB, None, RATES, cfg)      # no Aggregate Exp
+    assert ev.unmapped_categories == []
+    assert all(abs(n.calc_check) < 0.01 for n in ev.net_profit)
+    tie = {n.entity: round(n.tie_check, 2) for n in ev.net_profit}
+    assert tie["BALSCH"] == 0.0 and tie["BALSDE"] == 0.51 and tie["BALSDK"] == 0.65
+
+
+def test_naturewise_output_has_no_aggregate_sheet(tmp_path):
+    cfg = _naturewise_cfg()
+    out = tmp_path / "Check.xlsx"
+    analyze(NATUREWISE, TB, None, RATES, output_path=str(out), cfg=cfg)
+    sheets = openpyxl.load_workbook(out).sheetnames
+    assert "Aggregate Exp" not in sheets
+    assert sheets[0] == "Check"
+    ws = openpyxl.load_workbook(out)["Check"]
+    # an expense nature (Employee Benefit Expenses, GL 110200) ties to the TB
+    assert "'Real Time TB'" in str(ws["F10"].value)
+
+
+def test_default_rule_classifies_unmapped_as_expense():
+    from plcheck.config import CategoryRule
+    cfg = _naturewise_cfg()
+    assert cfg.effective_rule("Some New Expense Line") == CategoryRule("Expense", "tb")
+    assert cfg.effective_rule("Income").classification == "Income"   # explicit wins

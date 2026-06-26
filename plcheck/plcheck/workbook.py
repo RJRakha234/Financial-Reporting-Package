@@ -50,12 +50,12 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     currency = {e.code: e.currency for e in report.entities}
 
     tb = inputs.parse_tb(tb_path, codes)
-    agg = inputs.parse_agg(agg_path, codes)
+    agg = inputs.parse_agg(agg_path, codes) if agg_path else None
     rates = inputs.parse_rates(rates_path)
 
     tb_lastcol = get_column_letter(tb.last_col)
-    agg_mfirst = get_column_letter(agg.match_first_col)
-    agg_mlast = get_column_letter(agg.match_last_col)
+    agg_mfirst = get_column_letter(agg.match_first_col) if agg else None
+    agg_mlast = get_column_letter(agg.match_last_col) if agg else None
     rate_from = get_column_letter(rates.from_col)
     rate_to = get_column_letter(rates.rate_col)
 
@@ -115,9 +115,10 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
             ws[f"{d}{ROW_TB_LABEL}"] = (
                 f"=MATCH({v}${ROW_SUBHEADER},'{C.SHEET_TB}'!"
                 f"$A${tb.header_row}:${tb_lastcol}${tb.header_row},0)")
-            ws[f"{d}{ROW_AGG_LABEL}"] = (
-                f"=MATCH({v}${ROW_SUBHEADER},'{C.SHEET_AGG}'!"
-                f"${agg_mfirst}${agg.subheader_row}:${agg_mlast}${agg.subheader_row},0)")
+            if agg:
+                ws[f"{d}{ROW_AGG_LABEL}"] = (
+                    f"=MATCH({v}${ROW_SUBHEADER},'{C.SHEET_AGG}'!"
+                    f"${agg_mfirst}${agg.subheader_row}:${agg_mlast}${agg.subheader_row},0)")
         elif info.block == C.CHECK_GC_BALANCE:
             ws[f"{d}{ROW_AGG_LABEL}"] = (
                 f"=VLOOKUP({v}${ROW_CURR},'{C.SHEET_RATES}'!"
@@ -133,7 +134,7 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     for i, row in enumerate(report.rows):
         r = FIRST_DATA_ROW + i
         last_data_row = r
-        rule = cfg.rule_for(row.category)
+        rule = cfg.effective_rule(row.category)
         ws[f"{COL_CATEGORY}{r}"] = row.category or None
         if not row.is_subtotal:
             if rule and rule.classification:
@@ -175,7 +176,8 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
 
     # ---- embed the source sheets -----------------------------------------
     _embed(wb, inputs.read_sheet(tb_path, C.SHEET_TB))
-    _embed(wb, inputs.read_sheet(agg_path, C.SHEET_AGG))
+    if agg_path:
+        _embed(wb, inputs.read_sheet(agg_path, C.SHEET_AGG))
     _embed(wb, inputs.read_sheet(rates_path, C.SHEET_RATES))
     return wb
 
@@ -257,7 +259,7 @@ def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
             table = (f"'{C.SHEET_TB}'!$A${tb.header_row}:"
                      f"${get_column_letter(tb.last_col)}${tb.last_data_row}")
             return f"=IFERROR(VLOOKUP($C{r},{table},{match},FALSE),0)-{v}{r}"
-        blk = agg.blocks.get(rule.source)
+        blk = agg.blocks.get(rule.source) if agg else None
         if blk is None:
             return None
         match = f"{C.SHEET_CHECK}!{d}${ROW_AGG_LABEL}"

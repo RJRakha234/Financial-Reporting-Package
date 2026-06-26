@@ -77,7 +77,7 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     currency = {e.code: e.currency for e in report.entities}
 
     tb_accounts, _ = inputs.tb_values(tb_path, codes)
-    agg = inputs.agg_values(agg_path, codes)
+    agg = inputs.agg_values(agg_path, codes) if agg_path else {}
     rates = inputs.parse_rates(rates_path).rates
     tb_entity_cols = inputs.parse_tb(tb_path, codes).entity_cols
 
@@ -94,12 +94,12 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     unmapped: set[str] = set()
 
     for i, row in enumerate(report.rows):
-        rule = cfg.rule_for(row.category)
+        rule = cfg.effective_rule(row.category)
         # --- 1. LC tie-out (detail rows with a known source) ---------------
         if not row.is_subtotal and row.category:
             if rule is None:
                 unmapped.add(row.category)
-            elif rule.source:
+            elif rule.source and (rule.source == "tb" or rule.source in agg):
                 acct = inputs.account_key(row.account)
                 for e in report.entities:
                     stated = row.values.get((C.CHECK_LC_BALANCE, e.code), 0.0)
@@ -135,7 +135,7 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
         for row in report.rows:
             if row.is_subtotal:
                 continue
-            rule = cfg.rule_for(row.category)
+            rule = cfg.effective_rule(row.category)
             if rule and rule.classification in totals:
                 totals[rule.classification] += row.values.get(
                     (C.CHECK_LC_BALANCE, e.code), 0.0)

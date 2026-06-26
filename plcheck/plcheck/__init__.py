@@ -38,7 +38,7 @@ class AnalysisResult:
         return self.evaluation.ok
 
 
-def analyze(report_path: str, tb_path: str, agg_path: str, rates_path: str,
+def analyze(report_path: str, tb_path: str, agg_path: str | None, rates_path: str,
             output_path: str | None = None,
             cfg: CheckConfig | None = None) -> AnalysisResult:
     """Reconcile the report against its sources and optionally write the check.

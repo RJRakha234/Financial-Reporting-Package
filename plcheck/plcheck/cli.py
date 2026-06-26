@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import analyze
-from .config import CheckConfig
+from .config import CategoryRule, CheckConfig
 from .report import to_console, to_json
 
 
@@ -22,7 +22,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the P&L report to check, IFRS INR or Ind-AS "
                         "Function-wise (.xlsx)")
     p.add_argument("--tb", required=True, help="Real Time Trial Balance (.xlsx)")
-    p.add_argument("--agg", required=True, help="Aggregate Expenses (.xlsx)")
+    p.add_argument("--agg", help="Aggregate Expenses (.xlsx). Omit for a "
+                   "Nature-wise report, where every line ties to the TB.")
     p.add_argument("--rates", required=True, help="MA exchange rates (.xlsx)")
     p.add_argument("-o", "--output",
                    help="path for the generated check workbook "
@@ -37,8 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    paths = {"report": args.report, "TB": args.tb, "Aggregate Exp": args.agg,
-             "MA rates": args.rates}
+    paths = {"report": args.report, "TB": args.tb, "MA rates": args.rates}
+    if args.agg:
+        paths["Aggregate Exp"] = args.agg
     for label, path in paths.items():
         if not Path(path).is_file():
             print(f"error: {label} file not found: {path}", file=sys.stderr)
@@ -52,10 +54,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output = args.output
 
+    cfg = CheckConfig(tolerance=args.tolerance)
+    if not args.agg:
+        # Nature-wise report: no Aggregate Exp, every expense line ties to the TB
+        cfg.default_rule = CategoryRule("Expense", "tb")
+
     try:
         result = analyze(args.report, args.tb, args.agg, args.rates,
-                         output_path=output,
-                         cfg=CheckConfig(tolerance=args.tolerance))
+                         output_path=output, cfg=cfg)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
