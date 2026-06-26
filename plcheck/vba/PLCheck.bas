@@ -454,8 +454,8 @@ End Sub
 Private Sub GetTBGeom(tb As Worksheet, codes As Object, ByRef hdr As Long, ByRef acct As Long, _
                       ByRef lastCol As Long, ByRef firstData As Long, ByRef lastData As Long)
     hdr = FindRowWithAnyKey(tb, codes): If hdr = 0 Then hdr = 6
-    Dim gcn As Range: Set gcn = tb.Cells.Find("Group Account Number", , , xlWhole, , , False)
-    acct = IIf(gcn Is Nothing, 1, gcn.Column)
+    Dim gcn As Range: Set gcn = tb.Cells.Find("Group Account Number", , xlValues, xlWhole, , , False)
+    If gcn Is Nothing Then acct = 1 Else acct = gcn.Column
     lastCol = tb.Cells(hdr, tb.Columns.Count).End(xlToLeft).Column
     Dim lastUsed As Long: lastUsed = tb.UsedRange.Row + tb.UsedRange.Rows.Count - 1
     Dim rr As Long
@@ -471,11 +471,11 @@ End Sub
 
 Private Sub GetRatesGeom(rs As Worksheet, ByRef fromCol As Long, ByRef rateCol As Long, ByRef hdr As Long)
     Dim f As Range, rc As Range
-    Set f = rs.Cells.Find("From", , , xlWhole, , , False)
-    Set rc = rs.Cells.Find("Exch. Rate", , , xlWhole, , , False)
-    fromCol = IIf(f Is Nothing, 3, f.Column)
-    rateCol = IIf(rc Is Nothing, 5, rc.Column)
-    hdr = IIf(f Is Nothing, 1, f.Row)
+    Set f = rs.Cells.Find("From", , xlValues, xlWhole, , , False)
+    Set rc = rs.Cells.Find("Exch. Rate", , xlValues, xlWhole, , , False)
+    If f Is Nothing Then fromCol = 3 Else fromCol = f.Column
+    If rc Is Nothing Then rateCol = 5 Else rateCol = rc.Column
+    If f Is Nothing Then hdr = 1 Else hdr = f.Row
 End Sub
 
 Private Function GetAggGeom(ag As Worksheet, ByRef matchFirst As Long, _
@@ -548,8 +548,8 @@ End Sub
 
 Private Function FindAggSubRow(ag As Worksheet) As Long
     ' the sub-header row is the one containing "Company" (sits above the data)
-    Dim f As Range: Set f = ag.Cells.Find("Company", , , xlWhole, , , False)
-    FindAggSubRow = IIf(f Is Nothing, 0, f.Row)
+    Dim f As Range: Set f = ag.Cells.Find("Company", , xlValues, xlWhole, , , False)
+    If f Is Nothing Then FindAggSubRow = 0 Else FindAggSubRow = f.Row
 End Function
 
 
@@ -717,14 +717,14 @@ Private Function ColL(ByVal c As Long) As String
 End Function
 
 Private Function FindRowContaining(ws As Worksheet, ByVal txt As String) As Long
-    Dim f As Range: Set f = ws.Cells.Find(txt, , , xlWhole, , , False)
-    FindRowContaining = IIf(f Is Nothing, 0, f.Row)
+    Dim f As Range: Set f = ws.Cells.Find(txt, , xlValues, xlWhole, , , False)
+    If f Is Nothing Then FindRowContaining = 0 Else FindRowContaining = f.Row
 End Function
 
 Private Function FindRowWithAnyKey(ws As Worksheet, codes As Object) As Long
     Dim k As Variant, f As Range
     For Each k In codes.Keys
-        Set f = ws.Cells.Find(CStr(k), , , xlWhole, , , False)
+        Set f = ws.Cells.Find(CStr(k), , xlValues, xlWhole, , , False)
         If Not f Is Nothing Then FindRowWithAnyKey = f.Row: Exit Function
     Next k
 End Function
