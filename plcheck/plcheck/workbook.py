@@ -123,12 +123,18 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
         elif info.block == C.CHECK_GC_BALANCE:
             rng = (f"${rate_from}${rates.first_row}:"
                    f"${rate_to}${rate_last_row}")
-            # local->INR / GC->INR cross-rate (GC->INR is 1 for an INR report)
-            ws[f"{d}{ROW_AGG_LABEL}"] = (
-                f"=VLOOKUP({v}${ROW_CURR},'{C.SHEET_RATES}'!{rng},"
-                f"{rates.col_index},FALSE)"
-                f"/VLOOKUP(\"{gc_currency}\",'{C.SHEET_RATES}'!{rng},"
-                f"{rates.col_index},FALSE)")
+            local = (f"VLOOKUP({v}${ROW_CURR},'{C.SHEET_RATES}'!{rng},"
+                     f"{rates.col_index},FALSE)")
+            # The rates table quotes every currency TO the base (e.g. INR). If
+            # the group currency is itself the base, it has no row of its own,
+            # so the rate already converts to it (divisor = 1). Only when the
+            # group currency is a quoted currency (e.g. USD) do we cross-divide.
+            if gc_currency in rates.rates:
+                ws[f"{d}{ROW_AGG_LABEL}"] = (
+                    f"={local}/VLOOKUP(\"{gc_currency}\",'{C.SHEET_RATES}'!{rng},"
+                    f"{rates.col_index},FALSE)")
+            else:
+                ws[f"{d}{ROW_AGG_LABEL}"] = f"={local}"
         for hr in (ROW_TB_LABEL, ROW_AGG_LABEL):
             if ws[f"{d}{hr}"].value is not None:
                 ws[f"{d}{hr}"].font = HELP_FONT

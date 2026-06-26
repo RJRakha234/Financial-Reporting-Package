@@ -284,6 +284,47 @@ def test_rate_lookup_window_is_configurable():
     assert CheckConfig().rate_lookup_rows == 150
 
 
+def test_rates_columns_found_by_currency_data(tmp_path):
+    """The 'From' currency column is found by its data, so a 'To Currency'
+    column sitting to its left/right (all INR) can't be picked by mistake,
+    regardless of column count or header wording."""
+    import openpyxl as _xl
+    p = tmp_path / "rates_real_layout.xlsx"
+    wb = _xl.Workbook(); ws = wb.active
+    # user's real layout: Type | From Currency | To Currency | Date | Exch Rate
+    ws.append(["Exchange Rate Type", "From Currency", "To Currency",
+               "Date", "Exchange Rate"])
+    for cur, rt in [("AED", 25.51), ("CHF", 67.81), ("EUR", 107.82),
+                    ("USD", 93.57)]:
+        ws.append(["MA", cur, "INR", 31032026, rt])
+    wb.save(p)
+    g = inputs.parse_rates(str(p))
+    assert g.from_col == 2          # 'From Currency' (B), not 'To Currency' (C)
+    assert g.rate_col == 5          # 'Exchange Rate' (E), not 'Rate Type' (A)
+    assert g.col_index == 4
+    assert g.rates["CHF"] == 67.81 and "INR" not in g.rates
+
+
+def test_base_currency_gc_rate_has_no_divisor(tmp_path):
+    """When the group currency is the table's base (no row of its own), the
+    GC-Balance rate is a plain lookup — not divided by a missing VLOOKUP."""
+    from plcheck.workbook import build_check_workbook
+    import openpyxl as _xl
+    # rates with NO 'INR' row (INR is only the To-currency / base)
+    rp = tmp_path / "rates_no_inr.xlsx"
+    wb = _xl.Workbook(); ws = wb.active
+    ws.append(["Exchange Rate Type", "From Currency", "To Currency",
+               "Date", "Exchange Rate"])
+    for cur, rt in [("CHF", 67.81), ("EUR", 107.82), ("DKK", 14.22)]:
+        ws.append(["MA", cur, "INR", 31032026, rt])
+    wb.save(rp)
+    report = inputs.read_report(REPORT)
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(report, TB, AGG, str(rp)).save(out)
+    cell = openpyxl.load_workbook(out)["Check"]["Q3"].value
+    assert cell.startswith("=VLOOKUP(") and "/VLOOKUP(" not in cell
+
+
 def test_minority_interest_matched_fuzzily():
     """A misspelled Minority-Interest section is still recognised + excluded."""
     from plcheck.config import CheckConfig, CategoryRule

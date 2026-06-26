@@ -317,27 +317,71 @@ class RatesGeometry:
         return self.rate_col - self.from_col + 1
 
 
-def _find_cell_ci(ws, *names):
-    """First cell whose stripped, lower-cased text equals one of ``names``."""
-    wanted = {n.strip().lower() for n in names}
-    for row in ws.iter_rows():
-        for c in row:
-            if isinstance(c.value, str) and c.value.strip().lower() in wanted:
-                return c.row, c.column
-    return None
+def _is_currency_code(v) -> bool:
+    """True for a 3-letter currency code (CHF, INR, USD …) — text-only."""
+    s = str(v).strip()
+    return len(s) == 3 and s.isalpha()
+
+
+def _norm_hdr(v) -> str:
+    return " ".join(str(v).replace(".", " ").split()).lower()
+
+
+def _is_rate_header(v) -> bool:
+    """True for an *exchange-rate* header, excluding 'From Ratio' / 'Rate Type'."""
+    n = _norm_hdr(v)
+    if not n or "ratio" in n or "type" in n:
+        return False
+    return n in ("exchange rate", "exch rate", "rate") or "exch" in n
+
+
+def _col_has_decimals(ws, r1: int, r2: int, c: int) -> bool:
+    """True if the column holds a non-integer number (a rate, not a date/ratio)."""
+    for r in range(r1, r2 + 1):
+        v = ws.cell(row=r, column=c).value
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            if float(v) != int(float(v)):
+                return True
+    return False
 
 
 def parse_rates(path: str) -> RatesGeometry:
     wb = load_workbook(path, data_only=True)
     ws = wb.active
-    # locate the currency-source ("From") and rate ("Exch. Rate") columns by
-    # header text (case/spacing-tolerant), so the table can sit on any columns.
-    from_rc = _find_cell_ci(ws, "From", "From Curr", "From Currency")
-    rate_rc = _find_cell_ci(ws, "Exch. Rate", "Exchange Rate", "Exch Rate",
-                            "Exchange rate", "Rate")
-    from_col = from_rc[1] if from_rc else column_index_from_string("C")
-    rate_col = rate_rc[1] if rate_rc else column_index_from_string("E")
-    hdr_row = from_rc[0] if from_rc else 1
+    # Locate the columns by their *data*, so it is immune to the number of
+    # columns and their header wording:
+    #   - the "From" currency column is the FIRST column whose cells are
+    #     3-letter currency codes (the "To" column, all "INR", comes later);
+    #   - the rate column is the one headed like an exchange rate, or failing
+    #     that the first column to the right holding decimal numbers (a date or
+    #     a 1/100 "From Ratio" column is all integers, so it is skipped).
+    scan_last = min(ws.max_row, 80)
+    from_col = 0
+    first_code_row = 2
+    for c in range(1, ws.max_column + 1):
+        for r in range(1, scan_last + 1):
+            if _is_currency_code(ws.cell(row=r, column=c).value):
+                from_col, first_code_row = c, r
+                break
+        if from_col:
+            break
+    if not from_col:
+        from_col, first_code_row = column_index_from_string("C"), 2
+    hdr_row = max(1, first_code_row - 1)
+
+    rate_col = 0
+    for c in range(from_col, ws.max_column + 1):
+        if _is_rate_header(ws.cell(row=hdr_row, column=c).value):
+            rate_col = c
+            break
+    if not rate_col:
+        for c in range(from_col + 1, ws.max_column + 1):
+            if _col_has_decimals(ws, hdr_row + 1, min(ws.max_row, hdr_row + 80), c):
+                rate_col = c
+                break
+    if not rate_col:
+        rate_col = from_col + 3
+
     rates: dict[str, float] = {}
     last = hdr_row
     for r in range(hdr_row + 1, ws.max_row + 1):
