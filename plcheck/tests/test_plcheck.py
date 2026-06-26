@@ -468,3 +468,20 @@ def test_row1header_report_reconciles(tmp_path):
     out = tmp_path / "Check.xlsx"
     analyze(ROW1, TB, AGG, RATES, output_path=str(out))
     assert out.is_file()
+
+
+# --------------------------------------------------------------------------
+# A report cell holding an Excel error (e.g. #REF! from a broken formula) must
+# be surfaced, not silently treated as 0.
+# --------------------------------------------------------------------------
+
+def test_report_excel_error_cell_is_flagged(tmp_path):
+    wb = openpyxl.load_workbook(REPORT)
+    ws = wb.active
+    ws["AB6"] = "#REF!"          # a GC-Total cell on a data row
+    p = tmp_path / "err.xlsx"
+    wb.save(p)
+    report = inputs.read_report(str(p))
+    assert any("#REF!" in e for e in report.errors)
+    ev = evaluate(report, TB, AGG, RATES)
+    assert any("#REF!" in e for e in ev.report_errors)

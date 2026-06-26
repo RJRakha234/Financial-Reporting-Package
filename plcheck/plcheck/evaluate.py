@@ -54,6 +54,7 @@ class Evaluation:
     unmapped_categories: list[str] = field(default_factory=list)
     missing_blocks: list[str] = field(default_factory=list)
     missing_entities: list[str] = field(default_factory=list)
+    report_errors: list[str] = field(default_factory=list)
     tolerance: float = 0.5
 
     def flagged(self) -> list[Diff]:
@@ -158,4 +159,5 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
     # "Net Profit as per Real Time TB" can't be computed and shows 0).
     ev.missing_entities = [e.code for e in report.entities
                            if e.code not in tb_entity_cols]
+    ev.report_errors = list(report.errors)
     return ev

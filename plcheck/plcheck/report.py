@@ -18,6 +18,13 @@ def to_console(ev: Evaluation) -> str:
     flagged = ev.flagged()
     np_flagged = ev.net_profit_flagged()
 
+    if ev.report_errors:
+        lines.append("⚠ The report contains Excel error cells (e.g. #REF!) - "
+                     "fix these in the report; the check treated them as 0:")
+        for msg in ev.report_errors:
+            lines.append("    " + msg)
+        lines.append("")
+
     if ev.missing_entities:
         lines.append("⚠ Report companies not found in the Real Time TB "
                      "(their 'Net Profit as per Real Time TB' is shown as 0): "
@@ -71,6 +78,7 @@ def to_dict(ev: Evaluation) -> dict:
         "unmapped_categories": ev.unmapped_categories,
         "missing_blocks": ev.missing_blocks,
         "missing_entities": ev.missing_entities,
+        "report_errors": ev.report_errors,
         "differences": [
             {
                 "kind": d.kind, "category": d.category, "account": d.account,

@@ -51,6 +51,9 @@ class ReportTable:
     entities: list[Entity]
     blocks: list[Block]
     rows: list[ReportRow]
+    # cells in the report that hold an Excel error (e.g. "#REF!"), described
+    # for the warning surfaced to the user.
+    errors: list[str] = field(default_factory=list)
 
     def block(self, label: str) -> Block | None:
         for b in self.blocks:

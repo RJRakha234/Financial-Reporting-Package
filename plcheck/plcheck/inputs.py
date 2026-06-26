@@ -95,6 +95,7 @@ def read_report(path: str) -> ReportTable:
     desc_c = column_index_from_string(C.REPORT_DESC_COL)
 
     rows: list[ReportRow] = []
+    errors: list[str] = []
     for r in range(first_data_row, ws.max_row + 1):
         category = ws.cell(row=r, column=cat_c).value
         account = ws.cell(row=r, column=acct_c).value
@@ -108,6 +109,11 @@ def read_report(path: str) -> ReportTable:
         for b in blocks:
             for sub, col in b.columns.items():
                 v = ws.cell(row=r, column=column_index_from_string(col)).value
+                if isinstance(v, str) and v.startswith("#"):
+                    errors.append(
+                        f"{str(category).strip() if category else ''} / {b.label}"
+                        f" / {sub}: {v.strip()} (cell {col}{r})")
+                    v = 0.0
                 values[(b.label, sub)] = float(v) if isinstance(v, (int, float)) else 0.0
         rows.append(
             ReportRow(
@@ -126,7 +132,7 @@ def read_report(path: str) -> ReportTable:
             "Check that the first worksheet is the P&L report and that its "
             "header rows match the expected layout.")
 
-    return ReportTable(entities=entities, blocks=blocks, rows=rows)
+    return ReportTable(entities=entities, blocks=blocks, rows=rows, errors=errors)
 
 
 def read_sheet(path: str, title: str, keep_formulas: bool = True) -> SheetData:
