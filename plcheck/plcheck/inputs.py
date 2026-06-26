@@ -26,19 +26,42 @@ def _consecutive_blocks(ws, label_row: int, first_col: str, last_col: int):
     return blocks
 
 
-def read_report(path: str) -> ReportTable:
-    """Parse the IFRS P&L report into a :class:`ReportTable`.
+def _find_block_label_row(ws, max_scan: int = 12) -> int:
+    """Row holding the column-block labels (e.g. 'LC - Balance').
 
-    The header band is read by *label*, not by fixed column letters, so extra
-    blocks / entities / accounts in a revised file are picked up automatically.
+    The header band can start on row 1 or row 2 depending on the export, so we
+    locate it rather than assume a fixed row.
+    """
+    targets = {C.normalize_label(b) for b in C.CANONICAL_BLOCKS}
+    for r in range(1, max_scan + 1):
+        for cell in ws[r]:
+            if isinstance(cell.value, str) and C.normalize_label(cell.value) in targets:
+                return r
+    return C.REPORT_BLOCK_LABEL_ROW
+
+
+def read_report(path: str) -> ReportTable:
+    """Parse the IFRS / Ind-AS P&L report into a :class:`ReportTable`.
+
+    The header band is located by *label* (and so is each block), and its rows
+    are derived from the block-label row, so reports that start the header on
+    row 1 or row 2 - with any number of blocks / entities / accounts - are all
+    handled.
     """
     wb = load_workbook(path, data_only=True)
     ws = wb.active
     last_col = ws.max_column
 
+    # --- locate the header band --------------------------------------------
+    block_row = _find_block_label_row(ws)
+    sub_row = block_row + 1
+    name_row = block_row + 2
+    ccy_row = block_row + 3
+    first_data_row = block_row + 4
+
     # --- entities (from the sub-header / name / currency rows) --------------
     block_groups = _consecutive_blocks(
-        ws, C.REPORT_BLOCK_LABEL_ROW, C.REPORT_FIRST_NUMERIC_COL, last_col
+        ws, block_row, C.REPORT_FIRST_NUMERIC_COL, last_col
     )
 
     blocks: list[Block] = []
@@ -47,7 +70,7 @@ def read_report(path: str) -> ReportTable:
     for label, cols in block_groups:
         colmap: dict[str, str] = {}
         for col in cols:
-            sub = ws.cell(row=C.REPORT_SUBHEADER_ROW, column=col).value
+            sub = ws.cell(row=sub_row, column=col).value
             if sub is None:
                 continue
             sub = str(sub).strip()
@@ -57,9 +80,9 @@ def read_report(path: str) -> ReportTable:
                 entities.append(
                     Entity(
                         code=sub,
-                        name=str(ws.cell(row=C.REPORT_ENTITY_NAME_ROW,
+                        name=str(ws.cell(row=name_row,
                                          column=col).value or "").strip(),
-                        currency=str(ws.cell(row=C.REPORT_CURRENCY_ROW,
+                        currency=str(ws.cell(row=ccy_row,
                                              column=col).value or "").strip(),
                     )
                 )
@@ -72,7 +95,7 @@ def read_report(path: str) -> ReportTable:
     desc_c = column_index_from_string(C.REPORT_DESC_COL)
 
     rows: list[ReportRow] = []
-    for r in range(C.REPORT_FIRST_DATA_ROW, ws.max_row + 1):
+    for r in range(first_data_row, ws.max_row + 1):
         category = ws.cell(row=r, column=cat_c).value
         account = ws.cell(row=r, column=acct_c).value
         desc = ws.cell(row=r, column=desc_c).value

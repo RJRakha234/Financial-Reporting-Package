@@ -441,3 +441,30 @@ def test_minority_interest_for_indas(tmp_path):
     out = tmp_path / "Check.xlsx"
     build_check_workbook(report, TB, AGG, RATES).save(out)
     assert MINORITY_SHEET in openpyxl.load_workbook(out).sheetnames
+
+
+# --------------------------------------------------------------------------
+# Header band that starts on row 1 (some exports) instead of row 2 must be
+# detected, not assumed.
+# --------------------------------------------------------------------------
+
+ROW1 = os.path.join(SAMPLE, "IFRS_INR_PL_Report_row1header.xlsx")
+
+
+def test_report_header_on_row1_is_detected():
+    report = inputs.read_report(ROW1)
+    # entity codes (not the company names) must be read correctly
+    assert [e.code for e in report.entities] == ["BALSCH", "BALSDE", "BALSDK"]
+    assert [e.currency for e in report.entities] == ["CHF", "EUR", "DKK"]
+
+
+def test_row1header_report_reconciles(tmp_path):
+    report = inputs.read_report(ROW1)
+    ev = evaluate(report, TB, AGG, RATES)
+    assert ev.unmapped_categories == [] and ev.missing_blocks == []
+    # net profit ties except the genuine depreciation rounding
+    tie = {n.entity: round(n.tie_check, 2) for n in ev.net_profit}
+    assert tie["BALSCH"] == 0.0 and tie["BALSDE"] == 0.51 and tie["BALSDK"] == 0.65
+    out = tmp_path / "Check.xlsx"
+    analyze(ROW1, TB, AGG, RATES, output_path=str(out))
+    assert out.is_file()
