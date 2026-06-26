@@ -97,20 +97,8 @@ Public Sub GenerateCheckFile()
     ' from the report (INR vs USD). GC figures use  local->INR / GC->INR.
     gGc = UCase$(Trim$(CStr(ctl.Range("B5").Value)))
 
-    ' Remember Excel's current state so we can restore it exactly afterwards.
-    Dim savedCalc As XlCalculation, savedEvents As Boolean
-    savedCalc = Application.Calculation
-    savedEvents = Application.EnableEvents
-
-    ' From here on, if anything errors we still restore Excel (see CleanFail).
-    On Error GoTo CleanFail
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
-    Application.EnableEvents = False
-    ' Switch off automatic recalculation during the build: otherwise Excel
-    ' re-runs every formula on the sheet after EACH formula we write, which is
-    ' what makes a large report take many minutes. We recalc once at the end.
-    Application.Calculation = xlCalculationManual
 
     KillSheet wb, SH_CHECK: KillSheet wb, SH_MIN
     KillSheet wb, SH_TB: KillSheet wb, SH_AGG: KillSheet wb, SH_RATES
@@ -124,27 +112,11 @@ Public Sub GenerateCheckFile()
     BuildCheck wb
     BuildMinority wb
 
-    Application.Calculate            ' recalculate the whole workbook once, now
-
-    ' restore Excel to exactly how we found it
-    Application.Calculation = savedCalc
-    Application.EnableEvents = savedEvents
     Application.DisplayAlerts = True
     Application.ScreenUpdating = True
-
     wb.Worksheets(SH_CHECK).Activate
     MsgBox "Done. Built '" & SH_CHECK & "' and '" & SH_MIN & "'. " & _
            "Use File > Save As to keep a copy.", vbInformation
-    Exit Sub
-
-CleanFail:
-    ' Something went wrong mid-run: always put Excel back to normal so you are
-    ' never left stuck in manual calculation / with screen updating off.
-    Application.Calculation = savedCalc
-    Application.EnableEvents = savedEvents
-    Application.DisplayAlerts = True
-    Application.ScreenUpdating = True
-    MsgBox "PLCheck stopped before finishing: " & Err.Description, vbExclamation
 End Sub
 
 
