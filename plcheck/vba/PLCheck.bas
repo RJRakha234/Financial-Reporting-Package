@@ -93,10 +93,9 @@ Public Sub GenerateCheckFile()
         MsgBox "Aggregate Expenses file not found (Control!B3). Leave B3 blank " & _
                "for a Nature-wise report.", vbExclamation: Exit Sub
     End If
-    ' group/consolidation currency in Control!B5 (default INR; use USD for a
-    ' USD report). GC figures use the cross-rate  local->INR / GC->INR.
+    ' group/consolidation currency: Control!B5 overrides; blank = auto-detect
+    ' from the report (INR vs USD). GC figures use  local->INR / GC->INR.
     gGc = UCase$(Trim$(CStr(ctl.Range("B5").Value)))
-    If Len(gGc) = 0 Then gGc = "INR"
 
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
@@ -160,6 +159,7 @@ Private Sub BuildCheck(wb As Workbook)
     Dim blkFirst As Object: Set blkFirst = CreateObject("Scripting.Dictionary")
     Dim blkLast As Object: Set blkLast = CreateObject("Scripting.Dictionary")
     Dim repToVal As Object: Set repToVal = CreateObject("Scripting.Dictionary")
+    Dim repCol As Object: Set repCol = CreateObject("Scripting.Dictionary") ' "blk|sub"->report col
 
     Dim ck As Worksheet
     Set ck = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
@@ -174,7 +174,7 @@ Private Sub BuildCheck(wb As Workbook)
             isEnt = (StrComp(sub_, OVERALL, vbTextCompare) <> 0)
             checked = IsCheckedBlock(blk)
             key = blk & "|" & sub_
-            valCol(key) = ckCol: repToVal(c) = ckCol
+            valCol(key) = ckCol: repToVal(c) = ckCol: repCol(key) = c
             ck.Cells(CK_BLOCK, ckCol).Value = blk
             ck.Cells(CK_SUB, ckCol).Value = sub_
             ck.Cells(CK_BLOCK, ckCol).Font.Bold = True
@@ -211,6 +211,11 @@ Private Sub BuildCheck(wb As Workbook)
     Else
         Set aggBlk = CreateObject("Scripting.Dictionary")   ' empty -> all tie to TB
     End If
+
+    ' group currency: auto-detect from the report unless Control!B5 set it
+    If Len(gGc) = 0 Then _
+        gGc = DetectGc(r, rData0, lastRRow, entOrder, ccy, repCol, _
+                       RatesDict(wb.Worksheets(SH_RATES)))
 
     ' per-entity helper cells
     Dim i As Long, code As String, dc As Long, vc As Long
@@ -583,6 +588,75 @@ Private Function CatSource(ByVal cat As String) As String
         Case "general administration", "administration cost": CatSource = "General Administration"
         Case Else: CatSource = IIf(gNoAgg, "TB", "")
     End Select
+End Function
+
+' ---- group-currency auto-detection (mirrors the Python tool) ----------------
+Private Function RatesDict(rs As Worksheet) As Object
+    Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
+    Dim fromCol As Long, rateCol As Long, hdr As Long
+    GetRatesGeom rs, fromCol, rateCol, hdr
+    Dim r As Long, lastR As Long
+    lastR = rs.UsedRange.Row + rs.UsedRange.Rows.Count - 1
+    For r = hdr + 1 To lastR
+        Dim cur As String: cur = UCase$(Trim$(CStr(rs.Cells(r, fromCol).Value)))
+        Dim v As Variant: v = rs.Cells(r, rateCol).Value
+        If Len(cur) > 0 And IsNumeric(v) Then
+            If Not d.Exists(cur) Then d(cur) = CDbl(v)
+        End If
+    Next r
+    Set RatesDict = d
+End Function
+
+' GC-Balance = (LC + Consol) * local->INR / GC->INR, so the implied GC->INR rate
+' is (LC+Consol)*localRate/GC; the currency in the table that matches it wins.
+Private Function DetectGc(r As Worksheet, rData0 As Long, lastRRow As Long, _
+                          entOrder As Collection, ccy As Object, repCol As Object, _
+                          ratesD As Object) As String
+    Dim votes As Object: Set votes = CreateObject("Scripting.Dictionary")
+    Dim i As Long, rr As Long
+    For i = 1 To entOrder.Count
+        Dim code As String: code = entOrder(i)
+        Dim cur As String: cur = UCase$(Trim$(CStr(ccy(code))))
+        If ratesD.Exists(cur) And repCol.Exists("LC - Balance|" & code) _
+           And repCol.Exists("GC - Balance|" & code) Then
+            Dim lcCol As Long, gcCol As Long, lcoCol As Long
+            lcCol = repCol("LC - Balance|" & code)
+            gcCol = repCol("GC - Balance|" & code)
+            lcoCol = 0
+            If repCol.Exists("LC - Consol|" & code) Then lcoCol = repCol("LC - Consol|" & code)
+            For rr = rData0 To lastRRow
+                Dim lc As Double, gc As Double
+                lc = Val0(r.Cells(rr, lcCol).Value)
+                If lcoCol > 0 Then lc = lc + Val0(r.Cells(rr, lcoCol).Value)
+                gc = Val0(r.Cells(rr, gcCol).Value)
+                If lc <> 0 And gc <> 0 Then
+                    Dim implied As Double: implied = lc * ratesD(cur) / gc
+                    Dim best As String, bestErr As Double, k As Variant
+                    best = "": bestErr = 1E+99
+                    For Each k In ratesD.Keys
+                        If ratesD(k) <> 0 Then
+                            Dim rel As Double: rel = Abs(ratesD(k) - implied) / ratesD(k)
+                            If rel < bestErr Then bestErr = rel: best = CStr(k)
+                        End If
+                    Next k
+                    If best <> "" And bestErr < 0.01 Then
+                        If Not votes.Exists(best) Then votes(best) = 0
+                        votes(best) = votes(best) + 1
+                    End If
+                End If
+            Next rr
+        End If
+    Next i
+    Dim win As String, winN As Long, k2 As Variant
+    win = "INR": winN = 0
+    For Each k2 In votes.Keys
+        If votes(k2) > winN Then winN = votes(k2): win = CStr(k2)
+    Next k2
+    DetectGc = win
+End Function
+
+Private Function Val0(ByVal v As Variant) As Double
+    If IsNumeric(v) Then Val0 = CDbl(v)
 End Function
 
 Private Function SheetExists(wb As Workbook, ByVal nm As String) As Boolean

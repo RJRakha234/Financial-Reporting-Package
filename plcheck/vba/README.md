@@ -33,14 +33,15 @@ the TB.
    | 2 | TB | `C:\…\Real_Time_TB.xlsx` |
    | 3 | Agg | `C:\…\Aggregate_Expenses.xlsx`  *(leave blank for Nature‑wise)* |
    | 4 | Rates | `C:\…\MA_Rates.xlsx` |
-   | 5 | GC currency | `INR`  *(or `USD` for a USD report; blank = INR)* |
+   | 5 | GC currency | *(optional — auto‑detected; only set to force `INR`/`USD`)* |
 
    **Function‑wise** reports (IFRS INR, Ind‑AS Function‑wise) need the Aggregate
    Expenses path in **B3**. For an **Ind‑AS Nature‑wise** report there is no
    Aggregate Expenses file — **leave B3 blank** and every line ties straight to
-   the Real Time TB. Put the **group/consolidation currency** in **B5** (`INR`
-   by default, or `USD` for an IFRS USD report); the GC figures then use the
-   cross‑rate `local→INR ÷ GC→INR`.
+   the Real Time TB. The **group/consolidation currency** (INR vs USD) is
+   **auto‑detected** from the report, so you can leave **B5 blank**; set it
+   (`INR`/`USD`) only if you want to force it. GC figures use the cross‑rate
+   `local→INR ÷ GC→INR`.
 
 4. Save the workbook as **macro‑enabled** (`.xlsm`).
 
