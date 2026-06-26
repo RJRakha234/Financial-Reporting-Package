@@ -282,7 +282,7 @@ Private Sub BuildCheck(wb As Workbook)
             Next i
             If StrComp(cat, "Net Profit", vbTextCompare) = 0 Then
                 If isSub Then npSub = cr Else npDet = cr
-            ElseIf StrComp(cat, "Minority Interest", vbTextCompare) = 0 Then
+            ElseIf IsMinority(cat) Then
                 If isSub Then miSub = cr Else miDet = cr
             End If
             If StrComp(acc, DIV_ACCT, vbTextCompare) = 0 Then gDivRow = cr
@@ -410,7 +410,19 @@ End Sub
 '  MINORITY INTEREST SHEET
 '============================================================================
 Private Sub BuildMinority(wb As Workbook)
-    If gNpRow = 0 Or gMiRow = 0 Then Exit Sub
+    ' Needs both the Net Profit and Minority Interest section rows. If either
+    ' wasn't found in the report, say which one, rather than silently skipping
+    ' the sheet — usually the section heading is worded differently.
+    If gNpRow = 0 Or gMiRow = 0 Then
+        Dim miss As String
+        If gNpRow = 0 Then miss = "'Net Profit'"
+        If gMiRow = 0 Then miss = miss & IIf(Len(miss) > 0, " and ", "") & "'Minority Interest'"
+        MsgBox "Minority Interest sheet skipped: could not find the " & miss & _
+               " section in the report. Check that heading in column A of the " & _
+               "PL Report (it is matched even with a small typo, but a very " & _
+               "different wording won't be recognised).", vbExclamation
+        Exit Sub
+    End If
     Dim ck As Worksheet: Set ck = wb.Worksheets(SH_CHECK)
     Dim ms As Worksheet: Set ms = wb.Worksheets.Add(After:=ck)
     ms.Name = SH_MIN
@@ -471,8 +483,14 @@ End Sub
 
 Private Sub GetRatesGeom(rs As Worksheet, ByRef fromCol As Long, ByRef rateCol As Long, ByRef hdr As Long)
     Dim f As Range, rc As Range
+    ' find the "From" (currency) and rate columns by header, case-insensitive,
+    ' so the table can sit on any columns / use slightly different wording.
     Set f = rs.Cells.Find("From", , xlValues, xlWhole, , , False)
+    If f Is Nothing Then Set f = rs.Cells.Find("From Curr", , xlValues, xlWhole, , , False)
     Set rc = rs.Cells.Find("Exch. Rate", , xlValues, xlWhole, , , False)
+    If rc Is Nothing Then Set rc = rs.Cells.Find("Exchange Rate", , xlValues, xlWhole, , , False)
+    If rc Is Nothing Then Set rc = rs.Cells.Find("Exch Rate", , xlValues, xlWhole, , , False)
+    If rc Is Nothing Then Set rc = rs.Cells.Find("Rate", , xlValues, xlWhole, , , False)
     If f Is Nothing Then fromCol = 3 Else fromCol = f.Column
     If rc Is Nothing Then rateCol = 5 Else rateCol = rc.Column
     If f Is Nothing Then hdr = 1 Else hdr = f.Row
@@ -557,6 +575,10 @@ End Function
 '  CONFIG: section name -> classification / source  (edit here if names differ)
 '============================================================================
 Private Function CatClass(ByVal cat As String) As String
+    ' Minority Interest nets out and is excluded from the P&L. Matched fuzzily
+    ' (see IsMinority) so a typo like "Mintority Interest" is still excluded,
+    ' not swept into the Nature-wise expense fallback below.
+    If IsMinority(cat) Then CatClass = "": Exit Function
     Select Case LCase$(Trim$(cat))
         Case "revenue", "income", "other income": CatClass = "Income"
         Case "net profit": CatClass = "Net Profit"
@@ -576,6 +598,9 @@ Private Function CatClass(ByVal cat As String) As String
 End Function
 
 Private Function CatSource(ByVal cat As String) As String
+    ' Minority Interest has no LC tie-out (it nets out); recognised fuzzily so a
+    ' typo isn't given a TB source by the Nature-wise fallback below.
+    If IsMinority(cat) Then CatSource = "": Exit Function
     Select Case LCase$(Trim$(cat))
         Case "revenue", "income", "other income", "provision for tax", "interest", _
              "interest exp", "interest expense", "finance cost", "finance costs", _
@@ -588,6 +613,66 @@ Private Function CatSource(ByVal cat As String) As String
         Case "general administration", "administration cost": CatSource = "General Administration"
         Case Else: CatSource = IIf(gNoAgg, "TB", "")
     End Select
+End Function
+
+' ---- fuzzy "Minority Interest" matching (mirrors the Python tool) -----------
+' True if cat names a Minority-Interest section, tolerant of small typos
+' (e.g. "Mintority Interest" / "Minority  Interest"). A 0.82 similarity accepts
+' a one/two-character slip but still rejects unrelated section names.
+Private Function IsMinority(ByVal cat As String) As Boolean
+    Dim aliases As Variant
+    aliases = Array("minority interest", "minority interests", _
+                    "non-controlling interest", "non controlling interest")
+    Dim n As String: n = NormCat(cat)
+    If Len(n) = 0 Then IsMinority = False: Exit Function
+    Dim i As Long
+    For i = LBound(aliases) To UBound(aliases)
+        If SimRatio(n, CStr(aliases(i))) >= 0.82 Then
+            IsMinority = True: Exit Function
+        End If
+    Next i
+    IsMinority = False
+End Function
+
+' whitespace-collapsed, lower-cased key for tolerant name matching
+Private Function NormCat(ByVal s As String) As String
+    Dim t As String: t = LCase$(Trim$(s))
+    Do While InStr(t, "  ") > 0
+        t = Replace(t, "  ", " ")
+    Loop
+    NormCat = t
+End Function
+
+' normalized similarity in [0,1] = 1 - Levenshtein / longer-length
+Private Function SimRatio(ByVal a As String, ByVal b As String) As Double
+    Dim m As Long: m = Len(a): If Len(b) > m Then m = Len(b)
+    If m = 0 Then SimRatio = 1: Exit Function
+    SimRatio = 1# - (Lev(a, b) / m)
+End Function
+
+' Levenshtein edit distance
+Private Function Lev(ByVal a As String, ByVal b As String) As Long
+    Dim la As Long, lb As Long: la = Len(a): lb = Len(b)
+    If la = 0 Then Lev = lb: Exit Function
+    If lb = 0 Then Lev = la: Exit Function
+    Dim d() As Long: ReDim d(0 To la, 0 To lb)
+    Dim i As Long, j As Long
+    For i = 0 To la: d(i, 0) = i: Next i
+    For j = 0 To lb: d(0, j) = j: Next j
+    For i = 1 To la
+        For j = 1 To lb
+            Dim cost As Long
+            If Mid$(a, i, 1) = Mid$(b, j, 1) Then cost = 0 Else cost = 1
+            Dim x As Long, y As Long, z As Long
+            x = d(i - 1, j) + 1
+            y = d(i, j - 1) + 1
+            z = d(i - 1, j - 1) + cost
+            If y < x Then x = y
+            If z < x Then x = z
+            d(i, j) = x
+        Next j
+    Next i
+    Lev = d(la, lb)
 End Function
 
 ' ---- group-currency auto-detection (mirrors the Python tool) ----------------

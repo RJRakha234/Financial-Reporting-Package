@@ -284,6 +284,31 @@ def test_rate_lookup_window_is_configurable():
     assert CheckConfig().rate_lookup_rows == 150
 
 
+def test_minority_interest_matched_fuzzily():
+    """A misspelled Minority-Interest section is still recognised + excluded."""
+    from plcheck.config import CheckConfig, CategoryRule
+    cfg = CheckConfig()
+    for name in ("Minority Interest", "Minority interest", "Mintority Interest",
+                 "Minority  Interest", "MINORITY INTERST",
+                 "Non-controlling Interest"):
+        assert cfg.is_minority(name), name
+        # excluded from the P&L (blank classification), never None/unmapped
+        assert cfg.effective_rule(name) == CategoryRule("", "")
+    # unrelated sections must NOT be mistaken for Minority Interest
+    for name in ("Interest", "Finance Cost", "Other Income", "Revenue"):
+        assert not cfg.is_minority(name), name
+
+
+def test_minority_typo_not_swept_into_nature_wise_expense():
+    """In Nature-wise mode the default expense rule must not swallow a typo'd
+    Minority Interest — it stays excluded from the P&L."""
+    from plcheck.config import CheckConfig, CategoryRule
+    cfg = CheckConfig()
+    cfg.default_rule = CategoryRule("Expense", "tb")     # Nature-wise fallback
+    assert cfg.effective_rule("Mintority Interest") == CategoryRule("", "")
+    assert cfg.effective_rule("Travel expenses") == CategoryRule("Expense", "tb")
+
+
 # --------------------------------------------------------------------------
 # Ind-AS Function-wise report: different section names + a Depreciation section
 # (which may contain multiple GLs).

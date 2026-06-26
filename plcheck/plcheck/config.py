@@ -25,6 +25,7 @@ to zero internally.
 
 from __future__ import annotations
 
+import difflib
 from dataclasses import dataclass, field
 
 # --- Sheet names used inside the generated check workbook -------------------
@@ -76,6 +77,15 @@ CANONICAL_BLOCKS = ("LC - Balance", "LC - Consol", "GC - Balance",
 def normalize_label(label) -> str:
     """Spacing- and case-insensitive key for matching block labels."""
     return "".join(str(label).split()).lower()
+
+
+def normalize_category(label) -> str:
+    """Whitespace-collapsed, lower-cased key for matching category names.
+
+    Keeps single spaces between words (unlike ``normalize_label``) so the
+    fuzzy comparison below sees real word boundaries.
+    """
+    return " ".join(str(label).split()).lower()
 
 
 def canonical_block_label(label) -> str:
@@ -187,20 +197,53 @@ class CheckConfig:
     # nature ties straight to the trial balance. Left None for function-wise
     # reports, where an unmapped category is reported instead of guessed.
     default_rule: CategoryRule | None = None
+    # Section names that net out and are excluded from the P&L (Minority
+    # Interest). Matched *fuzzily* (see name_match_ratio) so a small
+    # misspelling — e.g. "Mintority Interest" for "Minority Interest" — is
+    # still recognised and excluded, instead of being treated as an expense
+    # by the Nature-wise fallback or reported as an unmapped section.
+    minority_aliases: tuple = ("Minority Interest", "Minority Interests",
+                               "Non-controlling Interest",
+                               "Non controlling Interest")
+    # Minimum similarity (0..1) for a fuzzy section-name match. 0.82 accepts a
+    # one/two-character typo but still rejects unrelated section names.
+    name_match_ratio: float = 0.82
 
     def rule_for(self, category: str) -> CategoryRule | None:
         if not category:
             return None
+        target = normalize_category(category)
         for name, rule in self.category_rules.items():
-            if name.strip().lower() == category.strip().lower():
+            if normalize_category(name) == target:
                 return rule
         return None
 
+    def _fuzzy_eq(self, a: str, b: str) -> bool:
+        ratio = difflib.SequenceMatcher(
+            None, normalize_category(a), normalize_category(b)
+        ).ratio()
+        return ratio >= self.name_match_ratio
+
+    def is_minority(self, category: str) -> bool:
+        """True if ``category`` is a Minority-Interest section (typo-tolerant)."""
+        if not category or not category.strip():
+            return False
+        return any(self._fuzzy_eq(category, a) for a in self.minority_aliases)
+
     def effective_rule(self, category: str) -> CategoryRule | None:
-        """Explicit rule, or the default fallback (Nature-wise mode)."""
+        """Explicit rule, or the default fallback (Nature-wise mode).
+
+        A Minority-Interest section is recognised fuzzily and always excluded
+        from the P&L, so a typo can't let it slip into the expense fallback.
+        """
         if not category or not category.strip():
             return None
-        return self.rule_for(category) or self.default_rule
+        explicit = self.rule_for(category)
+        if explicit is not None:
+            return explicit
+        if self.is_minority(category):
+            return CategoryRule("", "")   # nets out, excluded from P&L
+        return self.default_rule
 
     def is_pl_account(self, account) -> bool:
         if account is None:

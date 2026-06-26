@@ -209,15 +209,16 @@ def _minority_sheet(ws_wb, report: ReportTable, layout: CheckLayout,
     def _norm(s):
         return str(s).strip().lower()
 
-    def section_row(name):
-        idxs = [i for i, r in enumerate(report.rows) if _norm(r.category) == name]
+    def section_row(pred):
+        idxs = [i for i, r in enumerate(report.rows) if pred(r.category)]
         if not idxs:
             return None
         subs = [i for i in idxs if report.rows[i].is_subtotal]
         return FIRST_DATA_ROW + (subs[0] if subs else idxs[0])
 
-    np_row = section_row("net profit")
-    mi_row = section_row("minority interest")
+    np_row = section_row(lambda c: _norm(c) == "net profit")
+    # fuzzy so a misspelled "Minority Interest" section still feeds the sheet
+    mi_row = section_row(cfg.is_minority)
     if np_row is None or mi_row is None:
         return
     div_idx = next((i for i, r in enumerate(report.rows)

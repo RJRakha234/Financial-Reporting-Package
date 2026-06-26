@@ -317,11 +317,24 @@ class RatesGeometry:
         return self.rate_col - self.from_col + 1
 
 
+def _find_cell_ci(ws, *names):
+    """First cell whose stripped, lower-cased text equals one of ``names``."""
+    wanted = {n.strip().lower() for n in names}
+    for row in ws.iter_rows():
+        for c in row:
+            if isinstance(c.value, str) and c.value.strip().lower() in wanted:
+                return c.row, c.column
+    return None
+
+
 def parse_rates(path: str) -> RatesGeometry:
     wb = load_workbook(path, data_only=True)
     ws = wb.active
-    from_rc = _find_cell(ws, "From")
-    rate_rc = _find_cell(ws, "Exch. Rate")
+    # locate the currency-source ("From") and rate ("Exch. Rate") columns by
+    # header text (case/spacing-tolerant), so the table can sit on any columns.
+    from_rc = _find_cell_ci(ws, "From", "From Curr", "From Currency")
+    rate_rc = _find_cell_ci(ws, "Exch. Rate", "Exchange Rate", "Exch Rate",
+                            "Exchange rate", "Rate")
     from_col = from_rc[1] if from_rc else column_index_from_string("C")
     rate_col = rate_rc[1] if rate_rc else column_index_from_string("E")
     hdr_row = from_rc[0] if from_rc else 1
