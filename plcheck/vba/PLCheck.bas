@@ -59,6 +59,7 @@ Private Const OVERALL As String = "Overall Result"
 
 ' ---- module-level handoff (must be declared before any procedure) ----------
 Private gNpRow As Long, gMiRow As Long, gDivRow As Long
+Private gNoAgg As Boolean     ' True for a Nature-wise report (no Aggregate Exp)
 
 
 '============================================================================
@@ -80,9 +81,16 @@ Public Sub GenerateCheckFile()
     pTB = Trim$(CStr(ctl.Range("B2").Value))
     pAgg = Trim$(CStr(ctl.Range("B3").Value))
     pRates = Trim$(CStr(ctl.Range("B4").Value))
-    If Dir(pReport) = "" Or Dir(pTB) = "" Or Dir(pAgg) = "" Or Dir(pRates) = "" Then
-        MsgBox "One or more input files were not found. Check Control!B1:B4.", _
+    If Dir(pReport) = "" Or Dir(pTB) = "" Or Dir(pRates) = "" Then
+        MsgBox "Report / TB / Rates file not found. Check Control!B1, B2, B4.", _
                vbExclamation: Exit Sub
+    End If
+    ' Aggregate Exp (B3) is optional: leave it blank for a Nature-wise report,
+    ' where every line ties straight to the Real Time TB.
+    gNoAgg = (Len(pAgg) = 0)
+    If Not gNoAgg And Dir(pAgg) = "" Then
+        MsgBox "Aggregate Expenses file not found (Control!B3). Leave B3 blank " & _
+               "for a Nature-wise report.", vbExclamation: Exit Sub
     End If
 
     Application.ScreenUpdating = False
@@ -93,7 +101,7 @@ Public Sub GenerateCheckFile()
     KillSheet wb, SH_REPORT
 
     ImportFirstSheet wb, pTB, SH_TB
-    ImportFirstSheet wb, pAgg, SH_AGG
+    If Not gNoAgg Then ImportFirstSheet wb, pAgg, SH_AGG
     ImportFirstSheet wb, pRates, SH_RATES
     ImportFirstSheet wb, pReport, SH_REPORT
 
@@ -192,7 +200,12 @@ Private Sub BuildCheck(wb As Workbook)
     Dim rateFrom As Long, rateCol As Long, rateHdr As Long
     GetRatesGeom wb.Worksheets(SH_RATES), rateFrom, rateCol, rateHdr
     Dim aggMF As Long, aggML As Long, aggSub As Long, aggBlk As Object
-    Set aggBlk = GetAggGeom(wb.Worksheets(SH_AGG), aggMF, aggML, aggSub)
+    Dim hasAgg As Boolean: hasAgg = SheetExists(wb, SH_AGG)
+    If hasAgg Then
+        Set aggBlk = GetAggGeom(wb.Worksheets(SH_AGG), aggMF, aggML, aggSub)
+    Else
+        Set aggBlk = CreateObject("Scripting.Dictionary")   ' empty -> all tie to TB
+    End If
 
     ' per-entity helper cells
     Dim i As Long, code As String, dc As Long, vc As Long
@@ -202,8 +215,10 @@ Private Sub BuildCheck(wb As Workbook)
             dc = diffCol("LC - Balance|" & code): vc = valCol("LC - Balance|" & code)
             ck.Cells(CK_TB, dc).Formula = "=MATCH(" & ColL(vc) & "$" & CK_SUB & _
                 ",'" & SH_TB & "'!$A$" & tbHdr & ":$" & ColL(tbLastCol) & "$" & tbHdr & ",0)"
-            ck.Cells(CK_AGG, dc).Formula = "=MATCH(" & ColL(vc) & "$" & CK_SUB & _
-                ",'" & SH_AGG & "'!$" & ColL(aggMF) & "$" & aggSub & ":$" & ColL(aggML) & "$" & aggSub & ",0)"
+            If hasAgg Then
+                ck.Cells(CK_AGG, dc).Formula = "=MATCH(" & ColL(vc) & "$" & CK_SUB & _
+                    ",'" & SH_AGG & "'!$" & ColL(aggMF) & "$" & aggSub & ":$" & ColL(aggML) & "$" & aggSub & ",0)"
+            End If
         End If
         If diffCol.Exists("GC - Balance|" & code) Then
             dc = diffCol("GC - Balance|" & code): vc = valCol("GC - Balance|" & code)
@@ -534,9 +549,14 @@ Private Function CatClass(ByVal cat As String) As String
         Case "cost of production", "sales", "general administration", _
              "software development exp", "sales & marketing cost", "administration cost", _
              "depreciation", "provision for tax", "interest", "interest exp", _
-             "interest expense", "finance cost", "finance costs", "provision for investment"
+             "interest expense", "finance cost", "finance costs", "provision for investment", _
+             "employee benefit expenses", "cost of technical sub-contractors", _
+             "travel expenses", "software packages for own use", "communication expenses", _
+             "professional charges", "others"
             CatClass = "Expense"
-        Case Else: CatClass = "?"
+        ' Nature-wise report (no Aggregate Exp): an unrecognised line is an
+        ' expense tied to the TB. Function-wise: report it as unmapped.
+        Case Else: CatClass = IIf(gNoAgg, "Expense", "?")
     End Select
 End Function
 
@@ -544,12 +564,23 @@ Private Function CatSource(ByVal cat As String) As String
     Select Case LCase$(Trim$(cat))
         Case "revenue", "income", "other income", "provision for tax", "interest", _
              "interest exp", "interest expense", "finance cost", "finance costs", _
-             "provision for investment", "depreciation": CatSource = "TB"
+             "provision for investment", "depreciation", _
+             "employee benefit expenses", "cost of technical sub-contractors", _
+             "travel expenses", "software packages for own use", "communication expenses", _
+             "professional charges", "others": CatSource = "TB"
         Case "cost of production", "software development exp": CatSource = "Cost of revenue"
         Case "sales", "sales & marketing cost": CatSource = "Sales & Marketing"
         Case "general administration", "administration cost": CatSource = "General Administration"
-        Case Else: CatSource = ""
+        Case Else: CatSource = IIf(gNoAgg, "TB", "")
     End Select
+End Function
+
+Private Function SheetExists(wb As Workbook, ByVal nm As String) As Boolean
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = wb.Worksheets(nm)
+    On Error GoTo 0
+    SheetExists = Not ws Is Nothing
 End Function
 
 Private Function IsCheckedBlock(ByVal blk As String) As Boolean

@@ -13,9 +13,11 @@ It builds the same two outputs as the Python tool:
 * a **Minority Interest** sheet — Net Profit (GC‑Bal), Dividend (GL 332010),
   Profit before Dividend, Minority total (GC‑Total) and Current Period %.
 
-It handles both the **IFRS INR** and **Ind‑AS Function‑wise** reports (the
-section names for both are in the config), a varying number of GLs / companies,
-text‑formatted account numbers, and companies missing from the TB.
+It handles **IFRS INR**, **Ind‑AS Function‑wise** and **Ind‑AS Nature‑wise**
+reports from the one module (Nature‑wise = no Aggregate Exp; just leave the Agg
+path blank), a varying number of GLs / companies, text‑formatted account
+numbers, header bands that start on row 1 or row 2, and companies missing from
+the TB.
 
 ## One‑time setup
 
@@ -23,14 +25,19 @@ text‑formatted account numbers, and companies missing from the TB.
 2. **File ▸ Import File…** and choose `PLCheck.bas`
    (or **Insert ▸ Module** and paste the whole `PLCheck.bas` text in).
 3. Close the editor. In the workbook, add a sheet named **`Control`** and put
-   the four input file paths in column B:
+   the input file paths in column B:
 
    | | A | B |
    |--|--|--|
-   | 1 | Report | `C:\…\IFRS or INDAS PL Report.xlsx` |
+   | 1 | Report | `C:\…\IFRS / INDAS PL Report.xlsx` |
    | 2 | TB | `C:\…\Real_Time_TB.xlsx` |
-   | 3 | Agg | `C:\…\Aggregate_Expenses.xlsx` |
+   | 3 | Agg | `C:\…\Aggregate_Expenses.xlsx`  *(leave blank for Nature‑wise)* |
    | 4 | Rates | `C:\…\MA_Rates.xlsx` |
+
+   **Function‑wise** reports (IFRS INR, Ind‑AS Function‑wise) need the Aggregate
+   Expenses path in **B3**. For an **Ind‑AS Nature‑wise** report there is no
+   Aggregate Expenses file — **leave B3 blank** and every line ties straight to
+   the Real Time TB.
 
 4. Save the workbook as **macro‑enabled** (`.xlsm`).
 
