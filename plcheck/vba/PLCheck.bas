@@ -354,6 +354,34 @@ Private Sub BuildCheck(wb As Workbook)
             "=SUM(" & ColL(CLng(k)) & CK_DATA0 & ":" & ColL(CLng(k)) & lastData & ")"
     Next k
 
+    ' LC - Consol overall tie-status banner: counts the LC-Consol diff cells
+    ' that don't tie (a count, not a sum, so a +x and -x can't cancel and hide a
+    ' problem). One cell tells you whether EVERY consol figure is tracker-backed.
+    If gHasConsol Then
+        Dim lcCount As String, nn As Long, lcc As String
+        lcCount = ""
+        For nn = 1 To entOrder.Count
+            If diffCol.Exists("LC - Consol|" & entOrder(nn)) Then
+                lcc = ColL(diffCol("LC - Consol|" & entOrder(nn)))
+                If Len(lcCount) > 0 Then lcCount = lcCount & "+"
+                lcCount = lcCount & "SUMPRODUCT(--(ABS(" & lcc & CK_DATA0 & ":" & _
+                          lcc & lastData & ")>" & TOL & "))"
+            End If
+        Next nn
+        If Len(lcCount) > 0 Then
+            ck.Range("B1").Formula = "=" & lcCount
+            ck.Range("A1").Formula = "=IF(B1=0,""LC - Consol: ALL entries tie""," & _
+                """LC - Consol: ""&B1&"" difference(s) NOT tied - see red"")"
+            ck.Range("A1").Font.Bold = True
+            With ck.Range("A1:B1")
+                .FormatConditions.Delete
+                .FormatConditions.Add Type:=xlExpression, Formula1:="=$B$1>0"
+                .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+                .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+            End With
+        End If
+    End If
+
     BuildNetProfit ck, entOrder, valCol, diffCol, lastData, tbAcct, tbHdr, _
                    tbFirst, tbLast, wb.Worksheets(SH_TB)
 

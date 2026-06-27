@@ -189,6 +189,26 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     for d in sorted(diff_cols):
         ws[f"{d}{ROW_SUMDIFF}"] = f"=SUM({d}{FIRST_DATA_ROW}:{d}{last_data_row})"
 
+    # ---- LC - Consol overall tie-status banner ---------------------------
+    # Counts the LC-Consol diff cells that don't tie (|diff| > tolerance), so a
+    # single cell tells you whether EVERY consol figure is backed by the
+    # tracker. A count (not a sum) is used so a +x and -x can't cancel and hide.
+    if consol_ref is not None:
+        lc_cols = [layout.diff_of[(C.CHECK_LC_CONSOL, e.code)]
+                   for e in report.entities
+                   if (C.CHECK_LC_CONSOL, e.code) in layout.diff_of]
+        if lc_cols:
+            count = "+".join(
+                f"SUMPRODUCT(--(ABS({c}{FIRST_DATA_ROW}:{c}{last_data_row})"
+                f">{cfg.tolerance}))" for c in lc_cols)
+            ws["B1"] = f"={count}"          # 0 = everything ties
+            ws["A1"] = ('=IF(B1=0,"LC - Consol: ALL entries tie",'
+                        '"LC - Consol: "&B1&" difference(s) NOT tied - see red")')
+            ws["A1"].font = HDR_FONT
+            ws.conditional_formatting.add(
+                "A1:B1", FormulaRule(formula=["$B$1>0"],
+                                     fill=RED_FILL, font=RED_FONT))
+
     # ---- net-profit reconciliation block ---------------------------------
     _net_profit_block(ws, report, layout, tb, last_data_row, cfg)
 

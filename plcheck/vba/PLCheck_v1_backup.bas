@@ -336,7 +336,7 @@ Private Sub BuildCheck(wb As Workbook)
             Next c
             For i = 1 To entOrder.Count
                 WriteDiffs ck, cr, entOrder(i), isSub, cat, valCol, diffCol, diffCols, _
-                           tbHdr, tbLastCol, tbLast, aggBlk, fxLast, consF, consL
+                           tbHdr, tbLastCol, tbLast, aggBlk, fxLast, consF, consL, IsPlAcct(acc)
             Next i
             If StrComp(cat, "Net Profit", vbTextCompare) = 0 Then
                 If isSub Then npSub = cr Else npDet = cr
@@ -381,7 +381,7 @@ End Sub
 Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boolean, _
                        cat As String, valCol As Object, diffCol As Object, diffCols As Object, _
                        tbHdr As Long, tbLastCol As Long, tbLast As Long, aggBlk As Object, _
-                       fxLast As String, consF As String, consL As String)
+                       fxLast As String, consF As String, consL As String, isPl As Boolean)
     Dim dc As Long, vc As Long, src As String, fld As Variant, vL As String
 
     If diffCol.Exists("LC - Balance|" & code) Then
@@ -402,12 +402,16 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
         End If
     End If
 
-    ' LC - Consol tie-out to the entry tracker (sum this company+account's
-    ' latest-month entries; comp-code & account = the tracker "Concatenate" key)
+    ' LC - Consol tie-out to the entry tracker. For this company+account
+    ' (comp-code & account = the tracker "Concatenate" key) take the latest
+    ' month's NET posting = Debit - Credit: the Dr leg (charge) is in the left
+    ' column, the "To ..." Cr leg in the right; the report carries credit legs
+    ' as negative, so the credit column is SUBTRACTED (adding it would double
+    ' the difference).
     If diffCol.Exists("LC - Consol|" & code) Then
         dc = diffCol("LC - Consol|" & code): vc = valCol("LC - Consol|" & code)
         diffCols(dc) = 1: vL = ColL(vc)
-        If Not isSub Then
+        If Not isSub And isPl Then    ' only P&L-series accounts (1/2/3) hit the P&L
             Dim ccR As String, crit As String, s1 As String, s2 As String
             ccR = "'" & SH_CONSOL & "'!$" & ColL(gCcConcat) & "$" & gCcFirst & _
                   ":$" & ColL(gCcConcat) & "$" & gCcLast
@@ -415,7 +419,7 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
             s1 = "SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
                  ColL(gCcVal1) & "$" & gCcFirst & ":$" & ColL(gCcVal1) & "$" & gCcLast & ")"
             If gCcVal2 > 0 Then
-                s2 = "+SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
+                s2 = "-SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
                      ColL(gCcVal2) & "$" & gCcFirst & ":$" & ColL(gCcVal2) & "$" & gCcLast & ")"
             Else
                 s2 = ""
@@ -961,6 +965,16 @@ Private Function CanonicalBlock(ByVal label As String) As String
         Case "gc-total": CanonicalBlock = "GC - Total"
         Case Else: CanonicalBlock = Trim$(label)
     End Select
+End Function
+
+' True if the GL account is a P&L-series account (leading digit 1/2/3).
+Private Function IsPlAcct(ByVal acc As String) As Boolean
+    Dim s As String: s = Trim$(acc)
+    Do While Len(s) > 0 And Left$(s, 1) = "-"
+        s = Mid$(s, 2)
+    Loop
+    If Len(s) = 0 Then IsPlAcct = False: Exit Function
+    IsPlAcct = (InStr(PL_DIGITS, Left$(s, 1)) > 0)
 End Function
 
 Private Function IsCheckedBlock(ByVal blk As String) As Boolean
