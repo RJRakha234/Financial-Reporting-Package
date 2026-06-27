@@ -12,6 +12,9 @@ It builds the same two outputs as the Python tool:
   highlighted red;
 * a **Minority Interest** sheet — Net Profit (GC‑Bal), Dividend (GL 332010),
   Profit before Dividend, Minority total (GC‑Total) and Current Period %;
+* a **LC‑Consol Check** sheet (only when a tracker is supplied) — per company +
+  P&L account, the report's LC‑Consol value vs the tracker's net posting
+  (Debit − Credit), with a tie‑status banner and red‑highlighted differences;
 * an **Entity Coverage** sheet — the company codes in each input (PL report,
   Real Time TB, Aggregate Exp) side by side, plus a reconciliation flagging any
   code present in one source but missing from another (e.g. a TB‑only typo).
@@ -47,8 +50,8 @@ the TB.
    (`INR`/`USD`) only if you want to force it. GC figures use the cross‑rate
    `local→INR ÷ GC→INR`.
 
-   The **consolidation‑entry tracker** (**B6**) is optional. When given, a new
-   **LC – Consol** difference column ties every consolidation figure in the
+   The **consolidation‑entry tracker** (**B6**) is optional. When given, a
+   dedicated **LC‑Consol Check** sheet ties every consolidation figure in the
    report back to the tracked manual entries. For each company + GL account
    (matched on the tracker's **Concatenate** = comp‑code + account) it takes
    the **latest month's** net posting = **Debit − Credit** (the Dr "charge" leg

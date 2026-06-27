@@ -394,17 +394,22 @@ def test_consol_check_builds_formula_and_embeds_sheet(tmp_path):
     build_check_workbook(report, TB, AGG, RATES).save(plain)
     pw = openpyxl.load_workbook(plain)
     assert "Consol Entries" not in pw.sheetnames
-    # with a tracker: sheet embedded + a SUMIF tie-out formula present
+    # with a tracker: tracker embedded + a dedicated LC-Consol Check sheet that
+    # carries the SUMIF tie-out formulas (not the Check tab)
     out = tmp_path / "Check.xlsx"
     build_check_workbook(report, TB, AGG, RATES,
                          consol_path=str(p)).save(out)
     wb = openpyxl.load_workbook(out)
     assert "Consol Entries" in wb.sheetnames
-    ws = wb["Check"]
+    assert "LC-Consol Check" in wb.sheetnames
+    ws = wb["LC-Consol Check"]
     formulas = [c.value for row in ws.iter_rows() for c in row
                 if isinstance(c.value, str) and "Consol Entries" in c.value
                 and "SUMIF" in c.value]
     assert formulas and formulas[0].count("SUMIF") == 2   # the Dr + Cr columns
+    # the Check tab no longer carries a consol diff
+    assert not [c.value for row in wb["Check"].iter_rows() for c in row
+                if isinstance(c.value, str) and "Consol Entries" in c.value]
 
 
 def test_rates_columns_found_by_currency_data(tmp_path):

@@ -46,9 +46,9 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
                          cfg: C.CheckConfig | None = None,
                          consol_path: str | None = None) -> Workbook:
     cfg = cfg or C.CheckConfig()
-    # LC - Consol is reconciled to the entry tracker only when one is supplied.
-    extra_checked = {C.CHECK_LC_CONSOL} if consol_path else set()
-    layout = plan(report, extra_checked=extra_checked)
+    # LC - Consol is reconciled on its own dedicated sheet (not the Check tab),
+    # so the Check tab keeps only the LC-Consol *value* columns (needed for FX).
+    layout = plan(report)
     codes = [e.code for e in report.entities]
     currency = {e.code: e.currency for e in report.entities}
 
@@ -183,38 +183,15 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
                 continue
             d, v = info.diff_col, info.value_col
             diff_cols.add(d)
-            fcode = (cfg.functional_code(row.category)
-                     if consol and consol.func_col else None)
             f = _diff_formula(info, r, d, v, rule, agg, tb, layout,
                               fx_last, consol_first, consol_last,
-                              row.is_subtotal, consol_ref,
-                              cfg.is_pl_account(row.account), fcode)
+                              row.is_subtotal)
             if f:
                 ws[f"{d}{r}"] = f
 
     # ---- sum-of-differences row ------------------------------------------
     for d in sorted(diff_cols):
         ws[f"{d}{ROW_SUMDIFF}"] = f"=SUM({d}{FIRST_DATA_ROW}:{d}{last_data_row})"
-
-    # ---- LC - Consol overall tie-status banner ---------------------------
-    # Counts the LC-Consol diff cells that don't tie (|diff| > tolerance), so a
-    # single cell tells you whether EVERY consol figure is backed by the
-    # tracker. A count (not a sum) is used so a +x and -x can't cancel and hide.
-    if consol_ref is not None:
-        lc_cols = [layout.diff_of[(C.CHECK_LC_CONSOL, e.code)]
-                   for e in report.entities
-                   if (C.CHECK_LC_CONSOL, e.code) in layout.diff_of]
-        if lc_cols:
-            count = "+".join(
-                f"SUMPRODUCT(--(ABS({c}{FIRST_DATA_ROW}:{c}{last_data_row})"
-                f">{cfg.tolerance}))" for c in lc_cols)
-            ws["B1"] = f"={count}"          # 0 = everything ties
-            ws["A1"] = ('=IF(B1=0,"LC - Consol: ALL entries tie",'
-                        '"LC - Consol: "&B1&" difference(s) NOT tied - see red")')
-            ws["A1"].font = HDR_FONT
-            ws.conditional_formatting.add(
-                "A1:B1", FormulaRule(formula=["$B$1>0"],
-                                     fill=RED_FILL, font=RED_FONT))
 
     # ---- net-profit reconciliation block ---------------------------------
     _net_profit_block(ws, report, layout, tb, last_data_row, cfg)
@@ -225,6 +202,10 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
 
     # ---- derived Minority Interest sheet ---------------------------------
     _minority_sheet(wb, report, layout, cfg)
+
+    # ---- dedicated LC - Consol check sheet (tie-out to the tracker) ------
+    if consol_ref is not None:
+        _lc_consol_sheet(wb, report, layout, consol_ref, cfg)
 
     # ---- entity (company-code) coverage across the inputs ----------------
     _entity_coverage_sheet(wb, report, tb_path, agg_path)
@@ -305,36 +286,27 @@ def _minority_sheet(ws_wb, report: ReportTable, layout: CheckLayout,
         ws.column_dimensions[col].width = w
 
 
+def _consol_sum(consol_ref, key, fcode) -> str:
+    """The tracker net posting (Debit - Credit) for one company+account, as an
+    Excel expression. Matches account-only (nature-wise) or account + Functional
+    Group (function-wise split, via SUMIFS)."""
+    concat_rng, val_rngs, func_rng = consol_ref
+    if fcode and func_rng:
+        def _s(vr):
+            return f'SUMIFS({vr},{concat_rng},{key},{func_rng},"{fcode}")'
+    else:
+        def _s(vr):
+            return f"SUMIF({concat_rng},{key},{vr})"
+    terms = _s(val_rngs[0])
+    if len(val_rngs) > 1:
+        terms += f"-{_s(val_rngs[1])}"
+    return terms
+
+
 def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
                   fx_last, consol_first, consol_last,
-                  is_subtotal=False, consol_ref=None, is_pl=True,
-                  fcode=None) -> str | None:
+                  is_subtotal=False) -> str | None:
     """The difference formula for one cell, by block type."""
-    if info.block == C.CHECK_LC_CONSOL:
-        # tie LC - Consol back to the manual entry tracker. For this
-        # company+account (comp-code & account = the tracker's "Concatenate"
-        # key) take the latest month's NET posting = Debit - Credit: the Dr
-        # leg (charge) is in the left column, the "To ..." Cr leg in the right;
-        # the report carries credit legs as negative, so the credit column is
-        # subtracted. For a function-wise row the same GL is split across
-        # COS/S&M/G&A, so also match the Functional Group code (SUMIFS); a
-        # nature-wise row has no code and matches account-only (the total).
-        # Only P&L-series accounts (1/2/3) hit the P&L; subtotals have no acct.
-        if is_subtotal or consol_ref is None or not is_pl:
-            return None
-        concat_rng, val_rngs, func_rng = consol_ref
-        key = f"{v}${ROW_SUBHEADER}&$C{r}"
-        if fcode and func_rng:
-            def _s(vr):
-                return f'SUMIFS({vr},{concat_rng},{key},{func_rng},"{fcode}")'
-        else:
-            def _s(vr):
-                return f"SUMIF({concat_rng},{key},{vr})"
-        terms = _s(val_rngs[0])
-        if len(val_rngs) > 1:
-            terms += f"-{_s(val_rngs[1])}"
-        return f"={terms}-{v}{r}"
-
     if info.block == C.CHECK_LC_BALANCE:
         # subtotal rows have no GL account to look up — no LC tie-out
         if is_subtotal or rule is None or not rule.source:
@@ -431,6 +403,78 @@ def _entity_coverage_sheet(wbk, report: ReportTable, tb_path, agg_path) -> None:
     for col, w in {"A": 16, "B": 16, "C": 16}.items():
         ws.column_dimensions[col].width = w
     ws.column_dimensions[get_column_letter(note_col)].width = 30
+
+
+LC_CONSOL_SHEET = "LC-Consol Check"
+
+
+def _lc_consol_sheet(wbk, report: ReportTable, layout: CheckLayout,
+                     consol_ref, cfg: C.CheckConfig) -> None:
+    """Dedicated LC - Consol tie-out sheet: per company + P&L account, the
+    report's LC-Consol value vs the tracker's net posting (Debit - Credit),
+    with a tie-status banner and red highlighting. Function-wise rows match
+    their COS/S&M/G&A slice; nature-wise rows match the account total."""
+    ents = report.entities
+    ws = wbk.create_sheet(LC_CONSOL_SHEET)
+    tol = cfg.tolerance
+
+    # header band
+    ws["A2"] = "Section"; ws["B2"] = "GLACCOUNT"; ws["C2"] = "GL Description"
+    for cell in ("A2", "B2", "C2"):
+        ws[cell].font = HDR_FONT
+    vcol, dcol = {}, {}                      # entity -> this sheet's Value/Diff col
+    for j, e in enumerate(ents):
+        vc = get_column_letter(4 + 2 * j)
+        dc = get_column_letter(5 + 2 * j)
+        vcol[e.code], dcol[e.code] = vc, dc
+        ws[f"{vc}1"] = e.code; ws[f"{vc}1"].font = HDR_FONT
+        ws[f"{vc}2"] = "LC-Consol value"; ws[f"{dc}2"] = "Diff"
+        ws[f"{vc}2"].font = HDR_FONT; ws[f"{dc}2"].font = HDR_FONT
+
+    first = 3
+    k = first
+    for i, row in enumerate(report.rows):
+        if row.is_subtotal or row.account is None or not cfg.is_pl_account(row.account):
+            continue
+        check_row = FIRST_DATA_ROW + i
+        fcode = cfg.functional_code(row.category)
+        ws[f"A{k}"] = row.category or None
+        ws[f"B{k}"] = row.account
+        ws[f"C{k}"] = row.description
+        for e in ents:
+            vc, dc = vcol[e.code], dcol[e.code]
+            lc_valcol = layout.value_col(C.CHECK_LC_CONSOL, e.code)
+            ws[f"{vc}{k}"] = f"='{C.SHEET_CHECK}'!{lc_valcol}{check_row}"
+            key = f'"{e.code}"&$B{k}'
+            ws[f"{dc}{k}"] = f"={_consol_sum(consol_ref, key, fcode)}-{vc}{k}"
+        k += 1
+    last = k - 1
+
+    # red-highlight any non-tying Diff cell
+    for e in ents:
+        dc = dcol[e.code]
+        if last >= first:
+            ws.conditional_formatting.add(
+                f"{dc}{first}:{dc}{last}",
+                FormulaRule(formula=[f"ABS({dc}{first})>{tol}"],
+                            fill=RED_FILL, font=RED_FONT))
+
+    # overall tie-status banner (count of non-tying cells, so signs can't cancel)
+    if last >= first:
+        count = "+".join(
+            f"SUMPRODUCT(--(ABS({dcol[e.code]}{first}:{dcol[e.code]}{last})>{tol}))"
+            for e in ents)
+        ws["B1"] = f"={count}"
+        ws["A1"] = ('=IF(B1=0,"LC - Consol: ALL entries tie",'
+                    '"LC - Consol: "&B1&" difference(s) NOT tied - see red")')
+        ws["A1"].font = HDR_FONT
+        ws.conditional_formatting.add(
+            "A1:B1", FormulaRule(formula=["$B$1>0"], fill=RED_FILL, font=RED_FONT))
+
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 30
+    ws.freeze_panes = "D3"
 
 
 def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
