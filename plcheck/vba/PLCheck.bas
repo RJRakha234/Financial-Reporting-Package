@@ -550,6 +550,7 @@ End Sub
 Private Sub BuildLcConsolCheck(wb As Workbook)
     If Not gHasConsol Then Exit Sub
     Dim ck As Worksheet: Set ck = wb.Worksheets(SH_CHECK)
+    Dim cs As Worksheet: Set cs = wb.Worksheets(SH_CONSOL)
 
     ' LC-Consol value columns on the Check tab (block row CK_BLOCK, code CK_SUB)
     Dim ents As Collection: Set ents = New Collection
@@ -570,19 +571,10 @@ Private Sub BuildLcConsolCheck(wb As Workbook)
     Dim ws As Worksheet
     Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
     ws.Name = SH_LCCONSOL
-    ws.Cells(2, 1).Value = "Section": ws.Cells(2, 2).Value = "GLACCOUNT"
-    ws.Cells(2, 3).Value = "GL Description": ws.Range("A2:C2").Font.Bold = True
-
-    Dim vCol As Object: Set vCol = CreateObject("Scripting.Dictionary")
-    Dim dCol As Object: Set dCol = CreateObject("Scripting.Dictionary")
-    Dim j As Long, vC As Long, dC As Long
-    For j = 1 To ents.Count
-        vC = 4 + 2 * (j - 1): dC = vC + 1
-        vCol(ents(j)) = vC: dCol(ents(j)) = dC
-        ws.Cells(1, vC).Value = ents(j): ws.Cells(1, vC).Font.Bold = True
-        ws.Cells(2, vC).Value = "LC-Consol value": ws.Cells(2, dC).Value = "Diff"
-        ws.Cells(2, vC).Font.Bold = True: ws.Cells(2, dC).Font.Bold = True
-    Next j
+    ws.Cells(2, 1).Value = "Company": ws.Cells(2, 2).Value = "Section"
+    ws.Cells(2, 3).Value = "GLACCOUNT": ws.Cells(2, 4).Value = "GL Description"
+    ws.Cells(2, 5).Value = "LC-Consol value": ws.Cells(2, 6).Value = "Diff"
+    ws.Range("A2:F2").Font.Bold = True
 
     Dim ccR As String
     ccR = "'" & SH_CONSOL & "'!$" & ColL(gCcConcat) & "$" & gCcFirst & _
@@ -602,38 +594,43 @@ Private Sub BuildLcConsolCheck(wb As Workbook)
             Else
                 fR = ""
             End If
-            ws.Cells(k, 1).Value = cat
-            ws.Cells(k, 2).Value = ck.Cells(r, 3).Value
-            ws.Cells(k, 3).Value = ck.Cells(r, 4).Value
-            For j = 1 To ents.Count
-                Dim cd2 As String: cd2 = ents(j)
-                Dim crit As String, s1 As String, s2 As String
-                ws.Cells(k, vCol(cd2)).Formula = "='" & SH_CHECK & "'!" & ColL(lcCol(cd2)) & r
-                crit = """" & cd2 & """&$B" & k
-                s1 = ConsolSum(ccR, crit, fR, fcode, gCcVal1)
-                If gCcVal2 > 0 Then s2 = "-" & ConsolSum(ccR, crit, fR, fcode, gCcVal2) Else s2 = ""
-                ws.Cells(k, dCol(cd2)).Formula = "=" & s1 & s2 & "-" & ColL(vCol(cd2)) & k
-            Next j
-            k = k + 1
+            Dim jj As Long
+            For jj = 1 To ents.Count
+                Dim cd2 As String: cd2 = ents(jj)
+                Dim repVal As Double: repVal = Val0(ck.Cells(r, lcCol(cd2)).Value)
+                Dim trk As Double: trk = ConsolNet(cs, cd2, acc, fcode)
+                ' show only lines that have a balance on either side
+                If Abs(repVal) > TOL Or Abs(trk) > TOL Then
+                    Dim crit As String, s1 As String, s2 As String
+                    ws.Cells(k, 1).Value = cd2
+                    ws.Cells(k, 2).Value = cat
+                    ws.Cells(k, 3).Value = ck.Cells(r, 3).Value
+                    ws.Cells(k, 4).Value = ck.Cells(r, 4).Value
+                    ws.Cells(k, 5).Formula = "='" & SH_CHECK & "'!" & ColL(lcCol(cd2)) & r
+                    crit = """" & cd2 & """&$C" & k
+                    s1 = ConsolSum(ccR, crit, fR, fcode, gCcVal1)
+                    If gCcVal2 > 0 Then s2 = "-" & ConsolSum(ccR, crit, fR, fcode, gCcVal2) Else s2 = ""
+                    ws.Cells(k, 6).Formula = "=" & s1 & s2 & "-E" & k
+                    k = k + 1
+                End If
+            Next jj
         End If
     Next r
     Dim lastK As Long: lastK = k - 1
-    If lastK < 3 Then Exit Sub
 
-    Dim lcCount As String, dL As String
-    lcCount = ""
-    For j = 1 To ents.Count
-        dL = ColL(dCol(ents(j)))
-        With ws.Range(dL & "3:" & dL & lastK)
-            .FormatConditions.Delete
-            .FormatConditions.Add Type:=xlExpression, Formula1:="=ABS(" & dL & "3)>" & TOL
-            .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
-            .FormatConditions(1).Font.Color = RGB(156, 0, 6)
-        End With
-        If Len(lcCount) > 0 Then lcCount = lcCount & "+"
-        lcCount = lcCount & "SUMPRODUCT(--(ABS(" & dL & "3:" & dL & lastK & ")>" & TOL & "))"
-    Next j
-    ws.Range("B1").Formula = "=" & lcCount
+    If lastK < 3 Then
+        ws.Cells(1, 1).Value = "LC - Consol: no consolidation entries with a balance"
+        ws.Cells(1, 1).Font.Bold = True
+        Exit Sub
+    End If
+
+    With ws.Range("F3:F" & lastK)
+        .FormatConditions.Delete
+        .FormatConditions.Add Type:=xlExpression, Formula1:="=ABS(F3)>" & TOL
+        .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+        .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+    End With
+    ws.Range("B1").Formula = "=SUMPRODUCT(--(ABS(F3:F" & lastK & ")>" & TOL & "))"
     ws.Range("A1").Formula = "=IF(B1=0,""LC - Consol: ALL entries tie""," & _
         """LC - Consol: ""&B1&"" difference(s) NOT tied - see red"")"
     ws.Range("A1").Font.Bold = True
@@ -643,8 +640,30 @@ Private Sub BuildLcConsolCheck(wb As Workbook)
         .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
         .FormatConditions(1).Font.Color = RGB(156, 0, 6)
     End With
-    ws.Columns("A").ColumnWidth = 22: ws.Columns("C").ColumnWidth = 30
+    ws.Columns("B").ColumnWidth = 22: ws.Columns("D").ColumnWidth = 30
 End Sub
+
+' Tracker net posting (Debit - Credit) for one company+account, computed at
+' build time so we can list only lines that actually have a balance. Matches the
+' Functional Group when a code is given (function-wise split).
+Private Function ConsolNet(cs As Worksheet, ByVal code As String, _
+                           ByVal acct As String, ByVal fcode As String) As Double
+    Dim want As String: want = UCase$(Trim$(code) & Trim$(acct))
+    Dim r As Long, tot As Double: tot = 0
+    For r = gCcFirst To gCcLast
+        If UCase$(Trim$(CStr(cs.Cells(r, gCcConcat).Value))) = want Then
+            Dim ok As Boolean: ok = True
+            If Len(fcode) > 0 And gCcFunc > 0 Then
+                ok = (StrComp(Trim$(CStr(cs.Cells(r, gCcFunc).Value)), fcode, vbTextCompare) = 0)
+            End If
+            If ok Then
+                tot = tot + Val0(cs.Cells(r, gCcVal1).Value)
+                If gCcVal2 > 0 Then tot = tot - Val0(cs.Cells(r, gCcVal2).Value)
+            End If
+        End If
+    Next r
+    ConsolNet = tot
+End Function
 
 
 '============================================================================

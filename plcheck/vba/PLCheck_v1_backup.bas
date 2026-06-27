@@ -1248,12 +1248,13 @@ End Function
 ' label like "Consolidation unit" (has a space) is rejected.
 Private Function IsEntityCode(ByVal v As String) As Boolean
     Dim s As String: s = Trim$(v)
+    ' known label words, tolerant of case AND spacing (spaces removed first)
+    Select Case LCase$(Replace(s, " ", ""))
+        Case "company", "overallresult", "groupaccountnumber", _
+             "consolidationunit", "group", "total", "result", "unit": Exit Function
+    End Select
     If Len(s) < 2 Or Len(s) > 15 Then Exit Function
     If InStr(s, " ") > 0 Then Exit Function
-    Select Case LCase$(s)
-        Case "company", "overall result", "group account number", _
-             "consolidation unit", "group", "total", "result", "unit": Exit Function
-    End Select
     Dim i As Long, ch As Long
     For i = 1 To Len(s)
         ch = Asc(UCase$(Mid$(s, i, 1)))

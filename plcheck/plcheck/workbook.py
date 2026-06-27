@@ -205,7 +205,7 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
 
     # ---- dedicated LC - Consol check sheet (tie-out to the tracker) ------
     if consol_ref is not None:
-        _lc_consol_sheet(wb, report, layout, consol_ref, cfg)
+        _lc_consol_sheet(wb, report, layout, consol, consol_ref, cfg)
 
     # ---- entity (company-code) coverage across the inputs ----------------
     _entity_coverage_sheet(wb, report, tb_path, agg_path)
@@ -411,27 +411,19 @@ LC_CONSOL_SHEET = "LC-Consol Check"
 
 
 def _lc_consol_sheet(wbk, report: ReportTable, layout: CheckLayout,
-                     consol_ref, cfg: C.CheckConfig) -> None:
-    """Dedicated LC - Consol tie-out sheet: per company + P&L account, the
-    report's LC-Consol value vs the tracker's net posting (Debit - Credit),
-    with a tie-status banner and red highlighting. Function-wise rows match
-    their COS/S&M/G&A slice; nature-wise rows match the account total."""
-    ents = report.entities
+                     consol, consol_ref, cfg: C.CheckConfig) -> None:
+    """Dedicated LC - Consol tie-out sheet. One row per company + P&L account
+    *that has a balance* (a report LC-Consol figure or a tracker entry), so only
+    the lines with consolidation activity are listed - not every P&L account.
+    Each row shows the report value vs the tracker net (Debit - Credit;
+    function-wise rows match their COS/S&M/G&A slice), with a tie banner + red."""
     ws = wbk.create_sheet(LC_CONSOL_SHEET)
     tol = cfg.tolerance
 
-    # header band
-    ws["A2"] = "Section"; ws["B2"] = "GLACCOUNT"; ws["C2"] = "GL Description"
-    for cell in ("A2", "B2", "C2"):
-        ws[cell].font = HDR_FONT
-    vcol, dcol = {}, {}                      # entity -> this sheet's Value/Diff col
-    for j, e in enumerate(ents):
-        vc = get_column_letter(4 + 2 * j)
-        dc = get_column_letter(5 + 2 * j)
-        vcol[e.code], dcol[e.code] = vc, dc
-        ws[f"{vc}1"] = e.code; ws[f"{vc}1"].font = HDR_FONT
-        ws[f"{vc}2"] = "LC-Consol value"; ws[f"{dc}2"] = "Diff"
-        ws[f"{vc}2"].font = HDR_FONT; ws[f"{dc}2"].font = HDR_FONT
+    heads = ["Company", "Section", "GLACCOUNT", "GL Description",
+             "LC-Consol value", "Diff"]
+    for j, h in enumerate(heads, start=1):
+        ws.cell(2, j, h).font = HDR_FONT
 
     first = 3
     k = first
@@ -440,43 +432,50 @@ def _lc_consol_sheet(wbk, report: ReportTable, layout: CheckLayout,
             continue
         check_row = FIRST_DATA_ROW + i
         fcode = cfg.functional_code(row.category)
-        ws[f"A{k}"] = row.category or None
-        ws[f"B{k}"] = row.account
-        ws[f"C{k}"] = row.description
-        for e in ents:
-            vc, dc = vcol[e.code], dcol[e.code]
+        for e in report.entities:
+            rep_val = row.values.get((C.CHECK_LC_CONSOL, e.code), 0.0) or 0.0
+            key_t = inputs.consol_key(e.code, row.account)
+            if fcode and consol.func_col:
+                trk = consol.totals_fn.get((key_t, fcode.upper()), 0.0)
+            else:
+                trk = consol.totals.get(key_t, 0.0)
+            # show only lines with a balance on either side
+            if abs(rep_val) <= tol and abs(trk) <= tol:
+                continue
             lc_valcol = layout.value_col(C.CHECK_LC_CONSOL, e.code)
-            ws[f"{vc}{k}"] = f"='{C.SHEET_CHECK}'!{lc_valcol}{check_row}"
-            key = f'"{e.code}"&$B{k}'
-            ws[f"{dc}{k}"] = f"={_consol_sum(consol_ref, key, fcode)}-{vc}{k}"
-        k += 1
+            ws.cell(k, 1, e.code)
+            ws.cell(k, 2, row.category or None)
+            ws.cell(k, 3, row.account)
+            ws.cell(k, 4, row.description)
+            ws.cell(k, 5).value = f"='{C.SHEET_CHECK}'!{lc_valcol}{check_row}"
+            ws.cell(k, 5).number_format = "#,##0.00"
+            key = f'"{e.code}"&$C{k}'
+            ws.cell(k, 6).value = f"={_consol_sum(consol_ref, key, fcode)}-E{k}"
+            ws.cell(k, 6).number_format = "#,##0.00"
+            k += 1
     last = k - 1
 
-    # red-highlight any non-tying Diff cell
-    for e in ents:
-        dc = dcol[e.code]
-        if last >= first:
-            ws.conditional_formatting.add(
-                f"{dc}{first}:{dc}{last}",
-                FormulaRule(formula=[f"ABS({dc}{first})>{tol}"],
-                            fill=RED_FILL, font=RED_FONT))
-
-    # overall tie-status banner (count of non-tying cells, so signs can't cancel)
     if last >= first:
-        count = "+".join(
-            f"SUMPRODUCT(--(ABS({dcol[e.code]}{first}:{dcol[e.code]}{last})>{tol}))"
-            for e in ents)
-        ws["B1"] = f"={count}"
+        ws.conditional_formatting.add(
+            f"F{first}:F{last}",
+            FormulaRule(formula=[f"ABS(F{first})>{tol}"],
+                        fill=RED_FILL, font=RED_FONT))
+        ws["B1"] = f"=SUMPRODUCT(--(ABS(F{first}:F{last})>{tol}))"
         ws["A1"] = ('=IF(B1=0,"LC - Consol: ALL entries tie",'
                     '"LC - Consol: "&B1&" difference(s) NOT tied - see red")')
         ws["A1"].font = HDR_FONT
         ws.conditional_formatting.add(
             "A1:B1", FormulaRule(formula=["$B$1>0"], fill=RED_FILL, font=RED_FONT))
+    else:
+        ws["A1"] = "LC - Consol: no consolidation entries with a balance"
+        ws["A1"].font = HDR_FONT
 
-    ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 12
-    ws.column_dimensions["C"].width = 30
-    ws.freeze_panes = "D3"
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["D"].width = 32
+    ws.column_dimensions["E"].width = 16
+    ws.column_dimensions["F"].width = 14
+    ws.freeze_panes = "A3"
 
 
 def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,
