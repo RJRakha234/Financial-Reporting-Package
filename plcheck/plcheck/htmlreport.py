@@ -109,18 +109,7 @@ def build_html(report, ev, *, title, tb_codes, agg_codes, is_minority,
         ["Entity", "Group Account", "Section", "Check", "Stated", "Expected",
          "Difference", "Remark"], a_rows)
 
-    # --- B: Minority Interest line -------------------------------------------
-    b_rows = [[
-        (d.entity, False, False), (acct(d), False, False),
-        (_KIND_LABEL.get(d.kind, d.kind), False, False),
-        (d.stated, True, False), (d.expected, True, False),
-        (d.delta, True, True), (_remark(d), False, False)]
-        for d in big if d.kind != "lc_consol" and is_minority(d.category)]
-    b_html = _rows_table(
-        ["Entity", "Group Account", "Check", "Stated", "Expected",
-         "Difference", "Remark"], b_rows)
-
-    # --- C: LC-Consol tie-out ------------------------------------------------
+    # --- B: LC-Consol tie-out ------------------------------------------------
     c_rows = [[
         (d.entity, False, False), (acct(d), False, False),
         (d.category, False, False),
@@ -131,7 +120,7 @@ def build_html(report, ev, *, title, tb_codes, agg_codes, is_minority,
         ["Entity", "Group Account", "Section", "Report value", "Tracker (Dr−Cr)",
          "Difference", "Remark"], c_rows)
 
-    # --- D: Entity reconciler ------------------------------------------------
+    # --- C: Entity reconciler ------------------------------------------------
     srcs = [("PL Report", {c.upper() for c in
                            (e.code for e in report.entities)
                            if inputs.looks_like_company_code(c)}),
@@ -158,14 +147,13 @@ def build_html(report, ev, *, title, tb_codes, agg_codes, is_minority,
     d_html = (_rows_table(d_head, d_rows) if d_rows
               else '<p class="ok">All company codes present in every source.</p>')
 
-    total = len(a_rows) + len(b_rows) + len(c_rows) + len(d_rows)
+    total = len(a_rows) + len(c_rows) + len(d_rows)
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{_esc(title)} - check summary</title><style>{_CSS}</style></head><body>
 <h1>{_esc(title)} — Check Error Summary</h1>
 <p class="sub">Differences below {min_amount:g} are ignored.
 &nbsp;<span class="pill">{total} item(s) reported</span></p>
 <h2>A. PL Check Summary</h2>{a_html}
-<h2>B. Minority Interest Check</h2>{b_html}
-<h2>C. LC-Consol Check</h2>{c_html}
-<h2>D. Entity Reconciler</h2>{d_html}
+<h2>B. LC-Consol Check</h2>{c_html}
+<h2>C. Entity Reconciler</h2>{d_html}
 </body></html>"""
