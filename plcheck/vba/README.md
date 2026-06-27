@@ -11,7 +11,10 @@ It builds the same two outputs as the Python tool:
   net‑profit reconciliation, all as live formulas with non‑zero differences
   highlighted red;
 * a **Minority Interest** sheet — Net Profit (GC‑Bal), Dividend (GL 332010),
-  Profit before Dividend, Minority total (GC‑Total) and Current Period %.
+  Profit before Dividend, Minority total (GC‑Total) and Current Period %;
+* an **Entity Coverage** sheet — the company codes in each input (PL report,
+  Real Time TB, Aggregate Exp) side by side, plus a reconciliation flagging any
+  code present in one source but missing from another (e.g. a TB‑only typo).
 
 It handles **IFRS INR**, **Ind‑AS Function‑wise** and **Ind‑AS Nature‑wise**
 reports from the one module (Nature‑wise = no Aggregate Exp; just leave the Agg

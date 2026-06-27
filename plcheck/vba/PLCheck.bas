@@ -36,6 +36,7 @@ Private Const SH_RATES As String = "MA rates"
 Private Const SH_MIN As String = "Minority Interest"
 Private Const SH_REPORT As String = "PL Report"
 Private Const SH_CONSOL As String = "Consol Entries"   ' manual consol-entry tracker
+Private Const SH_COVERAGE As String = "Entity Coverage" ' company-code coverage
 
 ' ---- tunables --------------------------------------------------------------
 Private Const TOL As Double = 0.5             ' highlight threshold
@@ -127,7 +128,7 @@ Public Sub GenerateCheckFile()
     ' what makes a large report take many minutes. We recalc once at the end.
     Application.Calculation = xlCalculationManual
 
-    KillSheet wb, SH_CHECK: KillSheet wb, SH_MIN
+    KillSheet wb, SH_CHECK: KillSheet wb, SH_MIN: KillSheet wb, SH_COVERAGE
     KillSheet wb, SH_TB: KillSheet wb, SH_AGG: KillSheet wb, SH_RATES
     KillSheet wb, SH_REPORT: KillSheet wb, SH_CONSOL
 
@@ -143,6 +144,7 @@ Public Sub GenerateCheckFile()
 
     BuildCheck wb
     BuildMinority wb
+    BuildEntityCoverage wb
 
     Application.Calculate            ' recalculate the whole workbook once, now
 
@@ -153,8 +155,8 @@ Public Sub GenerateCheckFile()
     Application.ScreenUpdating = True
 
     wb.Worksheets(SH_CHECK).Activate
-    MsgBox "Done. Built '" & SH_CHECK & "' and '" & SH_MIN & "'. " & _
-           "Use File > Save As to keep a copy.", vbInformation
+    MsgBox "Done. Built '" & SH_CHECK & "', '" & SH_MIN & "' and '" & _
+           SH_COVERAGE & "'. Use File > Save As to keep a copy.", vbInformation
     Exit Sub
 
 CleanFail:
@@ -590,6 +592,135 @@ Private Sub BuildMinority(wb As Workbook)
     Next key
     ms.Columns("A:F").ColumnWidth = 22
 End Sub
+
+
+'============================================================================
+'  ENTITY (COMPANY-CODE) COVERAGE
+'============================================================================
+' Lists the company codes in each input and flags any present in one source but
+' missing from another (e.g. a TB-only typo like ATI10N).
+Private Sub BuildEntityCoverage(wb As Workbook)
+    Dim srcName() As String, srcCodes() As Collection, n As Long
+    Dim hasAg As Boolean: hasAg = SheetExists(wb, SH_AGG)
+    n = IIf(hasAg, 3, 2)
+    ReDim srcName(1 To n): ReDim srcCodes(1 To n)
+    srcName(1) = "PL Report":    Set srcCodes(1) = ReportCodes(wb.Worksheets(SH_REPORT))
+    srcName(2) = "Real Time TB": Set srcCodes(2) = CodesAfterCompany(wb.Worksheets(SH_TB))
+    If hasAg Then
+        srcName(3) = "Aggregate Exp": Set srcCodes(3) = CodesAfterCompany(wb.Worksheets(SH_AGG))
+    End If
+
+    Dim ws As Worksheet: Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    ws.Name = SH_COVERAGE
+    Dim j As Long, k As Long
+    ' raw list per source (one column each), starting row 2
+    For j = 1 To n
+        ws.Cells(2, j).Value = srcName(j): ws.Cells(2, j).Font.Bold = True
+        For k = 1 To srcCodes(j).Count
+            ws.Cells(2 + k, j).Value = srcCodes(j)(k)
+        Next k
+    Next j
+
+    ' union reconciliation matrix
+    Dim base As Long: base = n + 2
+    ws.Cells(2, base).Value = "Company Code": ws.Cells(2, base).Font.Bold = True
+    For j = 1 To n
+        ws.Cells(2, base + j).Value = "In " & srcName(j): ws.Cells(2, base + j).Font.Bold = True
+    Next j
+    Dim noteCol As Long: noteCol = base + n + 1
+    ws.Cells(2, noteCol).Value = "Note (where missing)": ws.Cells(2, noteCol).Font.Bold = True
+
+    Dim union As Collection: Set union = New Collection
+    For j = 1 To n
+        For k = 1 To srcCodes(j).Count
+            AddUnique union, CStr(srcCodes(j)(k))
+        Next k
+    Next j
+
+    Dim rr As Long: rr = 3
+    Dim bad As Long: bad = 0
+    Dim u As Variant
+    For Each u In union
+        Dim miss As String: miss = ""
+        ws.Cells(rr, base).Value = u
+        For j = 1 To n
+            If InColl(srcCodes(j), CStr(u)) Then
+                ws.Cells(rr, base + j).Value = "Yes"
+            Else
+                ws.Cells(rr, base + j).Value = "-"
+                miss = miss & IIf(Len(miss) > 0, ", ", "") & srcName(j)
+            End If
+        Next j
+        If Len(miss) = 0 Then
+            ws.Cells(rr, noteCol).Value = "in all sources"
+        Else
+            ws.Cells(rr, noteCol).Value = "missing from: " & miss
+            bad = bad + 1
+            Dim cc As Long
+            For cc = base To noteCol
+                ws.Cells(rr, cc).Interior.Color = RGB(255, 199, 206)
+                ws.Cells(rr, cc).Font.Color = RGB(156, 0, 6)
+            Next cc
+        End If
+        rr = rr + 1
+    Next u
+
+    ws.Cells(1, 1).Value = IIf(bad = 0, _
+        "Entity coverage: ALL company codes present in every source", _
+        "Entity coverage: " & bad & " code(s) missing from some source - see red")
+    ws.Cells(1, 1).Font.Bold = True
+    If bad > 0 Then ws.Cells(1, 1).Font.Color = RGB(156, 0, 6)
+    ws.Columns("A:Z").AutoFit
+End Sub
+
+' company codes to the right of each "Company" label (TB / Aggregate Exp)
+Private Function CodesAfterCompany(ws As Worksheet) As Collection
+    Dim res As Collection: Set res = New Collection
+    Dim ur As Range: Set ur = ws.UsedRange
+    Dim rN As Long, cN As Long, r As Long, c As Long, cc As Long
+    rN = ur.Row + ur.Rows.Count - 1: cN = ur.Column + ur.Columns.Count - 1
+    For r = ur.Row To rN
+        For c = ur.Column To cN
+            If LCase$(Trim$(CStr(ws.Cells(r, c).Value))) = "company" Then
+                For cc = c + 1 To cN
+                    Dim s As String: s = Trim$(CStr(ws.Cells(r, cc).Value))
+                    If Len(s) = 0 Or LCase$(s) = "overall result" Then Exit For
+                    AddUnique res, s
+                Next cc
+            End If
+        Next c
+    Next r
+    Set CodesAfterCompany = res
+End Function
+
+' company codes from the PL report's sub-header row (under the block labels)
+Private Function ReportCodes(ws As Worksheet) As Collection
+    Dim res As Collection: Set res = New Collection
+    Dim blr As Long: blr = FindRowContaining(ws, "LC - Balance")
+    If blr = 0 Then blr = 2
+    Dim ur As Range: Set ur = ws.UsedRange
+    Dim cN As Long: cN = ur.Column + ur.Columns.Count - 1
+    Dim c As Long
+    For c = 1 To cN
+        Dim s As String: s = Trim$(CStr(ws.Cells(blr + 1, c).Value))
+        If Len(s) > 0 And LCase$(s) <> "overall result" And IsEntityCode(s) Then
+            AddUnique res, s
+        End If
+    Next c
+    Set ReportCodes = res
+End Function
+
+Private Sub AddUnique(coll As Collection, ByVal s As String)
+    If Not InColl(coll, s) Then coll.Add s
+End Sub
+
+Private Function InColl(coll As Collection, ByVal s As String) As Boolean
+    Dim v As Variant
+    For Each v In coll
+        If StrComp(CStr(v), s, vbTextCompare) = 0 Then InColl = True: Exit Function
+    Next v
+    InColl = False
+End Function
 
 
 '============================================================================

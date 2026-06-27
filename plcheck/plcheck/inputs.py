@@ -567,6 +567,34 @@ def parse_consol(path: str) -> ConsolGeometry:
                           last_row=last_row, totals=totals)
 
 
+def _codes_after_company(ws) -> list:
+    """Company codes in a sheet: the cells to the right of each 'Company'
+    label, up to a blank or 'Overall Result'. Works for the TB (one header) and
+    the Aggregate Exp (one 'Company' per functional block). De-duplicated."""
+    out: list = []
+    for row in ws.iter_rows():
+        cells = list(row)
+        for i, c in enumerate(cells):
+            if isinstance(c.value, str) and c.value.strip().lower() == "company":
+                for c2 in cells[i + 1:]:
+                    s = "" if c2.value is None else str(c2.value).strip()
+                    if not s or s.lower() == "overall result":
+                        break
+                    out.append(s)
+    seen, res = set(), []
+    for s in out:
+        if s.upper() not in seen:
+            seen.add(s.upper())
+            res.append(s)
+    return res
+
+
+def company_codes(path: str) -> list:
+    """All company codes present in a TB / Aggregate-Expenses workbook."""
+    wb = load_workbook(path, data_only=True)
+    return _codes_after_company(wb.active)
+
+
 def consol_key(code, account) -> str:
     """Join key matching the tracker's 'Concatenate' (comp-code + account)."""
     a = account

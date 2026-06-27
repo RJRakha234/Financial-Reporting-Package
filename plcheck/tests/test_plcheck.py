@@ -83,8 +83,8 @@ def test_build_writes_valid_workbook(tmp_path):
     assert out.is_file()
 
     wb = openpyxl.load_workbook(out)
-    assert wb.sheetnames == ["Check", "Minority Interest", "Real Time TB",
-                             "Aggregate Exp", "MA rates"]
+    assert wb.sheetnames == ["Check", "Minority Interest", "Entity Coverage",
+                             "Real Time TB", "Aggregate Exp", "MA rates"]
     ws = wb["Check"]
     # difference formulas are present on detail rows, absent on subtotal rows
     assert str(ws["F9"].value).startswith("=IFERROR(VLOOKUP")
@@ -308,6 +308,26 @@ def test_consol_tracker_parsed_latest_month(tmp_path):
     assert g.totals["BALSCH290100"] == 222.0
     assert g.totals["BALSCH804300"] == -222.0
     assert inputs.consol_key("BALSCH", 290100) == "BALSCH290100"
+
+
+def test_entity_coverage_flags_source_only_code(tmp_path):
+    """The Entity Coverage sheet lists codes per source and flags one present in
+    the TB but missing from the report/agg (e.g. the ATI10N typo)."""
+    out = tmp_path / "Check.xlsx"
+    analyze(REPORT, TB, AGG, RATES, output_path=str(out))
+    ws = openpyxl.load_workbook(out)["Entity Coverage"]
+    cells = {(c.row, c.column): c.value for row in ws.iter_rows() for c in row}
+    flat = [v for v in cells.values() if isinstance(v, str)]
+    assert "ATI10N" in flat                     # the TB-only code is listed
+    # its reconciliation row marks it present only in the TB
+    ati = next(r for (r, col), v in cells.items() if v == "ATI10N" and col >= 5)
+    rowvals = [cells.get((ati, c)) for c in range(5, 10)]
+    assert "ATI10N" in rowvals and rowvals.count("Yes") == 1 and "-" in rowvals
+
+
+def test_company_codes_extracted(tmp_path):
+    assert inputs.company_codes(TB) == ["ATI10N", "BALSCH", "BALSDE", "BALSDK"]
+    assert "ATI10N" not in inputs.company_codes(AGG)
 
 
 def test_consol_functional_split(tmp_path):

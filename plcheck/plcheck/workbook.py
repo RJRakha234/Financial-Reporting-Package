@@ -226,6 +226,9 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     # ---- derived Minority Interest sheet ---------------------------------
     _minority_sheet(wb, report, layout, cfg)
 
+    # ---- entity (company-code) coverage across the inputs ----------------
+    _entity_coverage_sheet(wb, report, tb_path, agg_path)
+
     # ---- embed the source sheets -----------------------------------------
     _embed(wb, inputs.read_sheet(tb_path, C.SHEET_TB))
     if agg_path:
@@ -365,6 +368,69 @@ def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
         rng_row = f"${consol_first}{r}:${consol_last}{r}"
         return f"=SUMIF({rng_hdr},{v}${ROW_SUBHEADER},{rng_row})-{v}{r}"
     return None
+
+
+COVERAGE_SHEET = "Entity Coverage"
+
+
+def _entity_coverage_sheet(wbk, report: ReportTable, tb_path, agg_path) -> None:
+    """List the company codes in each input and flag any that are present in one
+    source but missing from another (e.g. a TB-only code like a typo)."""
+    sources = [("PL Report", [e.code for e in report.entities]),
+               ("Real Time TB", inputs.company_codes(tb_path))]
+    if agg_path:
+        sources.append(("Aggregate Exp", inputs.company_codes(agg_path)))
+    sets = {name: {c.upper() for c in codes} for name, codes in sources}
+
+    ws = wbk.create_sheet(COVERAGE_SHEET)
+    ws["A1"] = "Company codes by source"
+    ws["A1"].font = HDR_FONT
+    # raw list per source (one column each)
+    for j, (name, codes) in enumerate(sources, start=1):
+        ws.cell(2, j, name).font = HDR_FONT
+        for k, code in enumerate(codes, start=3):
+            ws.cell(k, j, code)
+
+    # union reconciliation matrix
+    base = len(sources) + 2
+    ws.cell(2, base, "Company Code").font = HDR_FONT
+    for j, (name, _c) in enumerate(sources):
+        ws.cell(2, base + 1 + j, f"In {name}").font = HDR_FONT
+    note_col = base + 1 + len(sources)
+    ws.cell(2, note_col, "Note (where missing)").font = HDR_FONT
+
+    union, seen = [], set()
+    for _name, codes in sources:
+        for c in codes:
+            if c.upper() not in seen:
+                seen.add(c.upper())
+                union.append(c)
+
+    row = 3
+    for code in union:
+        present = [name for name, _c in sources if code.upper() in sets[name]]
+        missing = [name for name, _c in sources if code.upper() not in sets[name]]
+        ws.cell(row, base, code)
+        for j, (name, _c) in enumerate(sources):
+            ws.cell(row, base + 1 + j, "Yes" if name in present else "-")
+        note = "in all sources" if not missing else "missing from: " + ", ".join(missing)
+        nc = ws.cell(row, note_col, note)
+        if missing:
+            for col in range(base, note_col + 1):
+                ws.cell(row, col).fill = RED_FILL
+            nc.font = RED_FONT
+        row += 1
+
+    # overall banner
+    bad = sum(1 for code in union
+              if any(code.upper() not in sets[name] for name, _c in sources))
+    ws["A1"] = ("Entity coverage: ALL company codes present in every source"
+                if bad == 0 else
+                f"Entity coverage: {bad} code(s) missing from some source - see red")
+    ws["A1"].font = HDR_FONT if bad == 0 else Font(bold=True, color="9C0006")
+    for col, w in {"A": 16, "B": 16, "C": 16}.items():
+        ws.column_dimensions[col].width = w
+    ws.column_dimensions[get_column_letter(note_col)].width = 30
 
 
 def _net_profit_block(ws, report: ReportTable, layout: CheckLayout, tb,

@@ -67,7 +67,7 @@ Private gGc As String         ' group/consolidation currency (INR default, or US
 Private gHasConsol As Boolean ' True when a consolidation-entry tracker is supplied
 ' geometry of the consol tracker (set in GenerateCheckFile, used in WriteDiffs)
 Private gCcConcat As Long, gCcVal1 As Long, gCcVal2 As Long
-Private gCcFirst As Long, gCcLast As Long
+Private gCcFirst As Long, gCcLast As Long, gCcFunc As Long
 
 
 '============================================================================
@@ -138,7 +138,7 @@ Public Sub GenerateCheckFile()
     If gHasConsol Then
         ImportConsolSheet wb, pConsol, SH_CONSOL
         GetConsolGeom wb.Worksheets(SH_CONSOL), gCcConcat, gCcVal1, gCcVal2, _
-                      gCcFirst, gCcLast
+                      gCcFirst, gCcLast, gCcFunc
     End If
 
     BuildCheck wb
@@ -336,7 +336,8 @@ Private Sub BuildCheck(wb As Workbook)
             Next c
             For i = 1 To entOrder.Count
                 WriteDiffs ck, cr, entOrder(i), isSub, cat, valCol, diffCol, diffCols, _
-                           tbHdr, tbLastCol, tbLast, aggBlk, fxLast, consF, consL, IsPlAcct(acc)
+                           tbHdr, tbLastCol, tbLast, aggBlk, fxLast, consF, consL, _
+                           IsPlAcct(acc), FuncCode(cat)
             Next i
             If StrComp(cat, "Net Profit", vbTextCompare) = 0 Then
                 If isSub Then npSub = cr Else npDet = cr
@@ -409,7 +410,8 @@ End Sub
 Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boolean, _
                        cat As String, valCol As Object, diffCol As Object, diffCols As Object, _
                        tbHdr As Long, tbLastCol As Long, tbLast As Long, aggBlk As Object, _
-                       fxLast As String, consF As String, consL As String, isPl As Boolean)
+                       fxLast As String, consF As String, consL As String, isPl As Boolean, _
+                       fcode As String)
     Dim dc As Long, vc As Long, src As String, fld As Variant, vL As String
 
     If diffCol.Exists("LC - Balance|" & code) Then
@@ -440,15 +442,19 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
         dc = diffCol("LC - Consol|" & code): vc = valCol("LC - Consol|" & code)
         diffCols(dc) = 1: vL = ColL(vc)
         If Not isSub And isPl Then    ' only P&L-series accounts (1/2/3) hit the P&L
-            Dim ccR As String, crit As String, s1 As String, s2 As String
+            Dim ccR As String, crit As String, fR As String, s1 As String, s2 As String
             ccR = "'" & SH_CONSOL & "'!$" & ColL(gCcConcat) & "$" & gCcFirst & _
                   ":$" & ColL(gCcConcat) & "$" & gCcLast
             crit = vL & "$" & CK_SUB & "&$C" & cr
-            s1 = "SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
-                 ColL(gCcVal1) & "$" & gCcFirst & ":$" & ColL(gCcVal1) & "$" & gCcLast & ")"
+            If Len(fcode) > 0 And gCcFunc > 0 Then
+                fR = "'" & SH_CONSOL & "'!$" & ColL(gCcFunc) & "$" & gCcFirst & _
+                     ":$" & ColL(gCcFunc) & "$" & gCcLast      ' functional group range
+            Else
+                fR = ""
+            End If
+            s1 = ConsolSum(ccR, crit, fR, fcode, gCcVal1)
             If gCcVal2 > 0 Then
-                s2 = "-SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
-                     ColL(gCcVal2) & "$" & gCcFirst & ":$" & ColL(gCcVal2) & "$" & gCcLast & ")"
+                s2 = "-" & ConsolSum(ccR, crit, fR, fcode, gCcVal2)
             Else
                 s2 = ""
             End If
@@ -471,6 +477,20 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
             "," & vL & "$" & CK_SUB & ",$" & consF & cr & ":$" & consL & cr & ")-" & vL & cr
     End If
 End Sub
+
+' One SUMIF/SUMIFS term for the LC-Consol tie-out. With a functional code it
+' matches account + Functional Group (function-wise split); without, it matches
+' account only (nature-wise total).
+Private Function ConsolSum(ByVal ccR As String, ByVal crit As String, ByVal fR As String, _
+                           ByVal fcode As String, ByVal vCol As Long) As String
+    Dim vR As String
+    vR = "'" & SH_CONSOL & "'!$" & ColL(vCol) & "$" & gCcFirst & ":$" & ColL(vCol) & "$" & gCcLast
+    If Len(fR) > 0 Then
+        ConsolSum = "SUMIFS(" & vR & "," & ccR & "," & crit & "," & fR & ",""" & fcode & """)"
+    Else
+        ConsolSum = "SUMIF(" & ccR & "," & crit & "," & vR & ")"
+    End If
+End Function
 
 
 '============================================================================
@@ -678,7 +698,8 @@ End Function
 ' Locate the tracker's join key + latest-month value columns, by header/data so
 ' it is immune to column count / wording (mirrors the Python parse_consol).
 Private Sub GetConsolGeom(cs As Worksheet, ByRef concatCol As Long, ByRef val1 As Long, _
-                          ByRef val2 As Long, ByRef firstRow As Long, ByRef lastRow As Long)
+                          ByRef val2 As Long, ByRef firstRow As Long, ByRef lastRow As Long, _
+                          ByRef funcCol As Long)
     Dim ur As Range: Set ur = cs.UsedRange
     Dim r0 As Long, c0 As Long, rN As Long, cN As Long
     r0 = ur.Row: c0 = ur.Column
@@ -700,9 +721,18 @@ Private Sub GetConsolGeom(cs As Worksheet, ByRef concatCol As Long, ByRef val1 A
 
     ' right edge of the value area = just left of Currency / Type
     Dim boundary As Long: boundary = cN
+    Dim h As String
+    funcCol = 0
     For c = concatCol + 1 To cN
-        Dim h As String: h = NormHdr(CStr(cs.Cells(hdr, c).Value))
+        h = NormHdr(CStr(cs.Cells(hdr, c).Value))
         If h = "currency" Or h = "type" Then boundary = c - 1: Exit For
+    Next c
+    ' the 'Functional Group' column (COS / S&M / G&A), if present
+    For c = c0 To cN
+        h = NormHdr(CStr(cs.Cells(hdr, c).Value))
+        If h = "functional group" Or h = "function group" Or h = "functional grp" Then
+            funcCol = c: Exit For
+        End If
     Next c
 
     ' latest month's Dr/Cr pair = the two right-most columns of the value area
@@ -839,6 +869,18 @@ Private Function CatSource(ByVal cat As String) As String
         Case "sales", "sales & marketing cost": CatSource = "Sales & Marketing"
         Case "general administration", "administration cost": CatSource = "General Administration"
         Case Else: CatSource = IIf(gNoAgg, "TB", "")
+    End Select
+End Function
+
+' The consol-tracker Functional Group code for a report section (COS/S&M/G&A),
+' or "" when the row isn't a functional split (then match account-only). Reuses
+' the section -> Aggregate-block mapping, so it follows CatSource automatically.
+Private Function FuncCode(ByVal cat As String) As String
+    Select Case CatSource(cat)
+        Case "Cost of revenue": FuncCode = "COS"
+        Case "Sales & Marketing": FuncCode = "S&M"
+        Case "General Administration": FuncCode = "G&A"
+        Case Else: FuncCode = ""
     End Select
 End Function
 
