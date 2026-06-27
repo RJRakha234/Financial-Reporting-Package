@@ -31,6 +31,18 @@ Plus a **net-profit reconciliation**: the report's net profit must tie to the
 net profit implied by the Real Time TB, and `Income + Expense + Net Profit` must
 net to zero internally.
 
+Two further checks run when you supply the matching inputs:
+
+4. **LC - Consol tie-out** (with `--consol`) — every consolidation figure in the
+   report's *LC - Consol* block must equal the net posting (**Debit − Credit**)
+   of the matching manual entries in the **consolidation-entry tracker**, keyed
+   on its `Concatenate` (comp-code + account). For a *function-wise* report the
+   same GL is split across COS / S&M / G&A, so each row also matches its
+   **Functional Group** code; for *nature-wise* it matches the account total.
+5. **Entity coverage** — the company codes in the report, the TB and the
+   Aggregate Exp are listed side by side and any code present in one source but
+   missing from another is flagged.
+
 ## Install
 
 ```bash
@@ -41,14 +53,18 @@ pip install -r requirements.txt    # just openpyxl
 
 ```bash
 python -m plcheck PL_Report.xlsx \
-    --tb    Real_Time_TB.xlsx \
-    --agg   Aggregate_Expenses.xlsx \
-    --rates MA_Rates.xlsx \
-    -o      PL_Report_Check.xlsx
+    --tb     Real_Time_TB.xlsx \
+    --agg    Aggregate_Expenses.xlsx \
+    --rates  MA_Rates.xlsx \
+    --consol "Consolidation entries.xlsx" \
+    -o       PL_Report_Check.xlsx
 ```
 
-This writes `PL_Report_Check.xlsx` (a `Check` sheet plus the three sources
-embedded as sheets so the formulas resolve) and prints a summary:
+`--agg` is omitted for a **Nature-wise** report (every line ties to the TB);
+`--consol` is optional and turns on the LC-Consol tie-out. This writes
+`PL_Report_Check.xlsx` (the `Check`, `Minority Interest`, `LC-Consol Check` and
+`Entity Coverage` sheets, plus the inputs embedded so the formulas resolve) and
+prints a summary:
 
 ```
 ✗ 10 difference(s) exceed ±0.5:
@@ -106,7 +122,14 @@ The output is a real, recalculating Excel file — not a static dump:
   the tolerance red, so issues are visible the moment you open it in Excel;
 * a **Minority Interest sheet** derived live from the Check sheet — per company
   code: Net Profit (GC-Balance), Dividend received (GL 332010, GC-Balance),
-  Profit before Dividend, Minority total (GC-Total) and the Current Period %.
+  Profit before Dividend, Minority total (GC-Total) and the Current Period %;
+* a **LC-Consol Check sheet** (with `--consol`) — one row per company + P&L
+  account *that has a balance*, showing the report's LC-Consol value vs the
+  tracker's net (Debit − Credit), with a tie-status banner and red differences;
+* an **Entity Coverage sheet** — the company codes in each input side by side
+  plus a reconciliation flagging any present in one source but missing from
+  another (dimension labels such as *Consolidation unit* are not treated as
+  codes).
 
 Because everything is a formula over the embedded inputs, an auditor can trace
 every number, and tweaking an input recalculates the check.
@@ -151,10 +174,12 @@ Two things this guarantees in particular:
 
 ## Notes & assumptions
 
-* The MA-rate lookup uses the **Exchange Rate** column directly (matching the
-  source check file). Every current entity currency has a `From Ratio` of 1; if
-  you add a currency quoted per 100 units (e.g. HUF, JPY), divide the rate by
-  its ratio in the rate table first.
+* The MA-rate **From-currency** and **Exchange Rate** columns are located by
+  their data/header (the currency column is the first column of 3-letter codes),
+  so the table can sit on any columns. The group currency is auto-detected; an
+  INR-based report needs no division, a USD report cross-divides by USD→INR. If
+  you add a currency quoted per 100 units (e.g. HUF, JPY with a `From Ratio` of
+  100), divide its rate by the ratio in the rate table first.
 * The local-currency *Overall Result* columns are carried through but not
   re-checked (they are the report's own row sums).
 * "P&L accounts" for the TB net-profit sum are identified by their **leading
