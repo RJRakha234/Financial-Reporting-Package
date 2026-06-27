@@ -141,6 +141,9 @@ Public Sub GenerateCheckFile()
         ImportConsolSheet wb, pConsol, SH_CONSOL
         GetConsolGeom wb.Worksheets(SH_CONSOL), gCcConcat, gCcVal1, gCcVal2, _
                       gCcFirst, gCcLast, gCcFunc
+        ' carry each entry's functional code onto both legs (it may be typed on
+        ' the P&L leg or the contra leg) so the match works on the P&L leg's row
+        PropagateFunc wb.Worksheets(SH_CONSOL), gCcConcat, gCcFunc, gCcFirst, gCcLast
     End If
 
     BuildCheck wb
@@ -642,6 +645,51 @@ Private Sub BuildLcConsolCheck(wb As Workbook)
     End With
     ws.Columns("B").ColumnWidth = 22: ws.Columns("D").ColumnWidth = 30
 End Sub
+
+' Fill the Functional Group code across both legs of each entry, in place. An
+' entry's code may be on its P&L leg or its contra leg; entries are separated by
+' fully-blank rows. Within each block the (single) code is copied into the blank
+' Functional Group cells, so a match on the P&L leg's row works either way.
+Private Sub PropagateFunc(cs As Worksheet, ByVal concatCol As Long, ByVal funcCol As Long, _
+                          ByVal firstRow As Long, ByVal lastRow As Long)
+    If funcCol = 0 Then Exit Sub
+    Dim ur As Range: Set ur = cs.UsedRange
+    Dim cN As Long: cN = ur.Column + ur.Columns.Count - 1
+    Dim r As Long: r = firstRow
+    Do While r <= lastRow
+        If RowBlankSpan(cs, r, cN) Then
+            r = r + 1
+        Else
+            Dim g0 As Long: g0 = r
+            Do While r <= lastRow
+                If RowBlankSpan(cs, r, cN) Then Exit Do
+                r = r + 1
+            Loop
+            Dim g1 As Long: g1 = r - 1
+            Dim gfunc As String: gfunc = ""
+            Dim rr As Long, v As String
+            For rr = g0 To g1
+                v = Trim$(CStr(cs.Cells(rr, funcCol).Value))
+                If Len(v) > 0 Then gfunc = v: Exit For
+            Next rr
+            If Len(gfunc) > 0 Then
+                For rr = g0 To g1
+                    If Len(Trim$(CStr(cs.Cells(rr, funcCol).Value))) = 0 Then
+                        cs.Cells(rr, funcCol).Value = gfunc
+                    End If
+                Next rr
+            End If
+        End If
+    Loop
+End Sub
+
+Private Function RowBlankSpan(cs As Worksheet, ByVal r As Long, ByVal cN As Long) As Boolean
+    Dim c As Long
+    For c = 1 To cN
+        If Len(Trim$(CStr(cs.Cells(r, c).Value))) > 0 Then RowBlankSpan = False: Exit Function
+    Next c
+    RowBlankSpan = True
+End Function
 
 ' Tracker net posting (Debit - Credit) for one company+account, computed at
 ' build time so we can list only lines that actually have a balance. Matches the

@@ -381,6 +381,26 @@ def test_consol_functional_split(tmp_path):
     assert cfg.functional_code("Revenue") is None        # not a functional split
 
 
+def test_functional_code_inherited_from_contra_leg(tmp_path):
+    """The COS/S&M/G&A code may be on the P&L leg OR the contra leg; the P&L
+    leg must still match its functional slice."""
+    import openpyxl as _xl
+    p = tmp_path / "consol.xlsx"
+    wb = _xl.Workbook(); ws = wb.active; ws.title = "Entries- GR"
+    ws.append(["Company", "Comp code", "Concatenate", "Group Account Number",
+               "Functional Group", "GL Descriptions",
+               "Feb Dr", "Feb Cr", "Mar Dr", "Mar Cr", "Currency", "Type"])
+    # P&L leg has a BLANK functional code; the contra leg carries "S&M"
+    ws.append(["BALSCH", "BALSCH", "BALSCH110200", 110200, "", "charge",
+               "", "", 1234.0, "", "CHF", "BPC"])
+    ws.append(["BALSCH", "BALSCH", "BALSCH804340", 804340, "S&M", "To ...",
+               "", "", "", 1234.0, "CHF", "BPC"])
+    ws.append([None] * 12)
+    wb.save(p)
+    g = inputs.parse_consol(str(p))
+    assert g.totals_fn.get(("BALSCH110200", "S&M")) == 1234.0
+
+
 def test_consol_credit_leg_is_negative(tmp_path):
     """A 'To ...' credit-leg P&L account (amount in the Credit column) nets
     negative, matching the report's signed LC - Consol."""

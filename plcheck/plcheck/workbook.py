@@ -218,6 +218,13 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     if consol_path:
         _embed(wb, inputs.read_sheet(consol_path, C.SHEET_CONSOL,
                                      sheet_name=consol.sheet_name))
+        # mirror the entry-level functional-code fill onto the embedded copy, so
+        # the live SUMIFS (which matches the code on the P&L leg's row) works
+        # even when the code was typed on the contra leg.
+        if consol.func_col:
+            inputs.propagate_func_column(
+                wb[C.SHEET_CONSOL], consol.concat_col, consol.func_col,
+                consol.first_row, consol.last_row, consol.span_end)
     return wb
 
 
