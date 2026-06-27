@@ -330,6 +330,27 @@ def test_company_codes_extracted(tmp_path):
     assert "ATI10N" not in inputs.company_codes(AGG)
 
 
+def test_dimension_label_not_a_company_code():
+    """A dimension label like 'Consolidation unit' must not be taken as a code."""
+    assert inputs.looks_like_company_code("BALSCH")
+    assert inputs.looks_like_company_code("AT10IN")
+    for label in ("Consolidation unit", "Company", "Overall Result",
+                  "GL Description | Currency", "Group Account Number"):
+        assert not inputs.looks_like_company_code(label)
+
+
+def test_coverage_excludes_label_code(tmp_path):
+    """A 'Consolidation unit' header sneaked into the TB is not listed."""
+    import openpyxl as _xl
+    p = tmp_path / "tb.xlsx"
+    wb = _xl.Workbook(); ws = wb.active
+    ws.cell(6, 2, "Company")
+    for i, c in enumerate(["Consolidation unit", "BALSCH", "BALSDE"]):
+        ws.cell(6, 3 + i, c)
+    wb.save(p)
+    assert inputs.company_codes(str(p)) == ["BALSCH", "BALSDE"]
+
+
 def test_consol_functional_split(tmp_path):
     """A GL split across COS/S&M/G&A is summed per functional code (for a
     function-wise row) and as a single total (for a nature-wise row)."""

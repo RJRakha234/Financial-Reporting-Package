@@ -567,6 +567,20 @@ def parse_consol(path: str) -> ConsolGeometry:
                           last_row=last_row, totals=totals)
 
 
+# Labels that sit among the company codes but are NOT codes themselves.
+_NON_CODE = {"company", "overall result", "group account number",
+             "consolidation unit", "group", "total", "result", "unit",
+             "gl description | currency"}
+
+
+def looks_like_company_code(value) -> bool:
+    """True for a real company code: short, alphanumeric, no spaces — so a
+    dimension label like 'Consolidation unit' (has a space) is rejected."""
+    s = str(value).strip()
+    return (2 <= len(s) <= 15 and " " not in s
+            and s.lower() not in _NON_CODE and s.isalnum())
+
+
 def _codes_after_company(ws) -> list:
     """Company codes in a sheet: the cells to the right of each 'Company'
     label, up to a blank or 'Overall Result'. Works for the TB (one header) and
@@ -580,7 +594,8 @@ def _codes_after_company(ws) -> list:
                     s = "" if c2.value is None else str(c2.value).strip()
                     if not s or s.lower() == "overall result":
                         break
-                    out.append(s)
+                    if looks_like_company_code(s):
+                        out.append(s)
     seen, res = set(), []
     for s in out:
         if s.upper() not in seen:

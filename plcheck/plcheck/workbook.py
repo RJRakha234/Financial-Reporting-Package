@@ -348,7 +348,9 @@ COVERAGE_SHEET = "Entity Coverage"
 def _entity_coverage_sheet(wbk, report: ReportTable, tb_path, agg_path) -> None:
     """List the company codes in each input and flag any that are present in one
     source but missing from another (e.g. a TB-only code like a typo)."""
-    sources = [("PL Report", [e.code for e in report.entities]),
+    pl_codes = [e.code for e in report.entities
+                if inputs.looks_like_company_code(e.code)]
+    sources = [("PL Report", pl_codes),
                ("Real Time TB", inputs.company_codes(tb_path))]
     if agg_path:
         sources.append(("Aggregate Exp", inputs.company_codes(agg_path)))

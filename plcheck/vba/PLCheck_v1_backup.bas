@@ -37,6 +37,7 @@ Private Const SH_MIN As String = "Minority Interest"
 Private Const SH_REPORT As String = "PL Report"
 Private Const SH_CONSOL As String = "Consol Entries"   ' manual consol-entry tracker
 Private Const SH_COVERAGE As String = "Entity Coverage" ' company-code coverage
+Private Const SH_LCCONSOL As String = "LC-Consol Check"  ' LC-Consol tie-out tab
 
 ' ---- tunables --------------------------------------------------------------
 Private Const TOL As Double = 0.5             ' highlight threshold
@@ -130,7 +131,7 @@ Public Sub GenerateCheckFile()
 
     KillSheet wb, SH_CHECK: KillSheet wb, SH_MIN: KillSheet wb, SH_COVERAGE
     KillSheet wb, SH_TB: KillSheet wb, SH_AGG: KillSheet wb, SH_RATES
-    KillSheet wb, SH_REPORT: KillSheet wb, SH_CONSOL
+    KillSheet wb, SH_REPORT: KillSheet wb, SH_CONSOL: KillSheet wb, SH_LCCONSOL
 
     ImportFirstSheet wb, pTB, SH_TB
     If Not gNoAgg Then ImportFirstSheet wb, pAgg, SH_AGG
@@ -144,6 +145,7 @@ Public Sub GenerateCheckFile()
 
     BuildCheck wb
     BuildMinority wb
+    BuildLcConsolCheck wb
     BuildEntityCoverage wb
 
     Application.Calculate            ' recalculate the whole workbook once, now
@@ -155,8 +157,9 @@ Public Sub GenerateCheckFile()
     Application.ScreenUpdating = True
 
     wb.Worksheets(SH_CHECK).Activate
-    MsgBox "Done. Built '" & SH_CHECK & "', '" & SH_MIN & "' and '" & _
-           SH_COVERAGE & "'. Use File > Save As to keep a copy.", vbInformation
+    MsgBox "Done. Built '" & SH_CHECK & "', '" & SH_MIN & "', '" & SH_LCCONSOL & _
+           "' and '" & SH_COVERAGE & "'. Use File > Save As to keep a copy.", _
+           vbInformation
     Exit Sub
 
 CleanFail:
@@ -357,34 +360,6 @@ Private Sub BuildCheck(wb As Workbook)
             "=SUM(" & ColL(CLng(k)) & CK_DATA0 & ":" & ColL(CLng(k)) & lastData & ")"
     Next k
 
-    ' LC - Consol overall tie-status banner: counts the LC-Consol diff cells
-    ' that don't tie (a count, not a sum, so a +x and -x can't cancel and hide a
-    ' problem). One cell tells you whether EVERY consol figure is tracker-backed.
-    If gHasConsol Then
-        Dim lcCount As String, nn As Long, lcc As String
-        lcCount = ""
-        For nn = 1 To entOrder.Count
-            If diffCol.Exists("LC - Consol|" & entOrder(nn)) Then
-                lcc = ColL(diffCol("LC - Consol|" & entOrder(nn)))
-                If Len(lcCount) > 0 Then lcCount = lcCount & "+"
-                lcCount = lcCount & "SUMPRODUCT(--(ABS(" & lcc & CK_DATA0 & ":" & _
-                          lcc & lastData & ")>" & TOL & "))"
-            End If
-        Next nn
-        If Len(lcCount) > 0 Then
-            ck.Range("B1").Formula = "=" & lcCount
-            ck.Range("A1").Formula = "=IF(B1=0,""LC - Consol: ALL entries tie""," & _
-                """LC - Consol: ""&B1&"" difference(s) NOT tied - see red"")"
-            ck.Range("A1").Font.Bold = True
-            With ck.Range("A1:B1")
-                .FormatConditions.Delete
-                .FormatConditions.Add Type:=xlExpression, Formula1:="=$B$1>0"
-                .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
-                .FormatConditions(1).Font.Color = RGB(156, 0, 6)
-            End With
-        End If
-    End If
-
     BuildNetProfit ck, entOrder, valCol, diffCol, lastData, tbAcct, tbHdr, _
                    tbFirst, tbLast, wb.Worksheets(SH_TB)
 
@@ -434,35 +409,7 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
         End If
     End If
 
-    ' LC - Consol tie-out to the entry tracker. For this company+account
-    ' (comp-code & account = the tracker "Concatenate" key) take the latest
-    ' month's NET posting = Debit - Credit: the Dr leg (charge) is in the left
-    ' column, the "To ..." Cr leg in the right; the report carries credit legs
-    ' as negative, so the credit column is SUBTRACTED (adding it would double
-    ' the difference).
-    If diffCol.Exists("LC - Consol|" & code) Then
-        dc = diffCol("LC - Consol|" & code): vc = valCol("LC - Consol|" & code)
-        diffCols(dc) = 1: vL = ColL(vc)
-        If Not isSub And isPl Then    ' only P&L-series accounts (1/2/3) hit the P&L
-            Dim ccR As String, crit As String, fR As String, s1 As String, s2 As String
-            ccR = "'" & SH_CONSOL & "'!$" & ColL(gCcConcat) & "$" & gCcFirst & _
-                  ":$" & ColL(gCcConcat) & "$" & gCcLast
-            crit = vL & "$" & CK_SUB & "&$C" & cr
-            If Len(fcode) > 0 And gCcFunc > 0 Then
-                fR = "'" & SH_CONSOL & "'!$" & ColL(gCcFunc) & "$" & gCcFirst & _
-                     ":$" & ColL(gCcFunc) & "$" & gCcLast      ' functional group range
-            Else
-                fR = ""
-            End If
-            s1 = ConsolSum(ccR, crit, fR, fcode, gCcVal1)
-            If gCcVal2 > 0 Then
-                s2 = "-" & ConsolSum(ccR, crit, fR, fcode, gCcVal2)
-            Else
-                s2 = ""
-            End If
-            ck.Cells(cr, dc).Formula = "=" & s1 & s2 & "-" & vL & cr
-        End If
-    End If
+    ' (LC - Consol is reconciled on its own dedicated sheet, not here.)
 
     If diffCol.Exists("GC - Balance|" & code) Then
         dc = diffCol("GC - Balance|" & code): vc = valCol("GC - Balance|" & code)
@@ -591,6 +538,112 @@ Private Sub BuildMinority(wb As Workbook)
         End If
     Next key
     ms.Columns("A:F").ColumnWidth = 22
+End Sub
+
+
+'============================================================================
+'  LC - CONSOL CHECK  (dedicated tie-out tab)
+'============================================================================
+' Per company + P&L account: the report's LC-Consol value (from the Check tab)
+' vs the tracker's net posting (Debit - Credit). Function-wise rows match their
+' COS/S&M/G&A slice; nature-wise rows match the account total. Banner + red.
+Private Sub BuildLcConsolCheck(wb As Workbook)
+    If Not gHasConsol Then Exit Sub
+    Dim ck As Worksheet: Set ck = wb.Worksheets(SH_CHECK)
+
+    ' LC-Consol value columns on the Check tab (block row CK_BLOCK, code CK_SUB)
+    Dim ents As Collection: Set ents = New Collection
+    Dim lcCol As Object: Set lcCol = CreateObject("Scripting.Dictionary")
+    Dim c As Long, lastC As Long
+    lastC = ck.Cells(CK_BLOCK, ck.Columns.Count).End(xlToLeft).Column
+    For c = 5 To lastC
+        If LCase$(Trim$(CStr(ck.Cells(CK_BLOCK, c).Value))) = "lc - consol" Then
+            Dim cd As String: cd = Trim$(CStr(ck.Cells(CK_SUB, c).Value))
+            If Len(cd) > 0 And StrComp(cd, OVERALL, vbTextCompare) <> 0 _
+               And Not lcCol.Exists(cd) Then
+                lcCol(cd) = c: ents.Add cd
+            End If
+        End If
+    Next c
+    If ents.Count = 0 Then Exit Sub
+
+    Dim ws As Worksheet
+    Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    ws.Name = SH_LCCONSOL
+    ws.Cells(2, 1).Value = "Section": ws.Cells(2, 2).Value = "GLACCOUNT"
+    ws.Cells(2, 3).Value = "GL Description": ws.Range("A2:C2").Font.Bold = True
+
+    Dim vCol As Object: Set vCol = CreateObject("Scripting.Dictionary")
+    Dim dCol As Object: Set dCol = CreateObject("Scripting.Dictionary")
+    Dim j As Long, vC As Long, dC As Long
+    For j = 1 To ents.Count
+        vC = 4 + 2 * (j - 1): dC = vC + 1
+        vCol(ents(j)) = vC: dCol(ents(j)) = dC
+        ws.Cells(1, vC).Value = ents(j): ws.Cells(1, vC).Font.Bold = True
+        ws.Cells(2, vC).Value = "LC-Consol value": ws.Cells(2, dC).Value = "Diff"
+        ws.Cells(2, vC).Font.Bold = True: ws.Cells(2, dC).Font.Bold = True
+    Next j
+
+    Dim ccR As String
+    ccR = "'" & SH_CONSOL & "'!$" & ColL(gCcConcat) & "$" & gCcFirst & _
+          ":$" & ColL(gCcConcat) & "$" & gCcLast
+
+    Dim lastData As Long: lastData = ck.Cells(ck.Rows.Count, 3).End(xlUp).Row
+    Dim r As Long, k As Long: k = 3
+    For r = CK_DATA0 To lastData
+        Dim acc As String: acc = Trim$(CStr(ck.Cells(r, 3).Value))
+        If Len(acc) > 0 And IsPlAcct(acc) Then
+            Dim cat As String: cat = Trim$(CStr(ck.Cells(r, 2).Value))
+            Dim fcode As String: fcode = FuncCode(cat)
+            Dim fR As String
+            If Len(fcode) > 0 And gCcFunc > 0 Then
+                fR = "'" & SH_CONSOL & "'!$" & ColL(gCcFunc) & "$" & gCcFirst & _
+                     ":$" & ColL(gCcFunc) & "$" & gCcLast
+            Else
+                fR = ""
+            End If
+            ws.Cells(k, 1).Value = cat
+            ws.Cells(k, 2).Value = ck.Cells(r, 3).Value
+            ws.Cells(k, 3).Value = ck.Cells(r, 4).Value
+            For j = 1 To ents.Count
+                Dim cd2 As String: cd2 = ents(j)
+                Dim crit As String, s1 As String, s2 As String
+                ws.Cells(k, vCol(cd2)).Formula = "='" & SH_CHECK & "'!" & ColL(lcCol(cd2)) & r
+                crit = """" & cd2 & """&$B" & k
+                s1 = ConsolSum(ccR, crit, fR, fcode, gCcVal1)
+                If gCcVal2 > 0 Then s2 = "-" & ConsolSum(ccR, crit, fR, fcode, gCcVal2) Else s2 = ""
+                ws.Cells(k, dCol(cd2)).Formula = "=" & s1 & s2 & "-" & ColL(vCol(cd2)) & k
+            Next j
+            k = k + 1
+        End If
+    Next r
+    Dim lastK As Long: lastK = k - 1
+    If lastK < 3 Then Exit Sub
+
+    Dim lcCount As String, dL As String
+    lcCount = ""
+    For j = 1 To ents.Count
+        dL = ColL(dCol(ents(j)))
+        With ws.Range(dL & "3:" & dL & lastK)
+            .FormatConditions.Delete
+            .FormatConditions.Add Type:=xlExpression, Formula1:="=ABS(" & dL & "3)>" & TOL
+            .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+            .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+        End With
+        If Len(lcCount) > 0 Then lcCount = lcCount & "+"
+        lcCount = lcCount & "SUMPRODUCT(--(ABS(" & dL & "3:" & dL & lastK & ")>" & TOL & "))"
+    Next j
+    ws.Range("B1").Formula = "=" & lcCount
+    ws.Range("A1").Formula = "=IF(B1=0,""LC - Consol: ALL entries tie""," & _
+        """LC - Consol: ""&B1&"" difference(s) NOT tied - see red"")"
+    ws.Range("A1").Font.Bold = True
+    With ws.Range("A1:B1")
+        .FormatConditions.Delete
+        .FormatConditions.Add Type:=xlExpression, Formula1:="=$B$1>0"
+        .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+        .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+    End With
+    ws.Columns("A").ColumnWidth = 22: ws.Columns("C").ColumnWidth = 30
 End Sub
 
 
@@ -1181,7 +1234,8 @@ End Function
 Private Function IsCheckedBlock(ByVal blk As String) As Boolean
     Select Case LCase$(Trim$(blk))
         Case "lc - balance", "gc - balance", "gc - total": IsCheckedBlock = True
-        Case "lc - consol": IsCheckedBlock = gHasConsol   ' only with a tracker
+        ' LC - Consol is reconciled on its own dedicated sheet, not here, so the
+        ' Check tab keeps only its value columns (needed for the FX base).
         Case Else: IsCheckedBlock = False
     End Select
 End Function

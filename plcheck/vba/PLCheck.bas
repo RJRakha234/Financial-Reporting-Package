@@ -738,7 +738,7 @@ Private Function CodesAfterCompany(ws As Worksheet) As Collection
                 For cc = c + 1 To cN
                     Dim s As String: s = Trim$(CStr(ws.Cells(r, cc).Value))
                     If Len(s) = 0 Or LCase$(s) = "overall result" Then Exit For
-                    AddUnique res, s
+                    If IsEntityCode(s) Then AddUnique res, s
                 Next cc
             End If
         Next c
@@ -754,11 +754,11 @@ Private Function ReportCodes(ws As Worksheet) As Collection
     Dim ur As Range: Set ur = ws.UsedRange
     Dim cN As Long: cN = ur.Column + ur.Columns.Count - 1
     Dim c As Long
-    For c = 1 To cN
+    ' scan only the data columns (D onward), like the main entity detection, so
+    ' a label in the left columns of the sub-header row isn't taken as a code.
+    For c = RP_NUM0 To cN
         Dim s As String: s = Trim$(CStr(ws.Cells(blr + 1, c).Value))
-        If Len(s) > 0 And LCase$(s) <> "overall result" And IsEntityCode(s) Then
-            AddUnique res, s
-        End If
+        If IsEntityCode(s) Then AddUnique res, s
     Next c
     Set ReportCodes = res
 End Function
@@ -1244,10 +1244,22 @@ End Function
 '============================================================================
 '  SMALL HELPERS
 '============================================================================
+' True for a real company code: short, alphanumeric, no spaces - so a dimension
+' label like "Consolidation unit" (has a space) is rejected.
 Private Function IsEntityCode(ByVal v As String) As Boolean
-    Dim s As String: s = LCase$(Trim$(v))
-    IsEntityCode = (Len(s) > 0) And (s <> "company") And (s <> OVERALL) _
-                   And (s <> "overall result") And (s <> "group account number")
+    Dim s As String: s = Trim$(v)
+    If Len(s) < 2 Or Len(s) > 15 Then Exit Function
+    If InStr(s, " ") > 0 Then Exit Function
+    Select Case LCase$(s)
+        Case "company", "overall result", "group account number", _
+             "consolidation unit", "group", "total", "result", "unit": Exit Function
+    End Select
+    Dim i As Long, ch As Long
+    For i = 1 To Len(s)
+        ch = Asc(UCase$(Mid$(s, i, 1)))
+        If Not ((ch >= 65 And ch <= 90) Or (ch >= 48 And ch <= 57)) Then Exit Function
+    Next i
+    IsEntityCode = True
 End Function
 
 Private Function LooksLikeAccount(ByVal v As Variant) As Boolean
