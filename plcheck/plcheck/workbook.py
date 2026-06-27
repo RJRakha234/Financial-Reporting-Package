@@ -224,7 +224,9 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
         if consol.func_col:
             inputs.propagate_func_column(
                 wb[C.SHEET_CONSOL], consol.concat_col, consol.func_col,
-                consol.first_row, consol.last_row, consol.span_end)
+                consol.val_cols[0],
+                consol.val_cols[1] if len(consol.val_cols) > 1 else 0,
+                consol.first_row, consol.last_row)
     return wb
 
 

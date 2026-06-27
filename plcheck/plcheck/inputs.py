@@ -487,51 +487,61 @@ class ConsolGeometry:
     first_row: int                # first data row
     last_row: int
     func_col: int = 0             # "Functional Group" column (0 if absent)
-    span_end: int = 0             # right edge of the data area (for blank-row test)
     totals: dict = field(default_factory=dict)        # concat -> net amount
     # (concat, functional-code) -> net amount, for the function-wise split
     totals_fn: dict = field(default_factory=dict)
 
 
-def propagate_func_column(ws, concat_col, func_col, first_row, last_row,
-                          span_end) -> None:
+def propagate_func_column(ws, concat_col, func_col, dr_col, cr_col,
+                          first_row, last_row, tol: float = 0.5) -> None:
     """Fill the Functional Group code across both legs of each entry, in place.
 
     An entry's COS/S&M/G&A code may be written on either its P&L leg or its
-    contra leg; entries are separated by fully-blank rows. Within each block we
-    copy the (single) code into the blank Functional Group cells, so a match on
-    the P&L leg's row works no matter which leg the code was typed on.
+    contra leg, so the blank cells must inherit it. Entries are delimited
+    robustly by **Debit = Credit balance**: legs are accumulated until the
+    running Debit equals the running Credit (a complete entry), then closed.
+    This separates even back-to-back entries with no blank row between them, so
+    a code can't bleed from one entry to the next. A row with no Concatenate
+    (blank or narration) also closes the current entry.
     """
     if not func_col:
         return
 
-    def blank_row(r):
-        for c in range(1, span_end + 1):
-            v = ws.cell(row=r, column=c).value
-            if v is not None and str(v).strip() != "":
-                return False
-        return True
+    def num(r, c):
+        if not c:
+            return 0.0
+        v = ws.cell(row=r, column=c).value
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
 
-    r = first_row
-    while r <= last_row:
-        if blank_row(r):
-            r += 1
-            continue
-        g0 = r
-        while r <= last_row and not blank_row(r):
-            r += 1
-        g1 = r - 1
+    def close(rows):
         gfunc = ""
-        for rr in range(g0, g1 + 1):
+        for rr in rows:
             v = ws.cell(row=rr, column=func_col).value
             if v is not None and str(v).strip():
                 gfunc = str(v).strip()
                 break
         if gfunc:
-            for rr in range(g0, g1 + 1):
+            for rr in rows:
                 v = ws.cell(row=rr, column=func_col).value
                 if v is None or str(v).strip() == "":
                     ws.cell(row=rr, column=func_col, value=gfunc)
+
+    rows, sum_dr, sum_cr = [], 0.0, 0.0
+    for r in range(first_row, last_row + 1):
+        concat = str(ws.cell(row=r, column=concat_col).value or "").strip()
+        if not concat:                       # blank / narration ends the entry
+            if rows:
+                close(rows)
+            rows, sum_dr, sum_cr = [], 0.0, 0.0
+            continue
+        rows.append(r)
+        sum_dr += num(r, dr_col)
+        sum_cr += num(r, cr_col)
+        if abs(sum_dr - sum_cr) <= tol and (abs(sum_dr) > tol or abs(sum_cr) > tol):
+            close(rows)                      # balanced -> a complete entry
+            rows, sum_dr, sum_cr = [], 0.0, 0.0
+    if rows:
+        close(rows)
 
 
 def _find_consol_sheet(wb):
@@ -587,8 +597,10 @@ def parse_consol(path: str) -> ConsolGeometry:
 
     # carry each entry's functional code onto both its legs (it may be typed on
     # the P&L leg or the contra leg), so the match works on the P&L leg's row.
-    span_end = max(boundary, func_col)
-    propagate_func_column(ws, concat_col, func_col, first_row, last_row, span_end)
+    dr_col = val_cols[0]
+    cr_col = val_cols[1] if len(val_cols) > 1 else 0
+    propagate_func_column(ws, concat_col, func_col, dr_col, cr_col,
+                          first_row, last_row)
 
     def _num(r, c):
         v = ws.cell(row=r, column=c).value
@@ -609,7 +621,7 @@ def parse_consol(path: str) -> ConsolGeometry:
             totals_fn[(key, fc)] = totals_fn.get((key, fc), 0.0) + amt
 
     return ConsolGeometry(sheet_name=ws.title, concat_col=concat_col,
-                          val_cols=val_cols, func_col=func_col, span_end=span_end,
+                          val_cols=val_cols, func_col=func_col,
                           totals_fn=totals_fn, first_row=first_row,
                           last_row=last_row, totals=totals)
 
