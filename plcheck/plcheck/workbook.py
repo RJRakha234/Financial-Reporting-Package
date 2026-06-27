@@ -180,7 +180,8 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
             diff_cols.add(d)
             f = _diff_formula(info, r, d, v, rule, agg, tb, layout,
                               fx_last, consol_first, consol_last,
-                              row.is_subtotal, consol_ref)
+                              row.is_subtotal, consol_ref,
+                              cfg.is_pl_account(row.account))
             if f:
                 ws[f"{d}{r}"] = f
 
@@ -276,7 +277,7 @@ def _minority_sheet(ws_wb, report: ReportTable, layout: CheckLayout,
 
 def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
                   fx_last, consol_first, consol_last,
-                  is_subtotal=False, consol_ref=None) -> str | None:
+                  is_subtotal=False, consol_ref=None, is_pl=True) -> str | None:
     """The difference formula for one cell, by block type."""
     if info.block == C.CHECK_LC_CONSOL:
         # tie LC - Consol back to the manual entry tracker. For this
@@ -284,8 +285,9 @@ def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
         # key) take the latest month's NET posting = Debit - Credit: the Dr
         # leg (charge) is in the left column, the "To ..." Cr leg in the right;
         # the report carries credit legs as negative, so the credit column is
-        # subtracted. Subtotal rows have no account to match.
-        if is_subtotal or consol_ref is None:
+        # subtracted. Only P&L-series accounts (leading digit 1/2/3) hit the
+        # P&L; subtotal rows have no account to match.
+        if is_subtotal or consol_ref is None or not is_pl:
             return None
         concat_rng, val_rngs = consol_ref
         key = f"{v}${ROW_SUBHEADER}&$C{r}"

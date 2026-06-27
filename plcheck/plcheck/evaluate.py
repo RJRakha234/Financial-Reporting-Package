@@ -117,7 +117,9 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
                                          row.description, e.code, expected, stated))
 
         # --- 1b. LC - Consol tie-out to the entry tracker ------------------
-        if consol_totals is not None and not row.is_subtotal and row.account is not None:
+        # only P&L-series accounts (leading digit 1/2/3) hit the P&L
+        if (consol_totals is not None and not row.is_subtotal
+                and row.account is not None and cfg.is_pl_account(row.account)):
             for e in report.entities:
                 stated = row.values.get((C.CHECK_LC_CONSOL, e.code), 0.0)
                 expected = consol_totals.get(
