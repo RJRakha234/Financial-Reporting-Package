@@ -64,7 +64,12 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
         val_rngs = [f"'{C.SHEET_CONSOL}'!${get_column_letter(vc)}${consol.first_row}"
                     f":${get_column_letter(vc)}${consol.last_row}"
                     for vc in consol.val_cols]
-        consol_ref = (concat_rng, val_rngs)
+        func_rng = None
+        if consol.func_col:
+            fc = get_column_letter(consol.func_col)
+            func_rng = (f"'{C.SHEET_CONSOL}'!${fc}${consol.first_row}"
+                        f":${fc}${consol.last_row}")
+        consol_ref = (concat_rng, val_rngs, func_rng)
     gc_currency = cfg.gc_currency or inputs.detect_gc_currency(report, rates.rates)
 
     tb_lastcol = get_column_letter(tb.last_col)
@@ -178,10 +183,12 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
                 continue
             d, v = info.diff_col, info.value_col
             diff_cols.add(d)
+            fcode = (cfg.functional_code(row.category)
+                     if consol and consol.func_col else None)
             f = _diff_formula(info, r, d, v, rule, agg, tb, layout,
                               fx_last, consol_first, consol_last,
                               row.is_subtotal, consol_ref,
-                              cfg.is_pl_account(row.account))
+                              cfg.is_pl_account(row.account), fcode)
             if f:
                 ws[f"{d}{r}"] = f
 
@@ -297,7 +304,8 @@ def _minority_sheet(ws_wb, report: ReportTable, layout: CheckLayout,
 
 def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
                   fx_last, consol_first, consol_last,
-                  is_subtotal=False, consol_ref=None, is_pl=True) -> str | None:
+                  is_subtotal=False, consol_ref=None, is_pl=True,
+                  fcode=None) -> str | None:
     """The difference formula for one cell, by block type."""
     if info.block == C.CHECK_LC_CONSOL:
         # tie LC - Consol back to the manual entry tracker. For this
@@ -305,15 +313,23 @@ def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
         # key) take the latest month's NET posting = Debit - Credit: the Dr
         # leg (charge) is in the left column, the "To ..." Cr leg in the right;
         # the report carries credit legs as negative, so the credit column is
-        # subtracted. Only P&L-series accounts (leading digit 1/2/3) hit the
-        # P&L; subtotal rows have no account to match.
+        # subtracted. For a function-wise row the same GL is split across
+        # COS/S&M/G&A, so also match the Functional Group code (SUMIFS); a
+        # nature-wise row has no code and matches account-only (the total).
+        # Only P&L-series accounts (1/2/3) hit the P&L; subtotals have no acct.
         if is_subtotal or consol_ref is None or not is_pl:
             return None
-        concat_rng, val_rngs = consol_ref
+        concat_rng, val_rngs, func_rng = consol_ref
         key = f"{v}${ROW_SUBHEADER}&$C{r}"
-        terms = f"SUMIF({concat_rng},{key},{val_rngs[0]})"
+        if fcode and func_rng:
+            def _s(vr):
+                return f'SUMIFS({vr},{concat_rng},{key},{func_rng},"{fcode}")'
+        else:
+            def _s(vr):
+                return f"SUMIF({concat_rng},{key},{vr})"
+        terms = _s(val_rngs[0])
         if len(val_rngs) > 1:
-            terms += f"-SUMIF({concat_rng},{key},{val_rngs[1]})"
+            terms += f"-{_s(val_rngs[1])}"
         return f"={terms}-{v}{r}"
 
     if info.block == C.CHECK_LC_BALANCE:

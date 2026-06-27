@@ -310,6 +310,36 @@ def test_consol_tracker_parsed_latest_month(tmp_path):
     assert inputs.consol_key("BALSCH", 290100) == "BALSCH290100"
 
 
+def test_consol_functional_split(tmp_path):
+    """A GL split across COS/S&M/G&A is summed per functional code (for a
+    function-wise row) and as a single total (for a nature-wise row)."""
+    import openpyxl as _xl
+    from plcheck.config import CheckConfig
+    p = tmp_path / "consol.xlsx"
+    wb = _xl.Workbook(); ws = wb.active; ws.title = "Entries- GR"
+    ws.append(["Company", "Comp code", "Concatenate", "Group Account Number",
+               "Functional Group", "GL Descriptions",
+               "Feb Dr", "Feb Cr", "Mar Dr", "Mar Cr", "Currency", "Type"])
+    for fg, amt in [("COS", 100.0), ("S&M", 200.0), ("G&A", 300.0)]:
+        ws.append(["BALSCH", "BALSCH", "BALSCH110200", 110200, fg, "x",
+                   "", "", amt, "", "EUR", "BPC"])
+    wb.save(p)
+    g = inputs.parse_consol(str(p))
+    assert g.func_col == 5
+    # function-wise: each section ties to its own slice
+    assert g.totals_fn[("BALSCH110200", "COS")] == 100.0
+    assert g.totals_fn[("BALSCH110200", "S&M")] == 200.0
+    assert g.totals_fn[("BALSCH110200", "G&A")] == 300.0
+    # nature-wise: the single row = the total of all three
+    assert g.totals["BALSCH110200"] == 600.0
+    # category -> functional code mapping
+    cfg = CheckConfig()
+    assert cfg.functional_code("Cost of Production") == "COS"
+    assert cfg.functional_code("Sales") == "S&M"
+    assert cfg.functional_code("General Administration") == "G&A"
+    assert cfg.functional_code("Revenue") is None        # not a functional split
+
+
 def test_consol_credit_leg_is_negative(tmp_path):
     """A 'To ...' credit-leg P&L account (amount in the Credit column) nets
     negative, matching the report's signed LC - Consol."""

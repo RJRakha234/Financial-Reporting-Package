@@ -486,7 +486,10 @@ class ConsolGeometry:
     val_cols: tuple               # the latest month's two value columns (Dr/Cr)
     first_row: int                # first data row
     last_row: int
-    totals: dict = field(default_factory=dict)   # concat-key -> summed amount
+    func_col: int = 0             # "Functional Group" column (0 if absent)
+    totals: dict = field(default_factory=dict)        # concat -> net amount
+    # (concat, functional-code) -> net amount, for the function-wise split
+    totals_fn: dict = field(default_factory=dict)
 
 
 def _find_consol_sheet(wb):
@@ -510,6 +513,14 @@ def parse_consol(path: str) -> ConsolGeometry:
     for c in range(concat_col + 1, ws.max_column + 1):
         if _norm_hdr(ws.cell(row=hdr_row, column=c).value) in ("currency", "type"):
             boundary = c - 1
+            break
+
+    # the "Functional Group" column (COS / S&M / G&A), if present
+    func_col = 0
+    for c in range(1, ws.max_column + 1):
+        if _norm_hdr(ws.cell(row=hdr_row, column=c).value) in (
+                "functional group", "function group", "functional grp"):
+            func_col = c
             break
 
     last_row = hdr_row
@@ -537,6 +548,7 @@ def parse_consol(path: str) -> ConsolGeometry:
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
 
     totals: dict[str, float] = {}
+    totals_fn: dict[tuple, float] = {}
     for r in range(first_row, last_row + 1):
         key = str(ws.cell(row=r, column=concat_col).value or "").strip()
         if not key:
@@ -544,10 +556,14 @@ def parse_consol(path: str) -> ConsolGeometry:
         amt = _num(r, val_cols[0])
         if len(val_cols) > 1:
             amt -= _num(r, val_cols[1])             # Debit - Credit
-        totals[key] = totals.get(key, 0.0) + amt
+        totals[key] = totals.get(key, 0.0) + amt    # account-only (nature-wise)
+        if func_col:                                # account + functional group
+            fc = str(ws.cell(row=r, column=func_col).value or "").strip().upper()
+            totals_fn[(key, fc)] = totals_fn.get((key, fc), 0.0) + amt
 
     return ConsolGeometry(sheet_name=ws.title, concat_col=concat_col,
-                          val_cols=val_cols, first_row=first_row,
+                          val_cols=val_cols, func_col=func_col, totals_fn=totals_fn,
+                          first_row=first_row,
                           last_row=last_row, totals=totals)
 
 

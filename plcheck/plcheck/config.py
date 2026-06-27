@@ -122,6 +122,13 @@ AGG_COST = "Cost of revenue"
 AGG_SALES = "Sales & Marketing"
 AGG_GA = "General Administration"
 
+# Map each Aggregate-Expenses block to the consol-entry tracker's "Functional
+# Group" code. In a *function-wise* report one GL is split across COS / S&M /
+# G&A rows, so each row must tie to its own functional slice of the tracker.
+# A *nature-wise* report has no such split (its rows map to the TB, not a
+# block), so it falls back to an account-only match (one row = the total).
+FUNCTIONAL_CODES = {AGG_COST: "COS", AGG_SALES: "S&M", AGG_GA: "G&A"}
+
 # Default mapping for the Base life science consolidation P&L. It covers the
 # category names used by *both* the IFRS INR and the Ind-AS Function-wise
 # reports (the names differ but never clash), so the tool auto-handles either
@@ -207,6 +214,9 @@ class CheckConfig:
     minority_aliases: tuple = ("Minority Interest", "Minority Interests",
                                "Non-controlling Interest",
                                "Non controlling Interest")
+    # Aggregate-Expenses block -> consol tracker Functional Group code, for the
+    # function-wise LC-Consol tie-out (see FUNCTIONAL_CODES).
+    functional_codes: dict = field(default_factory=lambda: dict(FUNCTIONAL_CODES))
     # Minimum similarity (0..1) for a fuzzy section-name match. 0.82 accepts a
     # one/two-character typo but still rejects unrelated section names.
     name_match_ratio: float = 0.82
@@ -246,6 +256,14 @@ class CheckConfig:
         if self.is_minority(category):
             return CategoryRule("", "")   # nets out, excluded from P&L
         return self.default_rule
+
+    def functional_code(self, category: str) -> str | None:
+        """The tracker Functional Group code (COS/S&M/G&A) for a report row, or
+        None when the row isn't a functional split (then match account-only)."""
+        rule = self.effective_rule(category)
+        if rule is None:
+            return None
+        return self.functional_codes.get(rule.source)
 
     def is_pl_account(self, account) -> bool:
         if account is None:

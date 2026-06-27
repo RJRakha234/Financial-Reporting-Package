@@ -50,7 +50,15 @@ the TB.
    (matched on the tracker's **Concatenate** = comp‑code + account) it takes
    the **latest month's** net posting = **Debit − Credit** (the Dr "charge" leg
    is positive; the "To …" Cr leg is subtracted, matching the report's signed
-   LC – Consol), and flags any difference red. Leave **B6 blank** to skip it.
+   LC – Consol), and flags any difference red. A1 shows an overall
+   **tie‑status banner** ("ALL entries tie" / "N difference(s) NOT tied").
+   Leave **B6 blank** to skip it.
+
+   In a **function‑wise** report (IFRS / Ind‑AS Function‑wise) the same GL is
+   split across **COS / S&M / G&A** rows, so each row also matches the tracker's
+   **Functional Group** code (COS, S&M, G&A) and ties to just its slice. In a
+   **nature‑wise** report the GL appears once, so it ties to the account total
+   (all functional groups summed). This switch is automatic.
 
 4. Save the workbook as **macro‑enabled** (`.xlsm`).
 
