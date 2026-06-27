@@ -571,14 +571,19 @@ def parse_consol(path: str) -> ConsolGeometry:
 _NON_CODE = {"company", "overall result", "group account number",
              "consolidation unit", "group", "total", "result", "unit",
              "gl description | currency"}
+# space-stripped, lower-cased forms, so the match tolerates any casing/spacing
+# (e.g. "Consolidation Unit", "CONSOLIDATION  UNIT").
+_NON_CODE_NORM = {"".join(w.split()).lower() for w in _NON_CODE}
 
 
 def looks_like_company_code(value) -> bool:
     """True for a real company code: short, alphanumeric, no spaces — so a
-    dimension label like 'Consolidation unit' (has a space) is rejected."""
+    dimension label like 'Consolidation unit' is rejected (matched tolerant of
+    spacing and upper/lower case)."""
     s = str(value).strip()
-    return (2 <= len(s) <= 15 and " " not in s
-            and s.lower() not in _NON_CODE and s.isalnum())
+    if "".join(s.split()).lower() in _NON_CODE_NORM:
+        return False
+    return 2 <= len(s) <= 15 and " " not in s and s.isalnum()
 
 
 def _codes_after_company(ws) -> list:
