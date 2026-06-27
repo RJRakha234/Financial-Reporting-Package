@@ -37,6 +37,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="absolute slack before a difference is flagged "
                         "(default: 0.5)")
     p.add_argument("--json", action="store_true", help="print the report as JSON")
+    p.add_argument("--html", nargs="?", const="auto", default=None,
+                   help="also write a bonus HTML error summary (A PL check, "
+                        "B Minority, C LC-Consol, D Entity reconciler). Give a "
+                        "path, or just --html to write <report>_Check.html.")
+    p.add_argument("--html-min", type=float, default=1.0,
+                   help="ignore differences smaller than this in the HTML "
+                        "summary (default: 1)")
     return p
 
 
@@ -81,6 +88,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\nCheck workbook written to: {result.output_path}")
             print("  Open in Excel to recalculate; non-zero differences are "
                   "highlighted red.")
+
+    # --- bonus HTML error summary (optional, isolated) --------------------
+    if args.html is not None:
+        from . import inputs
+        from .htmlreport import build_html
+        if args.html == "auto":
+            html_path = str(src.with_name(src.stem + "_Check.html"))
+        else:
+            html_path = args.html
+        doc = build_html(
+            result.report, result.evaluation, title=src.stem,
+            tb_codes=inputs.company_codes(args.tb),
+            agg_codes=inputs.company_codes(args.agg) if args.agg else [],
+            is_minority=cfg.is_minority, min_amount=args.html_min)
+        Path(html_path).write_text(doc, encoding="utf-8")
+        if not args.json:
+            print(f"HTML error summary written to: {html_path}")
 
     return 1 if not result.ok else 0
 
