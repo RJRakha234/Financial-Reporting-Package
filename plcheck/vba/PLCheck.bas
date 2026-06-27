@@ -402,8 +402,12 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
         End If
     End If
 
-    ' LC - Consol tie-out to the entry tracker (sum this company+account's
-    ' latest-month entries; comp-code & account = the tracker "Concatenate" key)
+    ' LC - Consol tie-out to the entry tracker. For this company+account
+    ' (comp-code & account = the tracker "Concatenate" key) take the latest
+    ' month's NET posting = Debit - Credit: the Dr leg (charge) is in the left
+    ' column, the "To ..." Cr leg in the right; the report carries credit legs
+    ' as negative, so the credit column is SUBTRACTED (adding it would double
+    ' the difference).
     If diffCol.Exists("LC - Consol|" & code) Then
         dc = diffCol("LC - Consol|" & code): vc = valCol("LC - Consol|" & code)
         diffCols(dc) = 1: vL = ColL(vc)
@@ -415,7 +419,7 @@ Private Sub WriteDiffs(ck As Worksheet, cr As Long, code As String, isSub As Boo
             s1 = "SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
                  ColL(gCcVal1) & "$" & gCcFirst & ":$" & ColL(gCcVal1) & "$" & gCcLast & ")"
             If gCcVal2 > 0 Then
-                s2 = "+SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
+                s2 = "-SUMIF(" & ccR & "," & crit & ",'" & SH_CONSOL & "'!$" & _
                      ColL(gCcVal2) & "$" & gCcFirst & ":$" & ColL(gCcVal2) & "$" & gCcLast & ")"
             Else
                 s2 = ""

@@ -518,25 +518,32 @@ def parse_consol(path: str) -> ConsolGeometry:
             last_row = r
     first_row = hdr_row + 1
 
-    # value columns = the latest month's Dr/Cr pair, i.e. the two right-most
-    # columns of the value area (just left of Currency/Type). Earlier columns
-    # (Group Account Number, prior months) are never the right-most pair, so a
-    # numeric account-number column can't be mistaken for a value.
+    # value columns = the latest month's Debit/Credit pair, i.e. the two
+    # right-most columns of the value area (just left of Currency/Type). Earlier
+    # columns (Group Account Number, prior months) are never the right-most
+    # pair, so a numeric account-number column can't be mistaken for a value.
+    # The amount we want is the NET posting to the account = Debit - Credit:
+    # each manual entry is a Dr leg (charge, in the left column) and a "To ..."
+    # Cr leg (in the right column); the report's LC - Consol carries the credit
+    # legs as negative, so the credit column must be SUBTRACTED, not added
+    # (adding it would double the difference).
     if boundary - 1 > concat_col:
-        val_cols = (boundary - 1, boundary)
+        val_cols = (boundary - 1, boundary)         # (Debit, Credit)
     else:
         val_cols = (boundary,)
+
+    def _num(r, c):
+        v = ws.cell(row=r, column=c).value
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
 
     totals: dict[str, float] = {}
     for r in range(first_row, last_row + 1):
         key = str(ws.cell(row=r, column=concat_col).value or "").strip()
         if not key:
             continue
-        amt = 0.0
-        for c in val_cols:
-            v = ws.cell(row=r, column=c).value
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                amt += float(v)
+        amt = _num(r, val_cols[0])
+        if len(val_cols) > 1:
+            amt -= _num(r, val_cols[1])             # Debit - Credit
         totals[key] = totals.get(key, 0.0) + amt
 
     return ConsolGeometry(sheet_name=ws.title, concat_col=concat_col,

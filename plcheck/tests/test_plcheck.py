@@ -299,13 +299,24 @@ def _make_consol_tracker(path, rows):
 
 def test_consol_tracker_parsed_latest_month(tmp_path):
     p = tmp_path / "consol.xlsx"
-    _make_consol_tracker(p, [("BALSCH", 290100, 222.0, ""),
-                             ("BALSCH", 804300, "", 222.0)])
+    _make_consol_tracker(p, [("BALSCH", 290100, 222.0, ""),    # Dr leg (charge)
+                             ("BALSCH", 804300, "", 222.0)])   # "To" Cr leg
     g = inputs.parse_consol(str(p))
     assert g.concat_col == 3
     assert len(g.val_cols) == 2                 # latest month's Dr/Cr pair
-    assert g.totals["BALSCH290100"] == 222.0    # P&L leg, latest month only
+    # net posting = Debit - Credit: the Dr leg is +, the credit leg is -
+    assert g.totals["BALSCH290100"] == 222.0
+    assert g.totals["BALSCH804300"] == -222.0
     assert inputs.consol_key("BALSCH", 290100) == "BALSCH290100"
+
+
+def test_consol_credit_leg_is_negative(tmp_path):
+    """A 'To ...' credit-leg P&L account (amount in the Credit column) nets
+    negative, matching the report's signed LC - Consol."""
+    p = tmp_path / "consol.xlsx"
+    _make_consol_tracker(p, [("BALSCH", 290900, "", 7000.0)])  # credit leg
+    g = inputs.parse_consol(str(p))
+    assert g.totals["BALSCH290900"] == -7000.0
 
 
 def test_consol_tieout_flags_unbacked_entry(tmp_path):

@@ -46,10 +46,11 @@ the TB.
 
    The **consolidation‑entry tracker** (**B6**) is optional. When given, a new
    **LC – Consol** difference column ties every consolidation figure in the
-   report back to the tracked manual entries: for each company + GL account it
-   sums that account's **latest‑month** entries (matched on the tracker's
-   **Concatenate** = comp‑code + account) and flags any difference red. Leave
-   **B6 blank** to skip this check.
+   report back to the tracked manual entries. For each company + GL account
+   (matched on the tracker's **Concatenate** = comp‑code + account) it takes
+   the **latest month's** net posting = **Debit − Credit** (the Dr "charge" leg
+   is positive; the "To …" Cr leg is subtracted, matching the report's signed
+   LC – Consol), and flags any difference red. Leave **B6 blank** to skip it.
 
 4. Save the workbook as **macro‑enabled** (`.xlsm`).
 

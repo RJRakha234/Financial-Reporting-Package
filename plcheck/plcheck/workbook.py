@@ -279,14 +279,19 @@ def _diff_formula(info, r, d, v, rule, agg, tb, layout: CheckLayout,
                   is_subtotal=False, consol_ref=None) -> str | None:
     """The difference formula for one cell, by block type."""
     if info.block == C.CHECK_LC_CONSOL:
-        # tie LC - Consol back to the manual entry tracker: sum the latest
-        # month's entries for this company+account (comp-code & account = the
-        # tracker's "Concatenate" key). Subtotal rows have no account to match.
+        # tie LC - Consol back to the manual entry tracker. For this
+        # company+account (comp-code & account = the tracker's "Concatenate"
+        # key) take the latest month's NET posting = Debit - Credit: the Dr
+        # leg (charge) is in the left column, the "To ..." Cr leg in the right;
+        # the report carries credit legs as negative, so the credit column is
+        # subtracted. Subtotal rows have no account to match.
         if is_subtotal or consol_ref is None:
             return None
         concat_rng, val_rngs = consol_ref
         key = f"{v}${ROW_SUBHEADER}&$C{r}"
-        terms = "+".join(f"SUMIF({concat_rng},{key},{vr})" for vr in val_rngs)
+        terms = f"SUMIF({concat_rng},{key},{val_rngs[0]})"
+        if len(val_rngs) > 1:
+            terms += f"-SUMIF({concat_rng},{key},{val_rngs[1]})"
         return f"={terms}-{v}{r}"
 
     if info.block == C.CHECK_LC_BALANCE:
