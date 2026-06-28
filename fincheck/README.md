@@ -71,6 +71,45 @@ for issue in result.issues:
 print(result.as_json())
 ```
 
+## Bonus: convert an Excel workbook to CSV (`fincheck.xlsx2csv`)
+
+Financial models usually arrive as multi-sheet `.xlsx`/`.xlsm` workbooks. The
+bundled converter turns a workbook into a folder of CSVs — **one CSV per
+worksheet** — so the data is easy to diff, grep, version-control, or feed into
+other tools. It only needs `openpyxl`.
+
+```bash
+# All sheets -> ./book_csv/<sheet>.csv  (one file per sheet)
+python -m fincheck.xlsx2csv book.xlsx
+
+# Choose the output folder, or convert a single sheet
+python -m fincheck.xlsx2csv book.xlsx -o out_dir
+python -m fincheck.xlsx2csv book.xlsx -s "Balance Sheet" -o out_dir
+
+# Tab-separated instead of comma-separated
+python -m fincheck.xlsx2csv book.xlsx -d $'\t'
+```
+
+```python
+from fincheck import convert_workbook
+
+paths = convert_workbook("book.xlsx", "out_dir")   # -> list[Path] of CSVs
+```
+
+It is built for real workbooks, not just toy ones:
+
+- **formula cells** are written as their last cached value (what Excel showed),
+  not the `=SUM(...)` text;
+- **dates/times** come out in ISO format (`2026-03-31`) instead of Excel serials;
+- **merged cells** repeat the top-left value across the range so columns stay
+  aligned;
+- integer-valued numbers lose the trailing `.0`; booleans become `TRUE`/`FALSE`;
+- trailing empty rows/columns are trimmed and ragged rows are padded to a
+  rectangle;
+- sheet names are slugified into safe filenames (and de-duplicated), empty sheets
+  are skipped by default, and files are written UTF-8-with-BOM so Excel re-opens
+  them cleanly. Delimiter, encoding, and clobbering are all configurable.
+
 ## Offline & data privacy
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It
