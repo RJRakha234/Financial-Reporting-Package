@@ -220,6 +220,19 @@ def test_schedule_opening_balance_equals_prior(result):
     assert opening.status(1.0) == "ok"
 
 
+def test_grouped_table_disambiguated_by_subheading(result):
+    # "Member" appears under both Plan A and Plan B; each must cast against the
+    # right prior row, so the label is qualified by its sub-group heading.
+    members = [c for c in result.checks if c.label.endswith("Member")]
+    labels = {c.label for c in members}
+    assert "Plan A · Member" in labels
+    assert "Plan B · Member" in labels
+    for c in members:
+        assert c.status(1.0) == "ok"
+    a = next(c for c in members if c.label == "Plan A · Member" and c.year == 2025)
+    assert a.six_month == 25 and a.current_quarter == 10 and a.prior_quarter == 15
+
+
 def test_basis_appears_in_reports(result):
     from fincheck.casting_report import to_dict
     from fincheck.casting_html import to_html

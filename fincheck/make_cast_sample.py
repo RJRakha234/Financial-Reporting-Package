@@ -21,11 +21,16 @@ _C6_CUR, _C6_PRI = 460, 520            # current-year / prior-year, six-month
 _LABEL_X = 50
 
 
-def _row(c, y, label, *values, right_edges):
+def _row(c, y, label, *values, right_edges, indent=0):
     c.setFont("Helvetica", 9)
-    c.drawString(_LABEL_X, y, label)
+    c.drawString(_LABEL_X + indent, y, label)
     for value, x in zip(values, right_edges):
         c.drawRightString(x, y, value)
+
+
+def _heading(c, y, label, indent=0):
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(_LABEL_X + indent, y, label)
 
 
 # Segment matrix: three columns drawn centred so the casting extractor (which
@@ -100,6 +105,21 @@ def _current(path):
     for label, *vals in rows:
         _row(c, y, label, *vals, right_edges=edges)
         y -= 16
+    # A grouped table: the same line item ("Member") appears under two plans, so
+    # it must be told apart by its sub-group heading to cast correctly.
+    y -= 14
+    c.setFont("Helvetica", 9)
+    c.drawString(_LABEL_X, y, "Summary of grants")
+    y -= 12
+    c.drawString(220, y, "Three months ended September 30,")
+    c.drawString(410, y, "Six months ended September 30,")
+    y -= 14
+    _row(c, y, "", "2025", "2024", "2025", "2024", right_edges=edges)
+    y -= 16
+    _heading(c, y, "Plan A"); y -= 14
+    _row(c, y, "Member", "10", "8", "25", "20", right_edges=edges, indent=20); y -= 14
+    _heading(c, y, "Plan B"); y -= 14
+    _row(c, y, "Member", "5", "4", "12", "10", right_edges=edges, indent=20); y -= 18
     # Two segment matrices (three- and six-month) on the same page.
     y -= 20
     y = _segment(
@@ -157,6 +177,19 @@ def _prior(path):
     for label, *vals in rows:
         _row(c, y, label, *vals, right_edges=edges)
         y -= 16
+    # Grouped table (prior three-month figures); same "Member" under two plans.
+    y -= 14
+    c.setFont("Helvetica", 9)
+    c.drawString(_LABEL_X, y, "Summary of grants")
+    y -= 12
+    c.drawString(220, y, "Three months ended June 30,")
+    y -= 14
+    _row(c, y, "", "2025", "2024", right_edges=edges)
+    y -= 16
+    _heading(c, y, "Plan A"); y -= 14
+    _row(c, y, "Member", "15", "12", right_edges=edges, indent=20); y -= 14
+    _heading(c, y, "Plan B"); y -= 14
+    _row(c, y, "Member", "7", "6", right_edges=edges, indent=20); y -= 18
     y -= 20
     _segment(
         c, y, "Three months ended June 30, 2025 and June 30, 2024:",

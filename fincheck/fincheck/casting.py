@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -428,17 +429,37 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
                     page_index=page_index, note=note, title=title,
                     columns=columns, rows=[],
                 )
+                # Collect rows, tracking the sub-group headings above them (by
+                # indent), so that line items repeated under several groups — the
+                # ESOP grants table lists "Key Management Personnel (KMP)" once per
+                # plan — can be told apart and matched to the right prior row.
+                heads: dict[float, str] = {}
+                collected = []
                 for brow in body:
                     label, cells = _assign_cells(brow, columns)
-                    if cells:
-                        table.rows.append(
-                            TableRow(
-                                label=label, page_index=page_index,
-                                top=min(w["top"] for w in brow),
-                                bottom=max(w["bottom"] for w in brow),
-                                cells=cells,
-                            )
+                    x0 = brow[0]["x0"] if brow else 0.0
+                    if not cells:
+                        if label and not _looks_like_heading(label):
+                            heads = {k: v for k, v in heads.items() if k < x0 - 3}
+                            heads[x0] = label
+                        continue
+                    path = [heads[k] for k in sorted(heads) if k < x0 - 3]
+                    collected.append((label, path, brow, cells))
+
+                dupes = {lab for lab, n in
+                         Counter(normalize_label(l) for l, _, _, _ in collected).items()
+                         if n > 1}
+                for label, path, brow, cells in collected:
+                    if normalize_label(label) in dupes and path:
+                        label = " · ".join([*path, label] if label else path)
+                    table.rows.append(
+                        TableRow(
+                            label=label, page_index=page_index,
+                            top=min(w["top"] for w in brow),
+                            bottom=max(w["bottom"] for w in brow),
+                            cells=cells,
                         )
+                    )
 
                 if table.rows:
                     tables.append(table)
@@ -466,11 +487,13 @@ def is_additive_label(label: str) -> bool:
     return not _NON_ADDITIVE_RE.search(label)
 
 
-# A whole table is skipped when its introducing sentence shows it is share
-# counts or option-pricing inputs rather than additive ₹ figures.
+# A whole table is skipped when its introducing sentence shows it is a point-in-
+# time disclosure rather than additive flows: a share-count reconciliation or an
+# option-pricing assumption grid. (The grants-made-during table IS additive —
+# grants in the quarter plus the prior period equal the year-to-date — so it is
+# cast, not skipped.)
 _EXCLUDE_TABLE_RE = re.compile(
-    r"(?i)(grants?\s+(made\s+)?during|summary of grants|granted in|"
-    r"reconciliation of the number|number of (equity )?shares|"
+    r"(?i)(reconciliation of the number|number of (equity )?shares|"
     r"fair value of each|following assumptions|share price)")
 
 
