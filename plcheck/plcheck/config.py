@@ -182,6 +182,10 @@ class CheckConfig:
     )
     # Absolute slack (in the figure's own units) before a difference is flagged.
     tolerance: float = 0.5
+    # GL accounts that, on the dedicated "Selected GL TB Check" tab, are verified
+    # against the Real Time TB (instead of the Aggregate Expenses report their
+    # section would normally use). Extend this list as needed.
+    tb_override_accounts: tuple = (333200, 333230)
     # "P&L accounts" for the "Net Profit as per Real Time TB" sum are identified
     # by their leading digit — the 1-, 2- and 3-series accounts — which excludes
     # balance-sheet accounts (4-, 8-, 9-series). Using the leading digit (rather

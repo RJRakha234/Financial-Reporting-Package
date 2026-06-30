@@ -210,6 +210,9 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
     # ---- entity (company-code) coverage across the inputs ----------------
     _entity_coverage_sheet(wb, report, tb_path, agg_path)
 
+    # ---- selected GLs verified against the TB (independent tab) -----------
+    _tb_override_sheet(wb, report, layout, tb, cfg)
+
     # ---- embed the source sheets -----------------------------------------
     _embed(wb, inputs.read_sheet(tb_path, C.SHEET_TB))
     if agg_path:
@@ -484,6 +487,75 @@ def _lc_consol_sheet(wbk, report: ReportTable, layout: CheckLayout,
     ws.column_dimensions["D"].width = 32
     ws.column_dimensions["E"].width = 16
     ws.column_dimensions["F"].width = 14
+    ws.freeze_panes = "A3"
+
+
+TB_OVERRIDE_SHEET = "Selected GL TB Check"
+
+
+def _tb_override_sheet(ws_wb, report: ReportTable, layout: CheckLayout, tb,
+                       cfg: C.CheckConfig) -> None:
+    """Independent tab: the configured GL accounts (tb_override_accounts) have
+    their report LC-Balance figure verified against the Real Time TB, instead of
+    the Aggregate Expenses report their section would normally use. One row per
+    company + account; Diff = TB − report, with a banner and red highlighting."""
+    wanted = {inputs.account_key(a) for a in cfg.tb_override_accounts}
+    if not wanted:
+        return
+    ws = ws_wb.create_sheet(TB_OVERRIDE_SHEET)
+    tol = cfg.tolerance
+    heads = ["Company", "GLACCOUNT", "GL Description", "Report LC value",
+             "Real Time TB", "Diff"]
+    for j, h in enumerate(heads, start=1):
+        ws.cell(2, j, h).font = HDR_FONT
+
+    tb_last = get_column_letter(tb.last_col)
+    tb_rng = f"'{C.SHEET_TB}'!$A${tb.header_row}:${tb_last}${tb.last_data_row}"
+    tb_hdr = f"'{C.SHEET_TB}'!$A${tb.header_row}:${tb_last}${tb.header_row}"
+
+    first = 3
+    k = first
+    for i, row in enumerate(report.rows):
+        if row.is_subtotal or row.account is None:
+            continue
+        if inputs.account_key(row.account) not in wanted:
+            continue
+        check_row = FIRST_DATA_ROW + i
+        for e in report.entities:
+            lc_valcol = layout.value_col(C.CHECK_LC_BALANCE, e.code)
+            ws.cell(k, 1, e.code)
+            ws.cell(k, 2, row.account)
+            ws.cell(k, 3, row.description)
+            ws.cell(k, 4).value = f"='{C.SHEET_CHECK}'!{lc_valcol}{check_row}"
+            ws.cell(k, 5).value = (f'=IFERROR(VLOOKUP($B{k},{tb_rng},'
+                                   f'MATCH("{e.code}",{tb_hdr},0),FALSE),0)')
+            ws.cell(k, 6).value = f"=E{k}-D{k}"
+            for col in (4, 5, 6):
+                ws.cell(k, col).number_format = "#,##0.00"
+            k += 1
+    last = k - 1
+
+    if last >= first:
+        ws.conditional_formatting.add(
+            f"F{first}:F{last}",
+            FormulaRule(formula=[f"ABS(F{first})>{tol}"],
+                        fill=RED_FILL, font=RED_FONT))
+        ws["B1"] = f"=SUMPRODUCT(--(ABS(F{first}:F{last})>{tol}))"
+        ws["A1"] = ('=IF(B1=0,"Selected GLs: ALL tie to TB",'
+                    '"Selected GLs: "&B1&" difference(s) vs TB - see red")')
+        ws["A1"].font = HDR_FONT
+        ws.conditional_formatting.add(
+            "A1:B1", FormulaRule(formula=["$B$1>0"], fill=RED_FILL, font=RED_FONT))
+    else:
+        ws["A1"] = ("Selected GL TB Check: none of the configured accounts "
+                    f"({', '.join(str(a) for a in cfg.tb_override_accounts)}) "
+                    "are in this report")
+        ws["A1"].font = HDR_FONT
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 32
+    for col in ("D", "E", "F"):
+        ws.column_dimensions[col].width = 16
     ws.freeze_panes = "A3"
 
 

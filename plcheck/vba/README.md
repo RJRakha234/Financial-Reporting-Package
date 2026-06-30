@@ -17,7 +17,11 @@ It builds the same two outputs as the Python tool:
   (Debit − Credit), with a tie‑status banner and red‑highlighted differences;
 * an **Entity Coverage** sheet — the company codes in each input (PL report,
   Real Time TB, Aggregate Exp) side by side, plus a reconciliation flagging any
-  code present in one source but missing from another (e.g. a TB‑only typo).
+  code present in one source but missing from another (e.g. a TB‑only typo);
+* a **Selected GL TB Check** sheet — for the configured GL accounts
+  (`TB_OVERRIDE`, default `333200, 333230`) the report's LC‑Balance figure is
+  verified against the **Real Time TB** (instead of the Aggregate Expenses
+  report their section would normally use); independent of the other checks.
 
 It handles **IFRS INR**, **Ind‑AS Function‑wise** and **Ind‑AS Nature‑wise**
 reports from the one module (Nature‑wise = no Aggregate Exp; just leave the Agg

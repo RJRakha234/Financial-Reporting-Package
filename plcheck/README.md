@@ -129,7 +129,11 @@ The output is a real, recalculating Excel file — not a static dump:
 * an **Entity Coverage sheet** — the company codes in each input side by side
   plus a reconciliation flagging any present in one source but missing from
   another (dimension labels such as *Consolidation unit* are not treated as
-  codes).
+  codes);
+* a **Selected GL TB Check sheet** — for the configured accounts
+  (`tb_override_accounts`, default `333200, 333230`) the report's LC-Balance
+  figure is verified against the **Real Time TB** rather than the Aggregate
+  Expenses report; an independent tab with its own banner.
 
 Because everything is a formula over the embedded inputs, an auditor can trace
 every number, and tweaking an input recalculates the check.

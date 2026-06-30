@@ -84,7 +84,8 @@ def test_build_writes_valid_workbook(tmp_path):
 
     wb = openpyxl.load_workbook(out)
     assert wb.sheetnames == ["Check", "Minority Interest", "Entity Coverage",
-                             "Real Time TB", "Aggregate Exp", "MA rates"]
+                             "Selected GL TB Check", "Real Time TB",
+                             "Aggregate Exp", "MA rates"]
     ws = wb["Check"]
     # difference formulas are present on detail rows, absent on subtotal rows
     assert str(ws["F9"].value).startswith("=IFERROR(VLOOKUP")
@@ -308,6 +309,33 @@ def test_consol_tracker_parsed_latest_month(tmp_path):
     assert g.totals["BALSCH290100"] == 222.0
     assert g.totals["BALSCH804300"] == -222.0
     assert inputs.consol_key("BALSCH", 290100) == "BALSCH290100"
+
+
+def test_selected_gl_tb_check_tab(tmp_path):
+    """The configured GL accounts get their own tab, verified against the TB."""
+    from plcheck.config import CheckConfig
+    from plcheck.workbook import build_check_workbook
+    import openpyxl as _xl
+    # relabel two report accounts to the override accounts
+    rep = tmp_path / "rep.xlsx"
+    w = _xl.load_workbook(REPORT); s = w.active
+    blr = inputs._find_block_label_row(s)
+    for r in range(blr + 4, s.max_row + 1):
+        if s.cell(r, 2).value == 311025:
+            s.cell(r, 2, 333200)
+        if s.cell(r, 2).value == 311030:
+            s.cell(r, 2, 333230)
+    w.save(rep)
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(inputs.read_report(str(rep)), TB, AGG, RATES).save(out)
+    wb = openpyxl.load_workbook(out)
+    assert "Selected GL TB Check" in wb.sheetnames
+    ws = wb["Selected GL TB Check"]
+    accts = {ws.cell(r, 2).value for r in range(3, ws.max_row + 1)}
+    assert 333200 in accts and 333230 in accts
+    # each row: report-LC reference + a TB VLOOKUP + a diff
+    f = [ws.cell(r, 5).value for r in range(3, ws.max_row + 1)]
+    assert all(isinstance(v, str) and "VLOOKUP" in v and "Real Time TB" in v for v in f)
 
 
 def test_entity_coverage_flags_source_only_code(tmp_path):
