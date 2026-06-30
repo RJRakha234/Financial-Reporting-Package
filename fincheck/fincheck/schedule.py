@@ -24,7 +24,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .casting import Cell, _NUMWORD, _pdf_rows, _row_text
+from .casting import (
+    Cell, _NOTE_RE, _NUMWORD, _looks_like_heading, _pdf_rows, _row_text)
 from .numbers import parse_number
 
 _SCHED_RE = re.compile(
@@ -161,11 +162,31 @@ def _column_names(name_rows, centres) -> list[str]:
     return out
 
 
+def _schedule_note(heading: str, kind: str) -> str | None:
+    """The note number the schedule sits under, if its heading matches the kind."""
+    m = _NOTE_RE.match(heading or "")
+    if not m:
+        return None
+    title = m.group(2).lower()
+    if kind == "PPE" and any(w in title for w in ("property", "plant", "equipment")):
+        return m.group(1)
+    if kind == "ROU" and any(w in title for w in ("right-of-use", "right of use", "lease")):
+        return m.group(1)
+    return None
+
+
 def extract_schedules(pdf_path: str) -> list[Schedule]:
     schedules: list[Schedule] = []
+    current_note = ""        # running note heading, carried across pages
     if True:
         for page_index, page_rows in enumerate(_pdf_rows(pdf_path)):
             rows = list(page_rows)
+            note_at = [""] * len(rows)
+            for idx, row in enumerate(rows):
+                t = _row_text(row)
+                if _looks_like_heading(t):
+                    current_note = t
+                note_at[idx] = current_note
             i = 0
             while i < len(rows):
                 m = _SCHED_RE.search(_row_text(rows[i]))
@@ -173,7 +194,10 @@ def extract_schedules(pdf_path: str) -> list[Schedule]:
                     i += 1
                     continue
                 kind = "ROU" if m.group(1).lower().startswith("right") else "PPE"
-                note = "2.19" if kind == "ROU" else "2.2"
+                # Prefer the actual note number from the heading (IFRS numbers
+                # differ from Ind AS); fall back to the Ind AS default.
+                note = _schedule_note(note_at[i], kind) or ("2.19" if kind == "ROU"
+                                                            else "2.2")
 
                 # The period descriptor may spill onto the next row or two.
                 window = " ".join(_row_text(rows[j])
@@ -292,7 +316,7 @@ def schedule_checks(current_pdf: str, prior_pdf: str):
     pri = extract_schedules(prior_pdf)
     checks: list[CastCheck] = []
 
-    for kind, note in (("PPE", "2.2"), ("ROU", "2.19")):
+    for kind in ("PPE", "ROU"):
         # The current statement's longest schedule is its year-to-date one
         # (6/9/12 months); the prior statement supplies the one three months
         # shorter. Current and prior period-end years can differ (a year ended
@@ -310,6 +334,7 @@ def schedule_checks(current_pdf: str, prior_pdf: str):
             pri3 = prior_ytd[rank] if rank < len(prior_ytd) else None
             if not (six and cur3 and pri3):
                 continue
+            note = six.note          # the note number detected for this schedule
             title = ("Property, plant & equipment schedule" if kind == "PPE"
                      else "Right-of-use assets schedule")
             for key, cells6 in six.cells.items():

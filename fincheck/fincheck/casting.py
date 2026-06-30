@@ -409,12 +409,13 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
                     i = k
                     continue
 
-                # Skip tables that aren't additive ₹ figures — share counts and
-                # option-pricing grids (grants made, share reconciliations, fair
-                # value assumptions) share the period-header shape but must not be
-                # cast. They are flagged by the sentence introducing them.
+                # Context around the header — the few rows above it plus the rows
+                # down to the year row (the statement title sometimes sits between
+                # the period header and the year row). Used both to skip tables
+                # that aren't additive ₹ figures (share counts, option-pricing
+                # grids) and to title the table.
                 context = " ".join(
-                    _row_text(rows[r]) for r in range(max(0, header_j - 3), header_j + 1)
+                    _row_text(rows[r]) for r in range(max(0, header_j - 3), i + 1)
                 )
                 if _EXCLUDE_TABLE_RE.search(context):
                     i = k
