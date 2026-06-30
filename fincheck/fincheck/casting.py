@@ -189,14 +189,30 @@ def _pdf_rows(pdf_path: str) -> tuple[tuple[list[dict], ...], ...]:
     return tuple(pages)
 
 
+_MONTH_RE = re.compile(
+    r"(?i)\b(january|february|march|april|may|june|july|august|september|"
+    r"october|november|december)\b")
+
+
 def _is_year_row(words: list[dict]) -> bool:
-    """A row made up only of bare years, e.g. ``2025 2024 2025 2024``."""
+    """A period header row identifying the columns by their year.
+
+    Usually bare years (``2025 2024 2025 2024``), but some statements spell the
+    period end out in full (``September 30, 2025  September 30, 2024 ...``); the
+    only non-year numbers then are days of the month, so a row of years plus
+    month names and day numbers still counts.
+    """
     years = [w for w in words if _is_year(w["text"])]
+    if len(years) < 2:
+        return False
     others = [
         w for w in words
         if not _is_year(w["text"]) and parse_number(w["text"]) is not None
     ]
-    return len(years) >= 2 and not others
+    if not others:
+        return True
+    has_month = any(_MONTH_RE.search(w["text"]) for w in words)
+    return has_month and all(0 < (parse_number(w["text"]) or 0) <= 31 for w in others)
 
 
 def _header_above(rows: list[list[dict]], year_index: int) -> int | None:
