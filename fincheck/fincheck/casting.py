@@ -471,7 +471,13 @@ def normalize_label(label: str) -> str:
 
 
 def _label_set(table: PeriodTable) -> set[str]:
-    return {normalize_label(r.label) for r in table.rows if r.label}
+    # Pair tables on their additive line items only — a table that merges a
+    # castable block (e.g. stock-compensation expense) with a non-castable one
+    # (option-pricing assumptions, whose labels carry period-specific numbers)
+    # would otherwise score too low to pair with its prior-period twin.
+    additive = {normalize_label(r.label) for r in table.rows
+                if r.label and is_additive_label(r.label)}
+    return additive or {normalize_label(r.label) for r in table.rows if r.label}
 
 
 def _overlap(a: PeriodTable, b: PeriodTable) -> float:
