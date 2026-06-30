@@ -429,7 +429,34 @@ def test_functional_code_inherited_from_contra_leg(tmp_path):
     assert g.totals_fn.get(("BALSCH110200", "S&M")) == 1234.0
 
 
-def test_consol_credit_leg_is_negative(tmp_path):
+def test_consol_completeness_flags_orphan_entry(tmp_path):
+    """A P&L tracker entry whose GL isn't in the report is flagged as
+    unreconciled; a contra/BS leg is ignored; a matched one is not flagged."""
+    from plcheck.config import CheckConfig
+    from plcheck.workbook import build_check_workbook
+    import openpyxl as _xl
+    p = tmp_path / "consol.xlsx"
+    wb = _xl.Workbook(); ws = wb.active; ws.title = "Entries- GR"
+    ws.append(["Company", "Comp code", "Concatenate", "Group Account Number",
+               "Functional Group", "GL Descriptions",
+               "Feb Dr", "Feb Cr", "Mar Dr", "Mar Cr", "Currency", "Type"])
+    ws.append(["BALSCH", "BALSCH", "BALSCH110200", 110200, "COS", "ok",
+               "", "", 5000.0, "", "CHF", "BPC"])           # P&L, in report
+    ws.append(["BALSCH", "BALSCH", "BALSCH804340", 804340, "", "To",
+               "", "", "", 5000.0, "CHF", "BPC"])           # BS contra -> ignored
+    ws.append([None] * 12)
+    ws.append(["BALSCH", "BALSCH", "BALSCH299999", 299999, "COS", "orphan",
+               "", "", 3300.0, "", "CHF", "BPC"])           # P&L, NOT in report
+    wb.save(p)
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(inputs.read_report(REPORT), TB, AGG, RATES,
+                         consol_path=str(p)).save(out)
+    ws2 = openpyxl.load_workbook(out)["LC-Consol Check"]
+    cells = [str(c.value) for row in ws2.iter_rows() for c in row
+             if c.value is not None]
+    assert "299999" in cells                    # orphan listed
+    assert "804340" not in cells                # BS contra leg ignored
+    assert any("Unreconciled consol entries" in v for v in cells)
     """A 'To ...' credit-leg P&L account (amount in the Credit column) nets
     negative, matching the report's signed LC - Consol."""
     p = tmp_path / "consol.xlsx"

@@ -38,12 +38,16 @@ Private Const SH_REPORT As String = "PL Report"
 Private Const SH_CONSOL As String = "Consol Entries"   ' manual consol-entry tracker
 Private Const SH_COVERAGE As String = "Entity Coverage" ' company-code coverage
 Private Const SH_LCCONSOL As String = "LC-Consol Check"  ' LC-Consol tie-out tab
+Private Const SH_SELTB As String = "Selected GL TB Check" ' selected GLs vs TB
 
 ' ---- tunables --------------------------------------------------------------
 Private Const TOL As Double = 0.5             ' highlight threshold
 Private Const RATE_ROWS As Long = 150         ' FX-rate lookup window
 Private Const DIV_ACCT As String = "332010"   ' dividend GL for Minority sheet
 Private Const PL_DIGITS As String = "123"     ' P&L account leading digits
+' GL accounts verified against the Real Time TB on the "Selected GL TB Check"
+' tab (comma-separated; extend as needed).
+Private Const TB_OVERRIDE As String = "333200,333230"
 
 ' ---- check-sheet row map ---------------------------------------------------
 Private Const CK_TB As Long = 2
@@ -132,6 +136,7 @@ Public Sub GenerateCheckFile()
     KillSheet wb, SH_CHECK: KillSheet wb, SH_MIN: KillSheet wb, SH_COVERAGE
     KillSheet wb, SH_TB: KillSheet wb, SH_AGG: KillSheet wb, SH_RATES
     KillSheet wb, SH_REPORT: KillSheet wb, SH_CONSOL: KillSheet wb, SH_LCCONSOL
+    KillSheet wb, SH_SELTB
 
     ImportFirstSheet wb, pTB, SH_TB
     If Not gNoAgg Then ImportFirstSheet wb, pAgg, SH_AGG
@@ -151,6 +156,7 @@ Public Sub GenerateCheckFile()
     BuildMinority wb
     BuildLcConsolCheck wb
     BuildEntityCoverage wb
+    BuildSelectedGlTbCheck wb
 
     Application.Calculate            ' recalculate the whole workbook once, now
 
@@ -162,8 +168,8 @@ Public Sub GenerateCheckFile()
 
     wb.Worksheets(SH_CHECK).Activate
     MsgBox "Done. Built '" & SH_CHECK & "', '" & SH_MIN & "', '" & SH_LCCONSOL & _
-           "' and '" & SH_COVERAGE & "'. Use File > Save As to keep a copy.", _
-           vbInformation
+           "', '" & SH_COVERAGE & "' and '" & SH_SELTB & "'. " & _
+           "Use File > Save As to keep a copy.", vbInformation
     Exit Sub
 
 CleanFail:
@@ -716,6 +722,108 @@ Private Function ConsolNet(cs As Worksheet, ByVal code As String, _
         End If
     Next r
     ConsolNet = tot
+End Function
+
+
+'============================================================================
+'  SELECTED GL TB CHECK  (independent tab)
+'============================================================================
+' For the configured GL accounts (TB_OVERRIDE) the report's LC-Balance figure is
+' verified against the Real Time TB instead of the Aggregate Expenses report.
+' One row per company + account; Diff = TB - report. Banner + red. Independent
+' of every other check.
+Private Sub BuildSelectedGlTbCheck(wb As Workbook)
+    Dim ck As Worksheet: Set ck = wb.Worksheets(SH_CHECK)
+
+    ' LC-Balance value columns on the Check tab (block row CK_BLOCK, code CK_SUB)
+    Dim ents As Collection: Set ents = New Collection
+    Dim lcCol As Object: Set lcCol = CreateObject("Scripting.Dictionary")
+    Dim codes As Object: Set codes = CreateObject("Scripting.Dictionary")
+    Dim c As Long, lastC As Long
+    lastC = ck.Cells(CK_BLOCK, ck.Columns.Count).End(xlToLeft).Column
+    For c = 5 To lastC
+        If LCase$(Trim$(CStr(ck.Cells(CK_BLOCK, c).Value))) = "lc - balance" Then
+            Dim cd As String: cd = Trim$(CStr(ck.Cells(CK_SUB, c).Value))
+            If Len(cd) > 0 And StrComp(cd, OVERALL, vbTextCompare) <> 0 _
+               And Not lcCol.Exists(cd) Then
+                lcCol(cd) = c: ents.Add cd: codes(cd) = 1
+            End If
+        End If
+    Next c
+    If ents.Count = 0 Then Exit Sub
+
+    ' TB geometry for the VLOOKUP
+    Dim tbHdr As Long, tbAcct As Long, tbLastCol As Long, tbFirst As Long, tbLast As Long
+    GetTBGeom wb.Worksheets(SH_TB), codes, tbHdr, tbAcct, tbLastCol, tbFirst, tbLast
+    Dim tbRng As String, tbHdrR As String
+    tbRng = "'" & SH_TB & "'!$A$" & tbHdr & ":$" & ColL(tbLastCol) & "$" & tbLast
+    tbHdrR = "'" & SH_TB & "'!$A$" & tbHdr & ":$" & ColL(tbLastCol) & "$" & tbHdr
+
+    Dim ws As Worksheet
+    Set ws = wb.Worksheets.Add(After:=wb.Worksheets(wb.Worksheets.Count))
+    ws.Name = SH_SELTB
+    ws.Cells(2, 1).Value = "Company": ws.Cells(2, 2).Value = "GLACCOUNT"
+    ws.Cells(2, 3).Value = "GL Description": ws.Cells(2, 4).Value = "Report LC value"
+    ws.Cells(2, 5).Value = "Real Time TB": ws.Cells(2, 6).Value = "Diff"
+    ws.Range("A2:F2").Font.Bold = True
+
+    Dim lastData As Long: lastData = ck.Cells(ck.Rows.Count, 3).End(xlUp).Row
+    Dim r As Long, k As Long: k = 3
+    For r = CK_DATA0 To lastData
+        Dim acc As String: acc = Trim$(CStr(ck.Cells(r, 3).Value))
+        If Len(acc) > 0 And IsOverrideAcct(acc) Then
+            Dim jj As Long
+            For jj = 1 To ents.Count
+                Dim cd2 As String: cd2 = ents(jj)
+                ws.Cells(k, 1).Value = cd2
+                ws.Cells(k, 2).Value = ck.Cells(r, 3).Value
+                ws.Cells(k, 3).Value = ck.Cells(r, 4).Value
+                ws.Cells(k, 4).Formula = "='" & SH_CHECK & "'!" & ColL(lcCol(cd2)) & r
+                ws.Cells(k, 5).Formula = "=IFERROR(VLOOKUP($B" & k & "," & tbRng & _
+                    ",MATCH(""" & cd2 & """," & tbHdrR & ",0),FALSE),0)"
+                ws.Cells(k, 6).Formula = "=E" & k & "-D" & k
+                k = k + 1
+            Next jj
+        End If
+    Next r
+    Dim lastK As Long: lastK = k - 1
+
+    If lastK < 3 Then
+        ws.Cells(1, 1).Value = "Selected GL TB Check: none of the configured " & _
+            "accounts (" & TB_OVERRIDE & ") are in this report"
+        ws.Cells(1, 1).Font.Bold = True
+        Exit Sub
+    End If
+
+    With ws.Range("F3:F" & lastK)
+        .FormatConditions.Delete
+        .FormatConditions.Add Type:=xlExpression, Formula1:="=ABS(F3)>" & TOL
+        .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+        .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+    End With
+    ws.Range("B1").Formula = "=SUMPRODUCT(--(ABS(F3:F" & lastK & ")>" & TOL & "))"
+    ws.Range("A1").Formula = "=IF(B1=0,""Selected GLs: ALL tie to TB""," & _
+        """Selected GLs: ""&B1&"" difference(s) vs TB - see red"")"
+    ws.Range("A1").Font.Bold = True
+    With ws.Range("A1:B1")
+        .FormatConditions.Delete
+        .FormatConditions.Add Type:=xlExpression, Formula1:="=$B$1>0"
+        .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+        .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+    End With
+    ws.Columns("C").ColumnWidth = 30
+End Sub
+
+' True if the account is one of the configured TB_OVERRIDE accounts.
+Private Function IsOverrideAcct(ByVal acc As String) As Boolean
+    Dim parts() As String: parts = Split(TB_OVERRIDE, ",")
+    Dim i As Long
+    For i = LBound(parts) To UBound(parts)
+        If StrComp(Trim$(acc), Trim$(parts(i)), vbTextCompare) = 0 Then
+            IsOverrideAcct = True: Exit Function
+        End If
+    Next i
+    IsOverrideAcct = False
 End Function
 
 

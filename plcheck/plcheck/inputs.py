@@ -490,6 +490,8 @@ class ConsolGeometry:
     totals: dict = field(default_factory=dict)        # concat -> net amount
     # (concat, functional-code) -> net amount, for the function-wise split
     totals_fn: dict = field(default_factory=dict)
+    # concat -> (comp_code, account, description), for the completeness check
+    key_info: dict = field(default_factory=dict)
 
 
 def propagate_func_column(ws, concat_col, func_col, dr_col, cr_col,
@@ -575,6 +577,19 @@ def parse_consol(path: str) -> ConsolGeometry:
             func_col = c
             break
 
+    # columns used for the completeness check (locate by header, optional)
+    def _find_hdr(*names):
+        wanted = set(names)
+        for c in range(1, ws.max_column + 1):
+            if _norm_hdr(ws.cell(row=hdr_row, column=c).value) in wanted:
+                return c
+        return 0
+    acct_col = _find_hdr("group account number", "group account no",
+                         "group acct number", "account", "gl account", "glaccount")
+    comp_col = _find_hdr("comp code", "company code", "compcode", "comp. code")
+    desc_col = _find_hdr("gl descriptions", "gl description", "description",
+                         "gl desc")
+
     last_row = hdr_row
     for r in range(hdr_row + 1, ws.max_row + 1):
         if str(ws.cell(row=r, column=concat_col).value or "").strip():
@@ -606,8 +621,12 @@ def parse_consol(path: str) -> ConsolGeometry:
         v = ws.cell(row=r, column=c).value
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
 
+    def _cell(r, c):
+        return str(ws.cell(row=r, column=c).value or "").strip() if c else ""
+
     totals: dict[str, float] = {}
     totals_fn: dict[tuple, float] = {}
+    key_info: dict = {}
     for r in range(first_row, last_row + 1):
         key = str(ws.cell(row=r, column=concat_col).value or "").strip()
         if not key:
@@ -619,11 +638,17 @@ def parse_consol(path: str) -> ConsolGeometry:
         if func_col:                                # account + functional group
             fc = str(ws.cell(row=r, column=func_col).value or "").strip().upper()
             totals_fn[(key, fc)] = totals_fn.get((key, fc), 0.0) + amt
+        if key not in key_info and acct_col:
+            comp = _cell(r, comp_col)
+            acct = _cell(r, acct_col)
+            if not comp and acct and key.upper().endswith(acct.upper()):
+                comp = key[:len(key) - len(acct)]   # derive comp from Concatenate
+            key_info[key] = (comp, acct, _cell(r, desc_col))
 
     return ConsolGeometry(sheet_name=ws.title, concat_col=concat_col,
                           val_cols=val_cols, func_col=func_col,
-                          totals_fn=totals_fn, first_row=first_row,
-                          last_row=last_row, totals=totals)
+                          totals_fn=totals_fn, key_info=key_info,
+                          first_row=first_row, last_row=last_row, totals=totals)
 
 
 # Labels that sit among the company codes but are NOT codes themselves.

@@ -15,6 +15,9 @@ It builds the same two outputs as the Python tool:
 * a **LC‑Consol Check** sheet (only when a tracker is supplied) — per company +
   P&L account, the report's LC‑Consol value vs the tracker's net posting
   (Debit − Credit), with a tie‑status banner and red‑highlighted differences;
+  it also lists, at the bottom, any **P&L consol entry for the current month
+  that isn't a line in the report** (i.e. an entry left unreconciled), so the
+  check covers both directions;
 * an **Entity Coverage** sheet — the company codes in each input (PL report,
   Real Time TB, Aggregate Exp) side by side, plus a reconciliation flagging any
   code present in one source but missing from another (e.g. a TB‑only typo);

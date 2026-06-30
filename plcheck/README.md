@@ -126,6 +126,8 @@ The output is a real, recalculating Excel file — not a static dump:
 * a **LC-Consol Check sheet** (with `--consol`) — one row per company + P&L
   account *that has a balance*, showing the report's LC-Consol value vs the
   tracker's net (Debit − Credit), with a tie-status banner and red differences;
+  it also lists any **P&L consol entry (current month) not found in the report**
+  — entries left unreconciled — so both directions are covered;
 * an **Entity Coverage sheet** — the company codes in each input side by side
   plus a reconciliation flagging any present in one source but missing from
   another (dimension labels such as *Consolidation unit* are not treated as

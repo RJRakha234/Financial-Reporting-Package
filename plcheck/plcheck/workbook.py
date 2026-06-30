@@ -482,6 +482,51 @@ def _lc_consol_sheet(wbk, report: ReportTable, layout: CheckLayout,
         ws["A1"] = "LC - Consol: no consolidation entries with a balance"
         ws["A1"].font = HDR_FONT
 
+    # --- completeness: P&L consol entries NOT reflected in the report ------
+    # (the reverse direction: a tracker entry whose GL isn't a line in the
+    # report is never summed by the check above, i.e. left unreconciled.)
+    report_codes = {e.code.upper() for e in report.entities}
+    report_pl = {inputs.account_key(r.account) for r in report.rows
+                 if not r.is_subtotal and r.account is not None
+                 and cfg.is_pl_account(r.account)}
+    orphans = []
+    for key, (comp, acct, desc) in consol.key_info.items():
+        if not acct or not cfg.is_pl_account(acct):
+            continue                                # only P&L-series legs
+        net = consol.totals.get(key, 0.0)
+        if abs(net) <= tol:
+            continue                                # no current-month value
+        covered = (inputs.account_key(acct) in report_pl
+                   and (not comp or comp.upper() in report_codes))
+        if not covered:
+            orphans.append((comp, acct, desc, net))
+
+    base = (last + 3) if last >= first else 4
+    ws.cell(base, 1, "Unreconciled consol entries (current month, P&L, "
+                     "not found in report)").font = HDR_FONT
+    if orphans:
+        ws.cell(base, 5, f"{len(orphans)} NOT reconciled").font = RED_FONT
+    hr = base + 1
+    for j, h in enumerate(["Company", "GLACCOUNT", "GL Description",
+                           "Net (Dr-Cr)", "Status"], start=1):
+        ws.cell(hr, j, h).font = HDR_FONT
+    if orphans:
+        rr = hr + 1
+        for comp, acct, desc, net in orphans:
+            ws.cell(rr, 1, comp)
+            ws.cell(rr, 2, acct)
+            ws.cell(rr, 3, desc)
+            ws.cell(rr, 4, round(net, 2)).number_format = "#,##0.00"
+            ws.cell(rr, 5, "NOT reconciled")
+            for col in range(1, 6):
+                ws.cell(rr, col).fill = RED_FILL
+                ws.cell(rr, col).font = RED_FONT
+            rr += 1
+    else:
+        ws.cell(hr + 1, 1,
+                "All consol entries reconciled.").font = Font(bold=True,
+                                                              color="006100")
+
     ws.column_dimensions["A"].width = 12
     ws.column_dimensions["B"].width = 22
     ws.column_dimensions["D"].width = 32
