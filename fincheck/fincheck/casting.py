@@ -361,12 +361,15 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
     rows, learning the column geometry from that table alone.
     """
     tables: list[PeriodTable] = []
+    # The note heading a table belongs to often sits on an earlier page (a note
+    # spanning several pages, or its sub-tables), so the running note carries
+    # across pages rather than resetting each one.
+    current_note = ""
     for page_index, page_rows in enumerate(_pdf_rows(pdf_path)):
             rows = list(page_rows)
 
             # Running note context for titling tables (display only).
             note_at: list[str] = [""] * len(rows)
-            current_note = ""
             for i, row in enumerate(rows):
                 text = _row_text(row)
                 if _looks_like_heading(text):

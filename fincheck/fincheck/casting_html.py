@@ -88,6 +88,26 @@ def _row_html(c: CastResult, check) -> str:
     )
 
 
+def _note_sort_key(note: str):
+    """Order sections by note: the income statement first, then notes in
+    numeric order (2.2 < 2.15 < 2.16 ... < 2.20.1), with anything unnumbered last."""
+    if note == "PL":
+        return (0,)
+    parts = note.split(".")
+    if note and all(p.isdigit() for p in parts):
+        return (1, *(int(p) for p in parts))
+    return (9,)            # "?" / unrecognised notes sort to the end
+
+
+def _section_heading(note: str, title: str) -> str:
+    pretty = title.title() if title.isupper() else title
+    if note == "PL":
+        return pretty or "Statement of Profit and Loss"
+    if note and note != "?":
+        return f"Note {note}" + (f" · {pretty}" if pretty else "")
+    return pretty or "Other items"
+
+
 def _section(result: CastResult, title: str, checks: list) -> str:
     head = (
         '<tr><th class="l">Line item</th><th>Year</th>'
@@ -107,11 +127,15 @@ def to_html(result: CastResult) -> str:
     for c in result.checks:
         counts[c.status(tol)] += 1
 
-    # Group checks by their source table, preserving document order.
-    groups: "OrderedDict[tuple, list]" = OrderedDict()
+    # Group checks by their source table, then order the sections note-wise
+    # (income statement first, notes in numeric order) rather than by the order
+    # the tables happened to be parsed.
+    grouped: "OrderedDict[tuple, list]" = OrderedDict()
     for c in result.checks:
-        key = (c.note, c.title)
-        groups.setdefault(key, []).append(c)
+        grouped.setdefault((c.note, c.title), []).append(c)
+    groups = OrderedDict(
+        sorted(grouped.items(), key=lambda kv: _note_sort_key(kv[0][0]))
+    )
 
     banner_cls = "bad" if result.mismatches else "ok"
     banner_txt = (
@@ -131,7 +155,7 @@ def to_html(result: CastResult) -> str:
     ])
 
     sections = "".join(
-        _section(result, f"{note + ' · ' if note and note != '?' else ''}{title}", chks)
+        _section(result, _section_heading(note, title), chks)
         for (note, title), chks in groups.items()
     )
 
