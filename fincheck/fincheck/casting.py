@@ -337,11 +337,17 @@ def _looks_like_heading(text: str) -> bool:
 def _table_note(prev_heading: str, header_text: str) -> tuple[str, str]:
     """Resolve a (note-key, title) for a table from context."""
     low = header_text.lower()
-    if "statement of profit and loss" in low:
-        return "PL", "Statement of Profit and Loss"
+    m = _NOTE_RE.match(prev_heading or "")
+    if not m:
+        # Not inside a numbered note, so this may be the primary income statement
+        # (Ind AS "Statement of Profit and Loss"; IFRS "Statement of
+        # Comprehensive Income").
+        if "statement of profit and loss" in low:
+            return "PL", "Statement of Profit and Loss"
+        if "comprehensive income" in low or "income statement" in low:
+            return "PL", "Statement of Comprehensive Income"
     if "function wise" in low or "function-wise" in low:
         return "2.24", "Function-wise classification of P&L"
-    m = _NOTE_RE.match(prev_heading or "")
     if m:
         return m.group(1), m.group(2).strip()
     return prev_heading.strip()[:40] or "?", prev_heading.strip()[:60]
@@ -411,7 +417,9 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
                     i = k
                     continue
 
-                note, title = _table_note(note_at[header_j], _row_text(rows[header_j]))
+                # The statement title may sit a row or two above the period
+                # header, so title detection looks at the same context window.
+                note, title = _table_note(note_at[header_j], context)
                 table = PeriodTable(
                     page_index=page_index, note=note, title=title,
                     columns=columns, rows=[],

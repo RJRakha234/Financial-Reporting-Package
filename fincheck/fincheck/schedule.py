@@ -60,9 +60,29 @@ def _centre(w) -> float:
 
 
 def _flowkey(label: str) -> str:
-    s = _FOOT_RE.sub(" ", label)
-    s = _WS.sub(" ", s).strip(" :.-")
-    return s.lower()
+    """Canonical key for a movement line, robust to wording differences.
+
+    The same line is often phrased differently across statement types or quarters
+    ("Additions on Business Combinations" vs "Additions Business Combination
+    (Refer ...)"), so movements are keyed by category, not by their exact text.
+    Order matters: a business-combination addition contains "addition", and the
+    accumulated-depreciation-on-deletions line contains "depreciation", so the
+    more specific categories are tested first.
+    """
+    low = _FOOT_RE.sub(" ", label).lower()
+    if "business combination" in low:
+        return "business combination"
+    if "deletion" in low or "disposal" in low or "retire" in low:
+        return "deletions"
+    if "depreciation" in low or "amortis" in low or "amortiz" in low:
+        return "depreciation"
+    if "translation" in low or "exchange" in low:
+        return "translation"
+    if "impairment" in low:
+        return "impairment"
+    if "addition" in low:
+        return "additions"
+    return _WS.sub(" ", low).strip(" :.-")
 
 
 def _section_of(label: str) -> str | None:
@@ -315,13 +335,21 @@ def schedule_checks(current_pdf: str, prior_pdf: str):
                             mode="equal_prior",
                             current_quarter=None,
                             prior_quarter=p3.value if p3 else None, **base))
-                    else:  # flow — a line absent in a quarter is nil for it
+                    else:  # flow
                         c3 = cur3.cells.get(key, {}).get(col)
                         p3 = pri3.cells.get(key, {}).get(col)
+                        # A movement line absent from a quarter altogether is nil
+                        # for that quarter (0); but a line that IS present with a
+                        # gap in this one column is an extraction gap, so leave it
+                        # unverified rather than fabricate a zero and mis-flag it.
+                        cur_val = (c3.value if c3 else
+                                   (0.0 if key not in cur3.cells else None))
+                        pri_val = (p3.value if p3 else
+                                   (0.0 if key not in pri3.cells else None))
                         checks.append(CastCheck(
                             mode="sum",
-                            current_quarter=c3.value if c3 else 0.0,
-                            prior_quarter=p3.value if p3 else 0.0,
+                            current_quarter=cur_val,
+                            prior_quarter=pri_val,
                             current_quarter_cell=c3,
                             quarter_page_index=cur3.page_index, **base))
     return checks
