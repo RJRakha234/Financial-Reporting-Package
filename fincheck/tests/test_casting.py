@@ -40,6 +40,23 @@ def test_normalize_label_strips_footnotes_and_case():
     assert normalize_label("Other expenses 2.18 *") == "other expenses 2.18"
 
 
+def test_split_parenthesis_negative_is_rejoined():
+    # A negative typeset with a space after the opening paren ("( 488)") is split
+    # by the extractor into "(" and "488)"; both must be glued back so the figure
+    # parses (else a whole column of a three-month movement schedule is lost).
+    from fincheck.casting import _merge_numberish
+    from fincheck.numbers import parse_number
+    words = [
+        {"text": "(", "x0": 421, "x1": 423, "top": 0, "bottom": 8},
+        {"text": "488)", "x0": 423, "x1": 437, "top": 0, "bottom": 8},
+    ]
+    merged = _merge_numberish(words)
+    assert len(merged) == 1
+    assert merged[0]["text"] == "(488)"
+    assert parse_number(merged[0]["text"]) == -488
+    assert merged[0]["x0"] == 421 and merged[0]["x1"] == 437
+
+
 def test_per_share_rows_are_not_additive():
     assert not is_additive_label("Basic (₹)")
     assert not is_additive_label("Weighted average equity shares (Basic)")

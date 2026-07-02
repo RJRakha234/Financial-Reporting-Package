@@ -84,6 +84,7 @@ class Cell:
     x1: float
     top: float
     bottom: float
+    page_index: int | None = None   # page the figure sits on (for highlighting)
 
     @property
     def bbox(self) -> tuple[float, float, float, float]:
@@ -151,15 +152,31 @@ def _cluster_rows(words: list[dict]) -> list[list[dict]]:
 def _merge_numberish(words: list[dict]) -> list[dict]:
     merged: list[dict] = []
     for word in words:
+        prev = merged[-1] if merged else None
+        # A parenthesised negative typeset with a space after the opening paren
+        # ("( 488)") is split by the extractor into a lone "(" and a "488)" that
+        # neither parse on their own, so the figure is lost. Glue them back into
+        # "(488)". This shows up in the three-month movement schedules.
         if (
-            merged
+            prev is not None
+            and prev["text"].strip() == "("
             and is_numberish(word["text"])
-            and is_numberish(merged[-1]["text"])
-            and word["x0"] - merged[-1]["x1"] <= _MERGE_GAP
-            and not _is_year(word["text"])
-            and not _is_year(merged[-1]["text"])
+            and word["text"].rstrip().endswith(")")
+            and word["x0"] - prev["x1"] <= _MERGE_GAP
         ):
-            prev = merged[-1]
+            prev["text"] = "(" + word["text"].strip()
+            prev["x1"] = word["x1"]
+            prev["top"] = min(prev["top"], word["top"])
+            prev["bottom"] = max(prev["bottom"], word["bottom"])
+            continue
+        if (
+            prev is not None
+            and is_numberish(word["text"])
+            and is_numberish(prev["text"])
+            and word["x0"] - prev["x1"] <= _MERGE_GAP
+            and not _is_year(word["text"])
+            and not _is_year(prev["text"])
+        ):
             prev["text"] = prev["text"] + " " + word["text"]
             prev["x1"] = word["x1"]
             prev["top"] = min(prev["top"], word["top"])

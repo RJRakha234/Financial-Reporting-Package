@@ -121,12 +121,13 @@ class Schedule:
     labels: dict[tuple, str] = field(default_factory=dict)
 
 
-def _mk_cell(w) -> Cell:
+def _mk_cell(w, page_index=None) -> Cell:
     return Cell(value=parse_number(w["text"]), text=w["text"].strip(),
-                x0=w["x0"], x1=w["x1"], top=w["top"], bottom=w["bottom"])
+                x0=w["x0"], x1=w["x1"], top=w["top"], bottom=w["bottom"],
+                page_index=page_index)
 
 
-def _assign(row, centres) -> dict[int, Cell]:
+def _assign(row, centres, page_index=None) -> dict[int, Cell]:
     cells: dict[int, Cell] = {}
     for w in row:
         if parse_number(w["text"]) is None:
@@ -134,7 +135,7 @@ def _assign(row, centres) -> dict[int, Cell]:
         c = _centre(w)
         i = min(range(len(centres)), key=lambda k: abs(centres[k] - c))
         if abs(centres[i] - c) <= _ASSIGN_TOL and i not in cells:
-            cells[i] = _mk_cell(w)
+            cells[i] = _mk_cell(w, page_index)
     return cells
 
 
@@ -177,22 +178,31 @@ def _schedule_note(heading: str, kind: str) -> str | None:
 
 def extract_schedules(pdf_path: str) -> list[Schedule]:
     schedules: list[Schedule] = []
+    # Flatten every page into one row stream so a schedule that spills over a
+    # page break — its closing balances continuing at the top of the next page —
+    # is still read as a single table rather than being cut off at the page edge.
+    rows: list[list[dict]] = []
+    page_of: list[int] = []
+    for page_index, page_rows in enumerate(_pdf_rows(pdf_path)):
+        for row in page_rows:
+            rows.append(list(row))
+            page_of.append(page_index)
+    note_at = [""] * len(rows)
     current_note = ""        # running note heading, carried across pages
+    for idx, row in enumerate(rows):
+        t = _row_text(row)
+        if _looks_like_heading(t):
+            current_note = t
+        note_at[idx] = current_note
     if True:
-        for page_index, page_rows in enumerate(_pdf_rows(pdf_path)):
-            rows = list(page_rows)
-            note_at = [""] * len(rows)
-            for idx, row in enumerate(rows):
-                t = _row_text(row)
-                if _looks_like_heading(t):
-                    current_note = t
-                note_at[idx] = current_note
+        if True:
             i = 0
             while i < len(rows):
                 m = _SCHED_RE.search(_row_text(rows[i]))
                 if not m:
                     i += 1
                     continue
+                page_index = page_of[i]
                 kind = "ROU" if m.group(1).lower().startswith("right") else "PPE"
                 # Prefer the actual note number from the heading (IFRS numbers
                 # differ from Ind AS); fall back to the Ind AS default.
@@ -254,7 +264,13 @@ def extract_schedules(pdf_path: str) -> list[Schedule]:
                 k = j
                 while k < len(rows):
                     t = _row_text(rows[k])
-                    if _SCHED_RE.search(t) or _PERIOD_RE.search(t):
+                    # Stop at the next schedule, the next period block, or the
+                    # next numbered-note heading — the roll-forward has ended.
+                    # (The heading stop matters now that a table may run past a
+                    # page break: without a page edge to halt it, it would
+                    # otherwise wander into the following note's narrative.)
+                    if (_SCHED_RE.search(t) or _PERIOD_RE.search(t)
+                            or _looks_like_heading(t)):
                         break
                     label = " ".join(w["text"] for w in rows[k]
                                      if parse_number(w["text"]) is None).strip()
@@ -264,17 +280,22 @@ def extract_schedules(pdf_path: str) -> list[Schedule]:
                         is_balance = bool(_BALANCE_RE.search(label)
                                           and _MONTH_RE.search(label))
                         balance_section = _section_of(label) if is_balance else None
+                        # A movement line's label is terse ("Additions",
+                        # "Translation difference"); a narrative sentence that
+                        # merely contains a flow word ("… securities were
+                        # transferred …") is not a schedule row, so cap the length.
+                        clean = _FOOT_RE.sub("", label).strip()
                         if balance_section is not None:
                             section = balance_section
                             month = _MONTH_RE.search(label).group(1).lower()
                             kind_row = "close" if month == end_month else "open"
                             key = (section, kind_row)
-                        elif not is_balance and _is_flow(label):
+                        elif not is_balance and _is_flow(label) and len(clean) <= 55:
                             key = (section, _flowkey(label))
                         else:
                             key = None          # narrative / unrelated table row
                         if key is not None:
-                            cells = _assign(rows[k], centres)
+                            cells = _assign(rows[k], centres, page_of[k])
                             if cells:
                                 sched.cells[key] = cells
                                 sched.labels.setdefault(key, label)
@@ -344,16 +365,21 @@ def schedule_checks(current_pdf: str, prior_pdf: str):
                     name = six.names[col] if col < len(six.names) else f"col{col}"
                     label = f"{_row_label(section, rowkey, raw)} — {name}"
                     base = dict(note=note, title=title, label=label, year=year,
-                                page_index=six.page_index, six_month=cell6.value,
+                                page_index=(cell6.page_index
+                                            if cell6.page_index is not None
+                                            else six.page_index),
+                                six_month=cell6.value,
                                 six_cell=cell6, additive=True)
                     if rowkey == "close":
                         c3 = cur3.cells.get(key, {}).get(col)
+                        q_page = (c3.page_index if c3 and c3.page_index is not None
+                                  else cur3.page_index)
                         checks.append(CastCheck(
                             mode="equal_current",
                             current_quarter=c3.value if c3 else None,
                             prior_quarter=None,
                             current_quarter_cell=c3,
-                            quarter_page_index=cur3.page_index, **base))
+                            quarter_page_index=q_page, **base))
                     elif rowkey == "open":
                         p3 = pri3.cells.get(key, {}).get(col)
                         checks.append(CastCheck(
@@ -371,10 +397,12 @@ def schedule_checks(current_pdf: str, prior_pdf: str):
                                    (0.0 if key not in cur3.cells else None))
                         pri_val = (p3.value if p3 else
                                    (0.0 if key not in pri3.cells else None))
+                        q_page = (c3.page_index if c3 and c3.page_index is not None
+                                  else cur3.page_index)
                         checks.append(CastCheck(
                             mode="sum",
                             current_quarter=cur_val,
                             prior_quarter=pri_val,
                             current_quarter_cell=c3,
-                            quarter_page_index=cur3.page_index, **base))
+                            quarter_page_index=q_page, **base))
     return checks
