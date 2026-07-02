@@ -169,6 +169,12 @@ def _merge_numberish(words: list[dict]) -> list[dict]:
             prev["top"] = min(prev["top"], word["top"])
             prev["bottom"] = max(prev["bottom"], word["bottom"])
             continue
+        # Glue the digit groups of a single figure split on its thousands space
+        # ("1 234" -> "1 234", parsed as 1234). Only fragments merge: a token
+        # that already ends with ")" is a complete number, and one that starts
+        # with "(" begins a new one, so two adjacent column values like
+        # "(43)" and "(17,559)" in a narrow pair of columns must NOT be fused
+        # (that would strand both cells, blanking the Vehicles/Total columns).
         if (
             prev is not None
             and is_numberish(word["text"])
@@ -176,6 +182,8 @@ def _merge_numberish(words: list[dict]) -> list[dict]:
             and word["x0"] - prev["x1"] <= _MERGE_GAP
             and not _is_year(word["text"])
             and not _is_year(prev["text"])
+            and not prev["text"].rstrip().endswith(")")
+            and not word["text"].lstrip().startswith("(")
         ):
             prev["text"] = prev["text"] + " " + word["text"]
             prev["x1"] = word["x1"]
@@ -468,6 +476,7 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
                 # plan — can be told apart and matched to the right prior row.
                 heads: dict[float, str] = {}
                 collected = []
+                prev_label_only: str | None = None   # last text-only row's label
                 for brow in body:
                     label, cells = _assign_cells(brow, columns)
                     x0 = brow[0]["x0"] if brow else 0.0
@@ -475,15 +484,28 @@ def extract_period_tables(pdf_path: str) -> list[PeriodTable]:
                         if label and not _looks_like_heading(label):
                             heads = {k: v for k, v in heads.items() if k < x0 - 3}
                             heads[x0] = label
+                            prev_label_only = label
                         continue
                     path = [heads[k] for k in sorted(heads) if k < x0 - 3]
-                    collected.append((label, path, brow, cells))
+                    # A label that wraps across lines with its figures on the
+                    # middle line ("Non-convertible debentures … / 256 294 … /
+                    # government securities") leaves the figures row with no text
+                    # of its own. Recover it from the heading line *immediately*
+                    # above — but only when this figures row directly follows that
+                    # heading. A pure-figure sub-total that follows labelled detail
+                    # rows (the ESOP "Cash settled RSUs" block) must stay unlabelled
+                    # so it is not fused with a sibling group's sub-total.
+                    wrapped = (not label.strip()) and prev_label_only or None
+                    collected.append((label, path, brow, cells, wrapped))
+                    prev_label_only = None    # a data row breaks the adjacency
 
                 dupes = {lab for lab, n in
-                         Counter(normalize_label(l) for l, _, _, _ in collected).items()
+                         Counter(normalize_label(l) for l, _, _, _, _ in collected).items()
                          if n > 1}
-                for label, path, brow, cells in collected:
-                    if normalize_label(label) in dupes and path:
+                for label, path, brow, cells, wrapped in collected:
+                    if wrapped is not None:
+                        label = wrapped
+                    elif normalize_label(label) in dupes and path:
                         label = " · ".join([*path, label] if label else path)
                     table.rows.append(
                         TableRow(

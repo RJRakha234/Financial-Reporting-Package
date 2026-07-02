@@ -57,6 +57,21 @@ def test_split_parenthesis_negative_is_rejoined():
     assert merged[0]["x0"] == 421 and merged[0]["x1"] == 437
 
 
+def test_adjacent_parenthesised_values_are_not_fused():
+    # Two complete negatives in a narrow pair of columns ("(43)" for Vehicles,
+    # "(17,559)" for Total) sit close together; the thousands-space merge must
+    # NOT glue them into one unparseable token, or both cells would be lost.
+    from fincheck.casting import _merge_numberish
+    from fincheck.numbers import parse_number
+    words = [
+        {"text": "(43)", "x0": 501, "x1": 514, "top": 0, "bottom": 8},
+        {"text": "(17,559)", "x0": 517, "x1": 537, "top": 0, "bottom": 8},
+    ]
+    merged = _merge_numberish(words)
+    assert [w["text"] for w in merged] == ["(43)", "(17,559)"]
+    assert [parse_number(w["text"]) for w in merged] == [-43, -17559]
+
+
 def test_per_share_rows_are_not_additive():
     assert not is_additive_label("Basic (₹)")
     assert not is_additive_label("Weighted average equity shares (Basic)")
