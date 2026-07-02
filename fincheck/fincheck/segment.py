@@ -35,8 +35,8 @@ from .numbers import parse_number
 # whose header starts with "For the ..."). The year-to-date matrix may be six,
 # nine or twelve months ("year ended") depending on the quarter.
 _SEG_HEADER_RE = re.compile(
-    r"(?i)^(?:(three|six|nine|twelve)\s+months?|year)\s+ended\s+\w+\s+\d{1,2},"
-    r"\s*(\d{4})\s+and\s+\w+\s+\d{1,2},\s*(\d{4})\s*:?\s*$"
+    r"(?i)^(?:for\s+the\s+)?(?:(three|six|nine|twelve)\s+months?|year)\s+ended\s+"
+    r"\w+\s+\d{1,2},\s*(\d{4})\s+and\s+\w+\s+\d{1,2},\s*(\d{4})\s*:?\s*$"
 )
 _STOP_RE = re.compile(
     r"(?i)^(\(\d+\)\s|\*|significant clients|disclosure of revenue|"

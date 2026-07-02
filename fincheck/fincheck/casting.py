@@ -521,14 +521,21 @@ def normalize_label(label: str) -> str:
     return s.lower()
 
 
+def _base_label(label: str) -> str:
+    # The line item without its sub-group qualifier, so two tables still pair
+    # when one qualified a repeated label ("Current taxes · Domestic taxes") and
+    # the other left it plain ("Domestic taxes").
+    return normalize_label(label).split(" · ")[-1]
+
+
 def _label_set(table: PeriodTable) -> set[str]:
     # Pair tables on their additive line items only — a table that merges a
     # castable block (e.g. stock-compensation expense) with a non-castable one
     # (option-pricing assumptions, whose labels carry period-specific numbers)
     # would otherwise score too low to pair with its prior-period twin.
-    additive = {normalize_label(r.label) for r in table.rows
+    additive = {_base_label(r.label) for r in table.rows
                 if r.label and is_additive_label(r.label)}
-    return additive or {normalize_label(r.label) for r in table.rows if r.label}
+    return additive or {_base_label(r.label) for r in table.rows if r.label}
 
 
 def _overlap(a: PeriodTable, b: PeriodTable) -> float:
@@ -739,6 +746,25 @@ def _checks_for_pair(
                 if (prior_row is not None and prior_col is not None)
                 else None
             )
+            # When the tables paired and the prior period-to-date column exists
+            # but this line is absent there, the line *may* be nil in the prior
+            # period (e.g. an interim dividend declared this quarter). Only trust
+            # that when the year-to-date figure equals the current quarter: a line
+            # that first appears this quarter has no earlier contribution, so its
+            # YTD is exactly its current-quarter value and casting holds with a
+            # prior of 0. If instead the YTD differs from the current quarter, the
+            # prior figure is real but we simply failed to locate it (a relabelled
+            # row, say) — leave it unverified rather than inventing a 0 that would
+            # read as a false mismatch. With no prior column at all it is likewise
+            # genuinely unverifiable.
+            if prior_cell is not None:
+                prior_quarter = prior_cell.value
+            elif (prior is not None and prior_col is not None
+                  and six_cell is not None and three_cell is not None
+                  and six_cell.value == three_cell.value):
+                prior_quarter = 0.0
+            else:
+                prior_quarter = None
             checks.append(
                 CastCheck(
                     note=current.note,
@@ -748,7 +774,7 @@ def _checks_for_pair(
                     page_index=cur_row.page_index,
                     six_month=six_cell.value if six_cell else None,
                     current_quarter=three_cell.value if three_cell else None,
-                    prior_quarter=prior_cell.value if prior_cell else None,
+                    prior_quarter=prior_quarter,
                     additive=is_additive_label(cur_row.label),
                     six_cell=six_cell,
                     current_quarter_cell=three_cell,
