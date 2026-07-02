@@ -211,6 +211,34 @@ def test_segment_casts_every_cell(result):
     assert total.expected == 110
 
 
+def test_segment_pick_ignores_spurious_one_row_table():
+    # A narrative "three months ended …" sentence can trip the segment-header
+    # pattern and yield a one-row impostor table. Picking the prior matrix must
+    # prefer the real matrix (metric labels overlapping the reference), not the
+    # first month-matching table.
+    from fincheck.segment import SegmentTable, SegmentMetric, _pick
+    real = SegmentTable(
+        page_index=36, months=3, cy_year=2025, py_year=2024,
+        centres=[1, 2], names=["A", "Total"],
+        metrics=[SegmentMetric("Revenue from operations"),
+                 SegmentMetric("Segment operating income")],
+    )
+    impostor = SegmentTable(
+        page_index=28, months=3, cy_year=2025, py_year=2024,
+        centres=[1, 2], names=["Segment 1", "Total"],
+        metrics=[SegmentMetric("The percentage of revenue from fixed-price")],
+    )
+    ref = SegmentTable(
+        page_index=37, months=6, cy_year=2025, py_year=2024,
+        centres=[1, 2], names=["A", "Total"],
+        metrics=[SegmentMetric("Revenue from operations"),
+                 SegmentMetric("Segment operating income")],
+    )
+    # impostor first in the list, but the real matrix must win.
+    assert _pick([impostor, real], 3, ref=ref) is real
+    assert _pick([impostor, real], 3) is real          # richest wins with no ref
+
+
 def test_segment_quarter_cell_on_its_own_page(result):
     # the six-month and current-quarter figures live on different pages, so the
     # check must remember each cell's page for highlighting

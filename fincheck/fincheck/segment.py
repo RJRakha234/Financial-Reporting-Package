@@ -187,11 +187,28 @@ def extract_segment_tables(pdf_path: str) -> list[SegmentTable]:
     return tables
 
 
-def _pick(tables: list[SegmentTable], months: int) -> SegmentTable | None:
-    for t in tables:
-        if t.months == months:
-            return t
-    return None
+def _labels(t: SegmentTable) -> set[str]:
+    return {normalize_label(m.label) for m in t.metrics}
+
+
+def _pick(tables: list[SegmentTable], months: int,
+          ref: SegmentTable | None = None) -> SegmentTable | None:
+    """The segment matrix of the given period length.
+
+    A statement can carry a stray table that trips the segment-header pattern
+    (a narrative "three months ended …" sentence followed by a couple of
+    figures), so don't just take the first match: when a reference matrix is
+    given, pick the candidate whose metric labels overlap it most; otherwise
+    take the richest (most metrics). Both skip the one-row impostor.
+    """
+    cands = [t for t in tables if t.months == months]
+    if not cands:
+        return None
+    if ref is not None:
+        ref_labels = _labels(ref)
+        return max(cands, key=lambda t: (len(_labels(t) & ref_labels),
+                                         len(t.metrics)))
+    return max(cands, key=lambda t: len(t.metrics))
 
 
 def segment_checks(current_pdf: str, prior_pdf: str):
@@ -207,8 +224,8 @@ def segment_checks(current_pdf: str, prior_pdf: str):
     if n <= 3:
         return []
     six = _pick(cur, n)
-    three_cur = _pick(cur, 3)
-    three_pri = _pick(pri, n - 3)
+    three_cur = _pick(cur, 3, ref=six)
+    three_pri = _pick(pri, n - 3, ref=six)
     if not (six and three_cur and three_pri):
         return []
 
