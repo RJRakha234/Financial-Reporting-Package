@@ -144,6 +144,10 @@ def write_highlighted_pdf(result: CastResult, output_pdf: str) -> str:
         if 0 <= page_index < len(doc):
             _annotate(doc[page_index], cells)
     _add_summary_page(doc, result)
-    doc.save(output_pdf, garbage=4, deflate=True)
+    # A light cleanup only: full garbage collection with stream deflation
+    # (garbage=4, deflate=True) re-compresses every image in these scanned
+    # filings and can take tens of seconds; garbage=1 saves in a fraction of a
+    # second for a ~10% larger file.
+    doc.save(output_pdf, garbage=1)
     doc.close()
     return output_pdf
