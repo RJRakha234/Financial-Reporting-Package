@@ -5,13 +5,16 @@ number that has been cast and agrees is green at a glance:
 
 * **green**  — a figure that casts (the six-month total and the current-quarter
   figure that feeds it, when 3M current + 3M prior agrees within tolerance);
-* **red**    — a six-month figure that does NOT cast (outlined, with the
-  expected value in a note);
+* **red**    — a six-month figure that does NOT cast (also outlined);
 * **orange** — could not be verified, or a figure feeding a failed cast.
 
+The colours are baked into the pages (not left as live annotations) so the
+marked-up PDF opens and scrolls as quickly as the original — a filing can carry
+a thousand marks. The legend and the list of mismatches are on the prepended
+summary page, so no per-cell pop-up notes are needed.
+
 (The third figure in each cast — the prior quarter — lives in the *other* PDF,
-so it is reported in the Excel/HTML rather than highlighted here.) A summary
-page with a legend and the list of mismatches is prepended.
+so it is reported in the Excel/HTML rather than highlighted here.)
 """
 
 from __future__ import annotations
@@ -35,18 +38,16 @@ def _key(cell):
 
 
 def _collect(result: CastResult):
-    """Return {page_index: {cell_key: (role, cell, note)}} resolving by priority."""
+    """Return {page_index: {cell_key: (role, cell)}} resolving by priority."""
     pages: dict[int, dict[tuple, tuple]] = {}
 
-    def put(page_index, cell, role, note=None):
+    def put(page_index, cell, role):
         if cell is None or page_index is None:
             return
         bucket = pages.setdefault(page_index, {})
         key = _key(cell)
         if key not in bucket or _PRIORITY[role] > _PRIORITY[bucket[key][0]]:
-            bucket[key] = (role, cell, note)
-        elif note and bucket[key][2] is None:
-            bucket[key] = (bucket[key][0], bucket[key][1], note)
+            bucket[key] = (role, cell)
 
     for c in result.checks:
         status = c.status(result.tolerance)
@@ -57,27 +58,19 @@ def _collect(result: CastResult):
             put(c.page_index, c.six_cell, "ok")
             put(q_page, c.current_quarter_cell, "ok")
         elif status == "mismatch":
-            note = (
-                f"Does not cast: 6M {format_number(c.six_month)} vs "
-                f"3M+3M {format_number(c.expected)} "
-                f"(off by {format_number(c.difference)})"
-            )
-            put(c.page_index, c.six_cell, "mismatch", note)
+            put(c.page_index, c.six_cell, "mismatch")
             put(q_page, c.current_quarter_cell, "feeds_fail")
         else:  # unverified
-            put(c.page_index, c.six_cell, "unverified",
-                "Could not verify: prior-period figure not found.")
+            put(c.page_index, c.six_cell, "unverified")
     return pages
 
 
 def _annotate(page, cells) -> None:
-    for role, cell, note in cells.values():
+    for role, cell in cells.values():
         rect = fitz.Rect(cell.x0 - _PAD, cell.top - _PAD,
                          cell.x1 + _PAD, cell.bottom + _PAD)
         annot = page.add_highlight_annot(rect)
         annot.set_colors(stroke=_COLOR[role])
-        if note:
-            annot.set_info(content=note)
         annot.update()
         if role == "mismatch":
             box = page.add_rect_annot(rect)
@@ -143,11 +136,14 @@ def write_highlighted_pdf(result: CastResult, output_pdf: str) -> str:
     for page_index, cells in _collect(result).items():
         if 0 <= page_index < len(doc):
             _annotate(doc[page_index], cells)
+    # Flatten the highlights into the page content so the viewer has no live
+    # annotation objects to manage — a filing can carry a thousand marks, and
+    # that is what makes an annotated PDF slow to open and scroll.
+    if hasattr(doc, "bake"):
+        doc.bake()
     _add_summary_page(doc, result)
-    # A light cleanup only: full garbage collection with stream deflation
-    # (garbage=4, deflate=True) re-compresses every image in these scanned
-    # filings and can take tens of seconds; garbage=1 saves in a fraction of a
-    # second for a ~10% larger file.
+    # Light cleanup only: full garbage collection with deflation re-compresses
+    # every stream and can take tens of seconds; garbage=1 saves near-instantly.
     doc.save(output_pdf, garbage=1)
     doc.close()
     return output_pdf
