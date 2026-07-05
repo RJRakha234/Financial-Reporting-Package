@@ -23,9 +23,11 @@ Setup (on the machine with browser access to the portal)
 
 Configuration is via environment variables so no credentials live in code:
 
-    SAP_REPORT_URL   URL of the report. Open the report in the portal until it
-                     is in its own tab (or copy the iframe URL), then copy the
-                     address bar. Required.
+    SAP_PORTAL_BASE  Portal origin, e.g. https://portal.example.com
+                     Combined with the built-in report path below. Required
+                     unless SAP_REPORT_URL is set.
+    SAP_REPORT_URL   Full URL of the report (overrides SAP_PORTAL_BASE +
+                     built-in path). Use this to point at a different report.
     SAP_USER         Portal user. Optional — omit if the portal signs you in
                      via corporate SSO without a form.
     SAP_PASS         Portal password. Optional, same as above.
@@ -61,7 +63,21 @@ from selenium.webdriver.support.ui import WebDriverWait
 # Configuration
 # ---------------------------------------------------------------------------
 
-REPORT_URL = os.environ.get("SAP_REPORT_URL", "")
+# Direct iView URL of the "Real time Company-wise Trial balance" BEx report,
+# captured from the isolatedWorkArea iframe's src. Loading it standalone skips
+# the portal shell (and most of the frame nesting). windowId / NavMode /
+# PrevNavTarget from the original src are session breadcrumbs and are omitted.
+REPORT_PCD_PATH = (
+    "/irj/servlet/prt/portal/prtroot/"
+    "pcd!3aportal_content!2fBusiness_Intelligence!2fROLES!2fGroup_Reporting"
+    "!2fIND-ASINR!2fcom.infy.Real_time_Company-wise_Trial_balance"
+    "?ExecuteLocally=true&sapDocumentRenderingMode=Edge"
+)
+
+PORTAL_BASE = os.environ.get("SAP_PORTAL_BASE", "").rstrip("/")
+REPORT_URL = os.environ.get("SAP_REPORT_URL", "") or (
+    PORTAL_BASE + REPORT_PCD_PATH if PORTAL_BASE else ""
+)
 SAP_USER = os.environ.get("SAP_USER", "")
 SAP_PASS = os.environ.get("SAP_PASS", "")
 DOWNLOAD_DIR = Path(os.environ.get("SAP_DOWNLOAD_DIR", "sap_downloads")).absolute()
@@ -266,8 +282,9 @@ def wait_for_download(directory: Path, before: set, deadline: float) -> Path:
 def export_report(output: str | None) -> Path:
     if not REPORT_URL:
         sys.exit(
-            "SAP_REPORT_URL is not set. Open the report in the portal, copy "
-            "the address-bar URL of the report tab, and set SAP_REPORT_URL."
+            "Set SAP_PORTAL_BASE (e.g. https://your-portal-host) to use the "
+            "built-in Trial balance report path, or set SAP_REPORT_URL to a "
+            "full report URL."
         )
     driver = build_driver()
     deadline = time.time() + TIMEOUT * 4  # overall budget for the whole flow
