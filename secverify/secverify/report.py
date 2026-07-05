@@ -75,6 +75,7 @@ def to_json(result: Result) -> str:
                     "num": i.num,
                     "kind": i.kind,
                     "severity": i.severity,
+                    "tier": i.tier,
                     "html_content": i.excerpt,
                     "remark": i.remark,
                     "anchor": i.anchor,

@@ -15,7 +15,16 @@ both directions** — offline, and writes a **highlighted HTML review copy**:
   `[n]` marker linking to the summary panel at the top, and an HTML comment
   (`<!-- SECVERIFY REMARK #n: … -->`) next to the highlight in the source.
 
-The summary panel at the top lists every item to correct with its remark.
+The summary panel at the top lists every item to correct with its remark,
+triaged into three tiers so real problems are impossible to miss:
+**Discrepancies — act on these** (both documents carry the content but it
+differs), **Content with no counterpart in this PDF** (e.g. the auditor's
+report in an exhibit whose PDF holds only the statements), and **Layout
+artifacts** (every word verified on the cited PDF page; only the print
+column-wrapping prevented an exact match). Print-index entries are
+validated by label, with the page-number column excluded — an unpaginated
+HTML carries no page numbers, and extraction garbles them anyway
+(dot leaders turn 19 into "1.9").
 Because colouring the HTML alone cannot catch an **omission** (content in
 the PDF that the HTML dropped), every line of every PDF page is also checked
 against the HTML — and anything missing is rendered **inline as a red

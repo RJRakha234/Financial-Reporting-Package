@@ -33,11 +33,15 @@ FUZZY_REVIEW_RATIO = 0.80  # ≥ this but not exact → amber "review"
 @dataclass
 class Issue:
     num: int
-    kind: str      # "figure" | "text"
+    kind: str      # "figure" | "text" | "omission" | "figure-count"
     severity: str  # "error" | "review"
     excerpt: str
     remark: str
     anchor: str
+    #: triage tier: "act" = concrete discrepancy to fix; "absent" = content
+    #: with no counterpart in this PDF (verify against its own source);
+    #: "layout" = words verified on the cited page, print order differs
+    tier: str = "act"
 
 
 @dataclass
@@ -71,7 +75,9 @@ class Annotator:
         self._issue_seq = 0
 
     # -- issues ----------------------------------------------------------
-    def _new_issue(self, kind: str, severity: str, excerpt: str, remark: str) -> Issue:
+    def _new_issue(
+        self, kind: str, severity: str, excerpt: str, remark: str, tier: str = "act"
+    ) -> Issue:
         self._issue_seq += 1
         issue = Issue(
             num=self._issue_seq,
@@ -80,6 +86,7 @@ class Annotator:
             excerpt=" ".join(excerpt.split())[:160],
             remark=remark,
             anchor=f"secv-i{self._issue_seq}",
+            tier=tier,
         )
         self.result.issues.append(issue)
         return issue
@@ -184,20 +191,26 @@ class Annotator:
                 )
 
     # -- text ------------------------------------------------------------
-    def _check_sentence(self, sentence: str) -> tuple[str, str]:
-        """Return ``(status, remark)``; status ∈ ok / review / error / skip."""
+    def _check_sentence(self, sentence: str) -> tuple[str, str, str]:
+        """Return ``(status, remark, category)``.
+
+        status ∈ ok / review / error / skip; category classifies non-ok
+        findings for triage: "discrepancy" (both texts exist and differ),
+        "absent" (no counterpart in the PDF at all), or "layout" (words
+        verified on one PDF page, print order differs).
+        """
         canon = canonical(sentence)
         if not canon or canon.isdigit():
-            return "skip", ""
+            return "skip", "", ""
         # Tier 1: exact match including figures.
         if canon in self.corpus.alnum.canon:
-            return "ok", ""
+            return "ok", "", ""
         # Tier 2: exact match of the words alone.  PDF extraction interleaves
         # table figures/headers into label text unpredictably; the figures
         # themselves are validated by the separate number pass.
         letters = canonical(sentence, letters_only=True)
         if letters and letters in self.corpus.letters.canon:
-            return "ok", ""
+            return "ok", "", ""
         needle = letters or canon
         view = self.corpus.letters if letters else self.corpus.alnum
         match = find_best_match(view.canon, needle)
@@ -210,17 +223,17 @@ class Annotator:
                     f"{pct:.0%} of its words appear together on PDF page {page} — "
                     "typically a multi-column table header that wraps onto "
                     "several lines in the PDF. Verify that page manually."
-                )
+                ), "layout"
             if len(needle) < 12:
                 # Too short to fuzzy-match; only exact lookup was possible.
                 return "error", (
                     f"“{sentence.strip()}” was not found in the PDF."
-                )
+                ), "absent"
             return "error", (
                 f"Not found in the PDF: “{_shorten(sentence)}”. "
                 "No similar passage exists — this content may be missing from "
                 "or added relative to the PDF."
-            )
+            ), "absent"
         start, end, ratio = match
         page = view.page_of(start)
         snippet = self.corpus.raw_snippet(view, start, end)
@@ -229,7 +242,7 @@ class Annotator:
                 f"Close but not identical to the PDF (similarity {ratio:.0%}). "
                 f"HTML says: “{_shorten(sentence)}”. "
                 f"PDF page {page} says: “{snippet}”. Reconcile the wording/figures."
-            )
+            ), "discrepancy"
         coverage = self._word_coverage(sentence)
         if coverage is not None:
             cov_page, pct = coverage
@@ -239,12 +252,12 @@ class Annotator:
                 "typically a table header/label whose columns the PDF wraps "
                 f"differently. Nearest contiguous passage (page {page}, "
                 f"similarity {ratio:.0%}): “{snippet}”. Verify manually."
-            )
+            ), "layout"
         return "error", (
             f"Does not match the PDF. HTML says: “{_shorten(sentence)}”. "
             f"The nearest passage (PDF page {page}, similarity {ratio:.0%}) is: "
             f"“{snippet}”."
-        )
+        ), "discrepancy"
 
     def _word_coverage(self, sentence: str) -> tuple[int, float] | None:
         """Best single PDF page containing (almost) every word of *sentence*.
@@ -289,8 +302,9 @@ class Annotator:
             self.result.text_blocks_total += 1
             worst = "ok"
             remarks: list[str] = []
+            cats: set[str] = set()
             for sentence in split_sentences(text):
-                status, remark = self._check_sentence(sentence)
+                status, remark, cat = self._check_sentence(sentence)
                 if status == "skip":
                     continue
                 if status == "review" and worst == "ok":
@@ -299,6 +313,8 @@ class Annotator:
                     worst = "error"
                 if remark:
                     remarks.append(remark)
+                if cat:
+                    cats.add(cat)
 
             classes = block.get("class", [])
             if isinstance(classes, str):
@@ -313,7 +329,15 @@ class Annotator:
             if worst == "review":
                 self.result.text_blocks_review += 1
             remark = " || ".join(remarks)
-            issue = self._new_issue("text", severity, text, remark)
+            # A concrete discrepancy outranks absent content, which outranks
+            # a layout artifact, when a block mixes several finding types.
+            if "discrepancy" in cats:
+                tier = "act"
+            elif "absent" in cats:
+                tier = "absent"
+            else:
+                tier = "layout"
+            issue = self._new_issue("text", severity, text, remark, tier=tier)
             classes.append("secv-text-warn" if worst == "review" else "secv-text-bad")
             block["class"] = classes
             block["id"] = block.get("id") or issue.anchor
@@ -551,22 +575,65 @@ def _inject_banner(
         if result.figures_total
         else "0/0"
     )
-    rows = []
-    for issue in result.issues:
-        rows.append(
+    def tier_rows(tier: str) -> str:
+        rows = [
             f'<tr><td><a href="#{issue.anchor}">#{issue.num}</a></td>'
-            f'<td>{issue.kind}</td>'
+            f"<td>{issue.kind}</td>"
             f'<td class="sev-{issue.severity}">{issue.severity.upper()}</td>'
             f"<td>{html_mod.escape(issue.excerpt)}</td>"
             f"<td>{html_mod.escape(issue.remark)}</td></tr>"
+            for issue in result.issues
+            if issue.tier == tier
+        ]
+        if not rows:
+            return ""
+        return (
+            "<table><tr><th>#</th><th>Type</th><th>Severity</th>"
+            "<th>HTML content</th><th>Remark — what to correct</th></tr>"
+            + "".join(rows)
+            + "</table>"
         )
-    issue_table = (
-        "<table><tr><th>#</th><th>Type</th><th>Severity</th>"
-        "<th>HTML content</th><th>Remark — what to correct</th></tr>"
-        + "".join(rows)
-        + "</table>"
-        if rows
-        else "<p><b>No inconsistencies found — every figure and text block was validated against the PDF.</b></p>"
+
+    act_n = sum(1 for i in result.issues if i.tier == "act")
+    absent_n = sum(1 for i in result.issues if i.tier == "absent")
+    layout_n = sum(1 for i in result.issues if i.tier == "layout")
+
+    issue_table = ""
+    if act_n:
+        issue_table += (
+            f'<h4 class="sev-error" style="margin:8px 0 2px 0">🔴 Discrepancies — '
+            f"act on these ({act_n})</h4>"
+            "<p style='margin:2px 0'>Both documents carry this content but it "
+            "differs (wrong figure, changed wording, or a dropped instance).</p>"
+            + tier_rows("act")
+        )
+    if absent_n:
+        issue_table += (
+            f"<details><summary><b>Content with no counterpart in this PDF "
+            f"({absent_n})</b> — e.g. the auditor's report or SEC-only labels; "
+            "verify against their own source document (click to expand)"
+            f"</summary>{tier_rows('absent')}</details>"
+        )
+    if layout_n:
+        issue_table += (
+            f"<details><summary><b>Layout artifacts ({layout_n})</b> — every "
+            "word verified on the cited PDF page, but the print layout wraps "
+            "the columns so exact order could not be machine-proved; a quick "
+            f"glance suffices (click to expand)</summary>{tier_rows('layout')}"
+            "</details>"
+        )
+    if not result.issues:
+        issue_table = (
+            "<p><b>No inconsistencies found — every figure and text block "
+            "was validated against the PDF.</b></p>"
+        )
+
+    index_note = (
+        f"<p>ℹ {result.coverage.index_entries} print-index entries: labels "
+        "validated; the page-number column is print-only and was excluded "
+        "from figure checks (an unpaginated HTML carries no page numbers).</p>"
+        if result.coverage.index_entries
+        else ""
     )
 
     missing_rows = "".join(
@@ -639,6 +706,7 @@ Omitted PDF content is shown <b>inline</b> as a red callout box at the exact
 position in this document where it should have appeared.</p>
 <h3 style="margin:8px 0 0 0">Items to correct ({len(result.issues)})</h3>
 {issue_table}
+{index_note}
 {missing_section}
 {review_section}
 {unplaced_section}

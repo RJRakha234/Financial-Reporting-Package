@@ -170,6 +170,61 @@ def test_page_continuation_header_reprint_is_not_flagged():
     assert result.coverage.missing == 0
 
 
+def test_index_page_numbers_are_excluded_but_labels_checked():
+    # The PDF's table of contents: dot leaders + page numbers (often garbled
+    # by extraction, 19 -> "1.9"). Page numbers must not flag in an
+    # unpaginated HTML; a missing index LABEL must still flag.
+    corpus = make_corpus(
+        [
+            "Index Page No.\n"
+            "2.11 Equity……………………………………….1.9\n"
+            "2.12 Other financial liabilities……………………22\n"
+            "2.13 Brand new section……………………31\n"
+            "Body content follows here with details 1,234",
+        ]
+    )
+    html = (
+        "<html><body><p>2.11 Equity</p><p>2.12 Other financial liabilities</p>"
+        "<p>Body content follows here with details 1,234</p></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    omission_texts = [
+        i.excerpt for i in result.issues if i.kind == "omission"
+    ]
+    # 1.9/22/31 (page numbers) and the "Index Page No." header: no flags.
+    assert not any("1.9" in t or "Index Page" in t for t in omission_texts)
+    assert not [i for i in result.issues if i.kind == "figure-count"]
+    # ...but the dropped index label still surfaces.
+    assert any("Brand new section" in t for t in omission_texts)
+    assert result.coverage.index_entries >= 3
+
+
+def test_issue_tiers_separate_discrepancies_from_noise():
+    corpus = make_corpus(
+        [
+            "The notes form part of the standalone financial statements\n"
+            "Column One Column Two Column Three\n"
+            "Alpha beta gamma delta epsilon"
+        ]
+    )
+    html = (
+        # discrepancy: consolidated vs standalone (close match)
+        "<html><body><p>The notes form part of the consolidated financial statements</p>"
+        # layout: words exist on the page, order scrambled
+        "<p>Column Three Column One Column Two</p>"
+        # absent: no counterpart at all
+        "<p>Entirely unrelated auditor paragraph content here</p>"
+        "<p>Alpha beta gamma delta epsilon</p></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    tiers = {i.tier for i in result.issues if i.kind == "text"}
+    by_tier = {t: [i for i in result.issues if i.tier == t] for t in tiers}
+    assert any("consolidated" in i.excerpt for i in by_tier.get("act", []))
+    assert any("Column Three" in i.excerpt for i in by_tier.get("layout", []))
+    assert any("unrelated" in i.excerpt for i in by_tier.get("absent", []))
+    assert "Discrepancies — act on these" in result.html_out
+
+
 def test_summary_banner_injected():
     result = run("<html><body><p>Total assets 1,23,696</p></body></html>")
     assert 'id="secv-summary"' in result.html_out

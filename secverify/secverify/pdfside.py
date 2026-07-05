@@ -109,6 +109,20 @@ class PdfCorpus:
         self.number_pages.setdefault(key, Counter())[page_no] += 1
         self.number_sample.setdefault(key, token)
 
+    def _remove_number(self, key: str, page_no: int) -> None:
+        if self.number_counts.get(key, 0) <= 0:
+            return
+        self.number_counts[key] -= 1
+        pages = self.number_pages.get(key)
+        if pages and pages.get(page_no):
+            pages[page_no] -= 1
+            if not pages[page_no]:
+                del pages[page_no]
+        if self.number_counts[key] <= 0:
+            del self.number_counts[key]
+            self.number_pages.pop(key, None)
+            self.number_sample.pop(key, None)
+
 
 def _repeated_lines(pages_text: list[str]) -> set[str]:
     """Detect running headers/footers: short lines on ≥40% of pages."""
@@ -181,6 +195,18 @@ def load_pdf(path: str) -> PdfCorpus:
             for text in mixed + _merged_numeric_words(words):
                 for _s, _e, token, key in iter_tokens(text):
                     corpus._add_number(token, key, page_idx + 1)
+
+            # Page numbers in a print index's dot-leader column are print-only
+            # furniture (and often garbled by the leader dots, 19 → "1.9");
+            # remove them so they never count as document figures.
+            from .coverage import parse_index_line
+
+            for line in raw.splitlines():
+                entry = parse_index_line(line)
+                if entry is None:
+                    continue
+                for _s, _e, _token, key in iter_tokens(entry[1]):
+                    corpus._remove_number(key, page_idx + 1)
 
             # The text corpus drops running headers/footers and bare page
             # numbers so sentences that span a page break still match.

@@ -24,6 +24,20 @@ COUNT_CHECK_MIN_LEN = 12
 #: a table header reprinted after a page break, not a second occurrence
 CONTINUATION_TOP_LINES = 3
 
+#: an index / table-of-contents entry: label, dot leader, then a page number
+#: (text extraction often garbles the number with leader dots: 19 → "1.9")
+_INDEX_LINE_RE = re.compile(r"^(?P<label>.{3,}?)[.…]{4,}\s*(?P<pageno>[\d][\d.…\s]*)$")
+#: column headers of an index's page-number column — print furniture only
+_INDEX_FURNITURE = {"indexpageno", "pageno", "index", "contents", "tableofcontents"}
+
+
+def parse_index_line(line: str) -> tuple[str, str] | None:
+    """Split an index entry into ``(label, page_number_part)``, else None."""
+    m = _INDEX_LINE_RE.match(line.strip())
+    if not m:
+        return None
+    return m.group("label").strip(), m.group("pageno").strip()
+
 
 @dataclass
 class CoverageLine:
@@ -42,6 +56,8 @@ class CoverageResult:
     total: int = 0
     ok: int = 0
     review: int = 0
+    #: print-index entries whose page-number column was excluded from checks
+    index_entries: int = 0
 
     @property
     def missing(self) -> int:
@@ -142,9 +158,32 @@ def check_pdf_coverage(
             flagged_shortfalls.add(needle)
         return shortfall
 
+    # Detect table-of-contents pages so index furniture can be skipped.
+    index_pages = {
+        page_idx
+        for page_idx, raw in enumerate(pages_raw)
+        if sum(1 for ln in raw.splitlines() if parse_index_line(ln)) >= 3
+    }
+
     for page_idx, raw in enumerate(pages_raw):
         for line in raw.splitlines():
             line = line.strip()
+
+            index_entry = parse_index_line(line)
+            if index_entry:
+                # A print index entry: validate the label; the page-number
+                # column is print-only (and often garbled by dot leaders),
+                # so it is not expected in an unpaginated HTML.
+                line = index_entry[0]
+                result.index_entries += 1
+            elif (
+                page_idx in index_pages
+                and canonical(line, letters_only=True) in _INDEX_FURNITURE
+            ):
+                # e.g. the "Index  Page No." column header itself.
+                result.index_entries += 1
+                continue
+
             c_alnum = canonical(line)
             if not c_alnum:
                 continue
