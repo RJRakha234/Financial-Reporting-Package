@@ -386,13 +386,16 @@ def _shorten(text: str, max_len: int = 300) -> str:
 
 
 _CSS = """
-.secv-num-ok { background: #b8ecb6; border-radius: 2px; }
-.secv-num-bad { background: #ffb4b4; outline: 2px solid #c00000; border-radius: 2px; font-weight: bold; }
-.secv-text-ok { background: #eafbe7 !important; }
-.secv-text-warn { background: #fff1c2 !important; outline: 2px dashed #b8860b; }
-.secv-text-bad { background: #ffdddd !important; outline: 2px solid #c00000; }
-.secv-marker { color: #c00000; font-weight: bold; font-size: 8pt; vertical-align: super;
-               text-decoration: none; padding: 0 2px; }
+.secv-num-ok { background: #52d05c; border-radius: 2px; padding: 0 1px; }
+.secv-num-bad { background: #ff6b6b; outline: 2px solid #a00000; border-radius: 2px;
+                font-weight: bold; padding: 0 1px; }
+.secv-text-ok { background: #a4e8a0 !important; border-left: 5px solid #1e8a26 !important; }
+.secv-text-warn { background: #ffd24d !important; outline: 2px solid #9a6a00;
+                  border-left: 5px solid #9a6a00 !important; }
+.secv-text-bad { background: #ff9d9d !important; outline: 2px solid #a00000;
+                 border-left: 5px solid #a00000 !important; }
+.secv-marker { color: #a00000; background: #fff; font-weight: bold; font-size: 8pt;
+               vertical-align: super; text-decoration: none; padding: 0 2px; }
 #secv-summary { font: normal 10pt Arial, Helvetica, sans-serif; border: 3px solid #333;
                 background: #fafafa; padding: 12px 16px; margin: 0 0 18px 0; }
 #secv-summary h2 { margin: 0 0 6px 0; font-size: 13pt; }
@@ -407,10 +410,10 @@ _CSS = """
 #secv-coverage h2 { font-size: 13pt; margin: 0 0 6px 0; }
 #secv-coverage h4 { margin: 10px 0 2px 0; border-bottom: 1px solid #999; }
 .secv-cov-line { margin: 1px 0; padding: 1px 4px; border-radius: 2px; }
-.secv-cov-ok { background: #eafbe7; }
-.secv-cov-warn { background: #fff1c2; outline: 1px dashed #b8860b; }
-.secv-cov-bad { background: #ffdddd; outline: 2px solid #c00000; }
-.secv-cov-remark { display: block; color: #900; font-size: 8pt; font-style: italic; }
+.secv-cov-ok { background: #a4e8a0; border-left: 5px solid #1e8a26; }
+.secv-cov-warn { background: #ffd24d; border-left: 5px solid #9a6a00; outline: 1px solid #9a6a00; }
+.secv-cov-bad { background: #ff9d9d; border-left: 5px solid #a00000; outline: 2px solid #a00000; }
+.secv-cov-remark { display: block; color: #7a0000; font-size: 8pt; font-style: italic; font-weight: bold; }
 """
 
 
