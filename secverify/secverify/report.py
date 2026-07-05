@@ -26,6 +26,11 @@ def to_console(result: Result) -> str:
         f"Text blocks: {result.text_blocks_ok}/{result.text_blocks_total} matched, "
         f"{result.text_blocks_review} to review, {result.text_blocks_bad} not found"
     )
+    cov = result.coverage
+    lines.append(
+        f"PDF → HTML coverage: {cov.ok}/{cov.total} PDF lines reflected, "
+        f"{cov.review} to review, {cov.missing} missing"
+    )
     if result.pdf_figures_missing:
         lines.append(
             f"⚠ {len(result.pdf_figures_missing)} significant PDF figures never "
@@ -47,6 +52,23 @@ def to_json(result: Result) -> str:
                 "matched": result.text_blocks_ok,
                 "review": result.text_blocks_review,
                 "not_found": result.text_blocks_bad,
+            },
+            "figure_count_mismatches": result.figure_count_mismatches,
+            "pdf_coverage": {
+                "lines_total": result.coverage.total,
+                "reflected": result.coverage.ok,
+                "review": result.coverage.review,
+                "missing": result.coverage.missing,
+                "flagged_lines": [
+                    {
+                        "pdf_page": line.page,
+                        "pdf_text": line.text,
+                        "status": line.status,
+                        "remark": line.remark,
+                    }
+                    for line in result.coverage.lines
+                    if line.status != "ok"
+                ],
             },
             "issues": [
                 {

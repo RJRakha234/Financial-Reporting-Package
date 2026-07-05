@@ -23,9 +23,19 @@ def make_corpus(pages: list[str]) -> PdfCorpus:
 
 
 PAGE = (
-    "Condensed Balance Sheet as at June 30, 2025. "
-    "Property, plant and equipment 9,868 10,070. "
-    "Total assets 1,23,696. Trade receivables 27,751."
+    "Condensed Balance Sheet as at June 30, 2025\n"
+    "Property, plant and equipment 9,868 10,070\n"
+    "Total assets 1,23,696\n"
+    "Trade receivables 27,751"
+)
+
+#: an HTML rendering that fully reflects PAGE, line by line
+FULL_HTML = (
+    "<html><body><p>Condensed Balance Sheet as at June 30, 2025</p>"
+    "<table><tr><td>Property, plant and equipment</td><td>9,868</td><td>10,070</td></tr>"
+    "<tr><td>Total assets</td><td>1,23,696</td></tr>"
+    "<tr><td>Trade receivables</td><td>27,751</td></tr></table>"
+    "</body></html>"
 )
 
 
@@ -33,17 +43,28 @@ def run(html: str):
     return Annotator(make_corpus([PAGE])).run(html, "ref.pdf", "doc.html")
 
 
-def test_matching_figures_and_text_go_green():
-    result = run(
-        "<html><body><p>Property, plant and equipment</p>"
-        "<table><tr><td>Total assets</td><td>1,23,696</td></tr></table>"
-        "</body></html>"
-    )
+def test_full_reflection_goes_green_with_no_issues():
+    result = run(FULL_HTML)
     assert not result.issues
-    assert result.figures_total == 1
-    assert result.figures_ok == 1
+    assert result.figures_total == result.figures_ok == 6
+    assert result.coverage.missing == 0
+    assert result.coverage.ok == result.coverage.total == 4
     assert 'class="secv-num-ok"' in result.html_out
     assert "secv-text-ok" in result.html_out
+
+
+def test_omitted_pdf_row_is_reported():
+    # Drop the Trade receivables row from the HTML entirely.
+    html = FULL_HTML.replace(
+        "<tr><td>Trade receivables</td><td>27,751</td></tr>", ""
+    )
+    result = run(html)
+    omissions = [i for i in result.issues if i.kind == "omission"]
+    assert len(omissions) == 1
+    assert "Trade receivables" in omissions[0].excerpt
+    assert result.coverage.missing == 1
+    assert "secv-cov-bad" in result.html_out
+    assert 'id="secv-coverage"' in result.html_out
 
 
 def test_wrong_figure_goes_red_with_remark():
@@ -78,6 +99,23 @@ def test_own_markers_are_not_treated_as_figures():
     # A red text block gets a [1] marker; the figure pass must not flag it.
     result = run("<html><body><p>Nonexistent auditor paragraph here.</p></body></html>")
     assert not [i for i in result.issues if i.kind == "figure"]
+
+
+def test_dropped_instance_of_repeated_content_is_flagged():
+    # The same row appears on two PDF pages (e.g. balance sheet + note) but
+    # only once in the HTML: presence checks pass, counts must not.
+    corpus = make_corpus(
+        ["Right-of-use assets 3,201", "Right-of-use assets 3,201"]
+    )
+    html = "<html><body><p>Right-of-use assets 3,201</p></body></html>"
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    escalated = [
+        i for i in result.issues if i.kind == "omission" and i.severity == "review"
+    ]
+    assert len(escalated) == 1  # deduplicated: one report per distinct string
+    assert "2× in the PDF" in escalated[0].remark
+    counts = [i for i in result.issues if i.kind == "figure-count"]
+    assert len(counts) == 1 and "3,201" in counts[0].excerpt
 
 
 def test_summary_banner_injected():

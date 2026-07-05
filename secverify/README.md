@@ -2,8 +2,9 @@
 
 When results are published in India as a PDF and the same document is
 converted to HTML for the SEC (EDGAR exhibit), the HTML must be checked
-against the PDF before filing. `secverify` does that comparison offline and
-writes a **highlighted HTML review copy**:
+against the PDF before filing. `secverify` verifies that the HTML
+**correctly and completely reflects the PDF — all text and all numbers, in
+both directions** — offline, and writes a **highlighted HTML review copy**:
 
 * **green figure** — the amount was found in the PDF (hover shows the pages);
 * **green block** — the text matches the PDF;
@@ -14,9 +15,18 @@ writes a **highlighted HTML review copy**:
   `[n]` marker linking to the summary panel at the top, and an HTML comment
   (`<!-- SECVERIFY REMARK #n: … -->`) next to the highlight in the source.
 
-The summary panel at the top lists every item to correct with its remark, and
-a reverse check: **significant PDF figures that never appear in the HTML**
-(catches dropped rows/columns, not just wrong ones).
+The summary panel at the top lists every item to correct with its remark.
+Because colouring the HTML alone cannot catch an **omission** (content in
+the PDF that the HTML dropped), the review copy ends with a **PDF → HTML
+coverage map**: every line of every PDF page, coloured by whether the HTML
+reflects it, with remarks on anything missing. Three omission detectors run:
+
+* PDF lines whose words are nowhere in the HTML;
+* significant PDF figures that never appear in the HTML;
+* **occurrence counting** — content that appears, say, 2× in the PDF but
+  only 1× in the HTML is flagged, so dropping one instance of a repeated
+  row (its label and figures also live in a note) is still caught. The same
+  counting runs per significant figure.
 
 ## Install
 
@@ -82,7 +92,12 @@ machine.
    fuzzy match with a similarity score. A word-coverage check downgrades
    multi-column table headers (all words present on one PDF page, order
    scrambled by extraction) from error to review.
-4. **Annotate** (`annotate.py`) — wraps every figure in a coloured span, tags
+4. **Coverage** (`coverage.py`) — the reverse direction: every line of every
+   PDF page is checked against the HTML's text and figures (same canonical
+   tiers), occurrence counts are compared for repeated content, and the
+   page-by-page coverage map is appended to the review copy. Missing lines
+   and count shortfalls join the numbered issue list.
+5. **Annotate** (`annotate.py`) — wraps every figure in a coloured span, tags
    every text block, injects the CSS + summary panel, and records remarks as
    tooltips, `[n]` markers and HTML comments.
 
@@ -101,9 +116,10 @@ machine.
 
 ## Scope & assumptions
 
-* The PDF is treated as the source of truth; the HTML is what gets checked.
-* Figure matching is presence-based across the whole document (a figure in
-  the wrong row but present elsewhere in the PDF will not be flagged) —
+* The PDF is treated as the source of truth; the HTML is what gets checked —
+  and the coverage map verifies the HTML reflects *all* of the PDF.
+* Figure matching is presence- and count-based across the whole document; a
+  figure swapped between two rows that both exist would not be flagged —
   pair it with `fincheck` (sister tool in this repo), which verifies that
   totals/subtotals foot within a statement.
 * Works on text-based PDFs. Scanned/image PDFs need OCR first.

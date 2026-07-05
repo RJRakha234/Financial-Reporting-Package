@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup, Comment, NavigableString
 
+from .coverage import CoverageResult, HtmlCorpus, check_pdf_coverage
 from .numbers import is_significant, iter_tokens
 from .pdfside import PdfCorpus
 from .textnorm import canonical, find_best_match, split_sentences
@@ -48,6 +49,8 @@ class Result:
     text_blocks_ok: int = 0
     text_blocks_review: int = 0
     pdf_figures_missing: list[dict] = field(default_factory=list)
+    figure_count_mismatches: list[dict] = field(default_factory=list)
+    coverage: CoverageResult = field(default_factory=CoverageResult)
     html_out: str = ""
 
     @property
@@ -149,22 +152,36 @@ class Annotator:
                     anchor_node = frag
                 node.extract()
 
-        # Reverse check: significant PDF figures never used in the HTML.
+        # Reverse checks on significant PDF figures: never used in the HTML,
+        # or used fewer times than the PDF uses them (one instance dropped).
         for key, count in sorted(
             self.corpus.number_counts.items(),
             key=lambda kv: -len(kv[0]),
         ):
             token = self.corpus.number_sample.get(key, key)
-            if key in html_number_keys or not is_significant(key, token):
+            if not is_significant(key, token):
                 continue
-            self.result.pdf_figures_missing.append(
-                {
-                    "figure": token,
-                    "value": key,
-                    "pdf_pages": self.corpus.pages_for_number(key),
-                    "occurrences": count,
-                }
-            )
+            if key not in html_number_keys:
+                self.result.pdf_figures_missing.append(
+                    {
+                        "figure": token,
+                        "value": key,
+                        "pdf_pages": self.corpus.pages_for_number(key),
+                        "occurrences": count,
+                    }
+                )
+                continue
+            html_count = self.html_corpus.number_counts.get(key, 0)
+            if 0 < html_count < count:
+                self.result.figure_count_mismatches.append(
+                    {
+                        "figure": token,
+                        "value": key,
+                        "pdf_count": count,
+                        "html_count": html_count,
+                        "pdf_pages": self.corpus.pages_for_number(key),
+                    }
+                )
 
     # -- text ------------------------------------------------------------
     def _check_sentence(self, sentence: str) -> tuple[str, str]:
@@ -312,11 +329,55 @@ class Annotator:
     def run(self, html_text: str, pdf_name: str, html_name: str) -> Result:
         soup = BeautifulSoup(html_text, "html.parser")
         root = soup.body or soup
+        # Snapshot the HTML's visible text before any highlighting is added,
+        # then verify the reverse direction: every PDF line must be reflected.
+        self.html_corpus = HtmlCorpus(root.get_text(" "))
+        self.result.coverage = check_pdf_coverage(
+            self.corpus.pages_raw,
+            self.html_corpus,
+            self.corpus.alnum.canon,
+            self.corpus.letters.canon,
+        )
         self._annotate_blocks(soup, root)
         self._annotate_numbers(soup, root)
+        cov_anchors = self._register_coverage_issues()
         _inject_banner(soup, root, self.result, pdf_name, html_name)
+        _append_coverage_map(soup, root, self.result.coverage, cov_anchors)
         self.result.html_out = str(soup)
         return self.result
+
+    def _register_coverage_issues(self) -> dict[int, str]:
+        """Turn missing PDF lines into numbered issues; map line idx→anchor."""
+        anchors: dict[int, str] = {}
+        for idx, line in enumerate(self.result.coverage.lines):
+            if line.status == "missing":
+                severity = "error"
+            elif line.escalate:  # probable omission of repeated content
+                severity = "review"
+            else:
+                continue
+            issue = self._new_issue(
+                "omission",
+                severity,
+                f"(PDF p.{line.page}) {line.text}",
+                line.remark,
+            )
+            # The highlight for an omission lives in the coverage map, not in
+            # the document body.
+            issue.anchor = f"secv-cov-{idx}"
+            anchors[idx] = issue.anchor
+        for m in self.result.figure_count_mismatches:
+            pages = ", ".join(f"p.{p}" for p in m["pdf_pages"][:5])
+            self._new_issue(
+                "figure-count",
+                "review",
+                m["figure"],
+                f"Figure “{m['figure']}” appears {m['pdf_count']}× in the PDF "
+                f"({pages}) but only {m['html_count']}× in the HTML — one "
+                "occurrence may have been dropped. Check each place it should "
+                "appear.",
+            )
+        return anchors
 
 
 def _shorten(text: str, max_len: int = 300) -> str:
@@ -341,6 +402,15 @@ _CSS = """
 #secv-summary .sev-error { color: #c00000; font-weight: bold; }
 #secv-summary .sev-review { color: #b8860b; font-weight: bold; }
 .secv-legend span { padding: 1px 6px; margin-right: 10px; }
+#secv-coverage { font: normal 9pt Arial, Helvetica, sans-serif; border: 3px solid #333;
+                 background: #fafafa; padding: 12px 16px; margin: 24px 0 0 0; }
+#secv-coverage h2 { font-size: 13pt; margin: 0 0 6px 0; }
+#secv-coverage h4 { margin: 10px 0 2px 0; border-bottom: 1px solid #999; }
+.secv-cov-line { margin: 1px 0; padding: 1px 4px; border-radius: 2px; }
+.secv-cov-ok { background: #eafbe7; }
+.secv-cov-warn { background: #fff1c2; outline: 1px dashed #b8860b; }
+.secv-cov-bad { background: #ffdddd; outline: 2px solid #c00000; }
+.secv-cov-remark { display: block; color: #900; font-size: 8pt; font-style: italic; }
 """
 
 
@@ -400,9 +470,13 @@ def _inject_banner(soup, root, result: Result, pdf_name: str, html_name: str) ->
 <span class="secv-text-warn">amber block = close match, review wording</span>
 <span class="secv-text-bad">red block = text not in PDF</span>
 </p>
-<p><b>Figures:</b> {ok_pct} validated ({result.figures_bad} not found) &nbsp;·&nbsp;
+<p><b>HTML → PDF &nbsp;·&nbsp; Figures:</b> {ok_pct} validated ({result.figures_bad} not found) &nbsp;·&nbsp;
 <b>Text blocks:</b> {result.text_blocks_ok}/{result.text_blocks_total} matched,
 {result.text_blocks_review} need review, {result.text_blocks_bad} not found</p>
+<p><b>PDF → HTML coverage:</b> {result.coverage.ok}/{result.coverage.total} PDF lines
+reflected in the HTML, {result.coverage.review} to review,
+<span class="{'sev-error' if result.coverage.missing else ''}">{result.coverage.missing} missing</span>
+&nbsp;—&nbsp; see the <a href="#secv-coverage">page-by-page PDF coverage map</a> at the end of this document.</p>
 <h3 style="margin:8px 0 0 0">Items to correct ({len(result.issues)})</h3>
 {issue_table}
 {missing_section}
@@ -413,3 +487,37 @@ This annotated copy is for review only — do not file it.</p>
 """
     banner = BeautifulSoup(banner_html, "html.parser")
     root.insert(0, banner)
+
+
+def _append_coverage_map(
+    soup, root, coverage: CoverageResult, anchors: dict[int, str]
+) -> None:
+    """Render the PDF page-by-page coverage map at the end of the document."""
+    status_css = {"ok": "secv-cov-ok", "review": "secv-cov-warn", "missing": "secv-cov-bad"}
+    parts = [
+        '<div id="secv-coverage">',
+        "<h2>PDF → HTML coverage map</h2>",
+        "<p>Every line of the PDF, coloured by whether the HTML reflects it: "
+        '<span class="secv-cov-ok">green = reflected</span> '
+        '<span class="secv-cov-warn">amber = review manually</span> '
+        '<span class="secv-cov-bad">red = not found in the HTML (omission?)</span></p>',
+        f"<p><b>{coverage.ok}/{coverage.total}</b> lines reflected · "
+        f"<b>{coverage.review}</b> to review · <b>{coverage.missing}</b> missing</p>",
+    ]
+    current_page = None
+    for idx, line in enumerate(coverage.lines):
+        if line.page != current_page:
+            current_page = line.page
+            parts.append(f"<h4>PDF page {current_page}</h4>")
+        anchor = f' id="{anchors[idx]}"' if idx in anchors else ""
+        remark = (
+            f'<span class="secv-cov-remark">⚠ {html_mod.escape(line.remark)}</span>'
+            if line.status != "ok" and line.remark
+            else ""
+        )
+        parts.append(
+            f'<div class="secv-cov-line {status_css[line.status]}"{anchor}>'
+            f"{html_mod.escape(line.text)}{remark}</div>"
+        )
+    parts.append("</div>")
+    root.append(BeautifulSoup("".join(parts), "html.parser"))

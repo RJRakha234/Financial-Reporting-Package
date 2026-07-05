@@ -170,10 +170,15 @@ def load_pdf(path: str) -> PdfCorpus:
             raw = pages_text[page_idx]
 
             # Numbers come from tightly-tokenised words so adjacent table
-            # columns can never merge into one figure; letter-spaced digit
-            # fragments are re-assembled first.
+            # columns can never merge into one figure.  Pure-numeric tokens
+            # go through the letter-spacing re-assembly; mixed tokens (like
+            # "No.060408") are scanned as-is.  Each figure is counted exactly
+            # once so occurrence counts can be compared against the HTML.
             words = page.extract_words(x_tolerance=1)
-            for text in [w["text"] for w in words] + _merged_numeric_words(words):
+            mixed = [
+                w["text"] for w in words if not _NUMERIC_FRAGMENT.match(w["text"])
+            ]
+            for text in mixed + _merged_numeric_words(words):
                 for _s, _e, token, key in iter_tokens(text):
                     corpus._add_number(token, key, page_idx + 1)
 
