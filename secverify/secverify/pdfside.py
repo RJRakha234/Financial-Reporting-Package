@@ -42,6 +42,9 @@ class PdfCorpus:
     letters: SearchText = field(default_factory=SearchText)
     #: letters-only canonical text per page (for word-coverage checks)
     page_letters: list[str] = field(default_factory=list)
+    #: display label per page — "p.5", or "auditorsreport p.2" when several
+    #: reference PDFs are combined
+    page_labels: list[str] = field(default_factory=list)
     #: canonical number key -> Counter of pages it appears on
     number_pages: dict[str, Counter] = field(default_factory=dict)
     #: canonical number key -> a raw token as it appeared in the PDF
@@ -65,6 +68,12 @@ class PdfCorpus:
         if len(snippet) > max_len:
             snippet = snippet[: max_len - 1] + "…"
         return snippet
+
+    def page_label(self, page_no: int) -> str:
+        """Display label for a 1-based global page number."""
+        if 1 <= page_no <= len(self.page_labels):
+            return self.page_labels[page_no - 1]
+        return f"p.{page_no}"
 
     def has_number(self, key: str) -> bool:
         return key in self.number_counts
@@ -100,7 +109,9 @@ class PdfCorpus:
         scored.sort()
         out = []
         for _sim, _dist, cand in scored[:limit]:
-            pages = ", ".join(f"p.{p}" for p in self.pages_for_number(cand)[:3])
+            pages = ", ".join(
+                self.page_label(p) for p in self.pages_for_number(cand)[:3]
+            )
             out.append(f"{self.number_sample.get(cand, cand)} ({pages})")
         return out
 
@@ -169,60 +180,87 @@ def _merged_numeric_words(words: list[dict]) -> list[str]:
     return out
 
 
-def load_pdf(path: str) -> PdfCorpus:
-    import pdfplumber
+def load_pdf(path: str | list[str]) -> PdfCorpus:
+    """Build one reference corpus from one or several PDFs.
 
+    With several PDFs (e.g. the financial statements plus the signed
+    auditor's report), pages are numbered globally but every reference in
+    remarks carries a per-document label like ``auditorsreport p.2``.
+    """
+    import pdfplumber
+    from pathlib import Path
+
+    from .coverage import parse_index_line
+
+    paths = [path] if isinstance(path, str) else list(path)
+    multi = len(paths) > 1
     corpus = PdfCorpus()
     alnum_parts: list[str] = []
     letters_parts: list[str] = []
+    global_idx = 0
 
-    with pdfplumber.open(path) as pdf:
-        pages_text = [page.extract_text() or "" for page in pdf.pages]
-        headers = _repeated_lines(pages_text)
+    for doc_path in paths:
+        stem = Path(doc_path).stem
+        with pdfplumber.open(doc_path) as pdf:
+            pages_text = [page.extract_text() or "" for page in pdf.pages]
+            headers = _repeated_lines(pages_text)
 
-        for page_idx, page in enumerate(pdf.pages):
-            raw = pages_text[page_idx]
+            for doc_page_idx, page in enumerate(pdf.pages):
+                raw = pages_text[doc_page_idx]
+                page_no = global_idx + 1
+                corpus.page_labels.append(
+                    f"{stem} p.{doc_page_idx + 1}" if multi else f"p.{page_no}"
+                )
 
-            # Numbers come from tightly-tokenised words so adjacent table
-            # columns can never merge into one figure.  Pure-numeric tokens
-            # go through the letter-spacing re-assembly; mixed tokens (like
-            # "No.060408") are scanned as-is.  Each figure is counted exactly
-            # once so occurrence counts can be compared against the HTML.
-            words = page.extract_words(x_tolerance=1)
-            mixed = [
-                w["text"] for w in words if not _NUMERIC_FRAGMENT.match(w["text"])
-            ]
-            for text in mixed + _merged_numeric_words(words):
-                for _s, _e, token, key in iter_tokens(text):
-                    corpus._add_number(token, key, page_idx + 1)
+                # Numbers come from tightly-tokenised words so adjacent table
+                # columns can never merge into one figure.  Pure-numeric
+                # tokens go through the letter-spacing re-assembly; mixed
+                # tokens (like "No.060408") are scanned as-is.  Each figure
+                # is counted exactly once so occurrence counts can be
+                # compared against the HTML.
+                words = page.extract_words(x_tolerance=1)
+                mixed = [
+                    w["text"]
+                    for w in words
+                    if not _NUMERIC_FRAGMENT.match(w["text"])
+                ]
+                for text in mixed + _merged_numeric_words(words):
+                    for _s, _e, token, key in iter_tokens(text):
+                        corpus._add_number(token, key, page_no)
 
-            # Page numbers in a print index's dot-leader column are print-only
-            # furniture (and often garbled by the leader dots, 19 → "1.9");
-            # remove them so they never count as document figures.
-            from .coverage import parse_index_line
+                # Page numbers in a print index's dot-leader column are
+                # print-only furniture (and often garbled by the leader
+                # dots, 19 → "1.9"); remove them so they never count as
+                # document figures.
+                for line in raw.splitlines():
+                    entry = parse_index_line(line)
+                    if entry is None:
+                        continue
+                    for _s, _e, _token, key in iter_tokens(entry[1]):
+                        corpus._remove_number(key, page_no)
 
-            for line in raw.splitlines():
-                entry = parse_index_line(line)
-                if entry is None:
-                    continue
-                for _s, _e, _token, key in iter_tokens(entry[1]):
-                    corpus._remove_number(key, page_idx + 1)
+                # The text corpus drops running headers/footers and bare
+                # page numbers so sentences spanning a page break still
+                # match.
+                page_body = "\n".join(
+                    line
+                    for line in raw.splitlines()
+                    if line.strip() not in headers
+                )
+                corpus.pages_raw.append(page_body)
 
-            # The text corpus drops running headers/footers and bare page
-            # numbers so sentences that span a page break still match.
-            page_body = "\n".join(
-                line for line in raw.splitlines() if line.strip() not in headers
-            )
-            corpus.pages_raw.append(page_body)
+                for view, parts, letters_only in (
+                    (corpus.alnum, alnum_parts, False),
+                    (corpus.letters, letters_parts, True),
+                ):
+                    view.page_starts.append(sum(map(len, parts)))
+                    canon, index_map = canonicalize(
+                        page_body, letters_only=letters_only
+                    )
+                    parts.append(canon)
+                    view.index_map.extend((global_idx, off) for off in index_map)
 
-            for view, parts, letters_only in (
-                (corpus.alnum, alnum_parts, False),
-                (corpus.letters, letters_parts, True),
-            ):
-                view.page_starts.append(len(view.canon) + sum(map(len, parts)))
-                canon, index_map = canonicalize(page_body, letters_only=letters_only)
-                parts.append(canon)
-                view.index_map.extend((page_idx, off) for off in index_map)
+                global_idx += 1
 
     corpus.alnum.canon = "".join(alnum_parts)
     corpus.letters.canon = "".join(letters_parts)

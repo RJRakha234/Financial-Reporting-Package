@@ -61,7 +61,7 @@ def to_json(result: Result) -> str:
                 "missing": result.coverage.missing,
                 "flagged_lines": [
                     {
-                        "pdf_page": line.page,
+                        "pdf_page": line.label or line.page,
                         "pdf_text": line.text,
                         "status": line.status,
                         "remark": line.remark,

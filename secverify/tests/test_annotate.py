@@ -8,6 +8,7 @@ def make_corpus(pages: list[str]) -> PdfCorpus:
     corpus = PdfCorpus()
     for page_idx, raw in enumerate(pages):
         corpus.pages_raw.append(raw)
+        corpus.page_labels.append(f"p.{page_idx + 1}")
         for word in raw.split():
             for _s, _e, token, key in iter_tokens(word):
                 corpus._add_number(token, key, page_idx + 1)

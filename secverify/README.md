@@ -51,6 +51,10 @@ pip install -r requirements.txt
 # writes exv99w09.checked.html next to the input
 python -m secverify statement.pdf exv99w09.html
 
+# several reference PDFs: the exhibit combines the statements AND the signed
+# auditor's report — validate against both (remarks cite "auditorsreport p.2")
+python -m secverify statement.pdf auditorsreport.pdf exv99w09.html
+
 # choose the output paths, add a machine-readable report
 python -m secverify statement.pdf exv99w09.html -o reviewed.html --json report.json
 ```
@@ -130,8 +134,11 @@ machine.
 
 ## Scope & assumptions
 
-* The PDF is treated as the source of truth; the HTML is what gets checked —
-  and the coverage map verifies the HTML reflects *all* of the PDF.
+* The PDF(s) are treated as the source of truth; the HTML is what gets
+  checked — and the reverse pass verifies the HTML reflects *all* of every
+  reference PDF. Pass every source the exhibit is assembled from (statements
+  + signed auditor's report), otherwise their sections show as "content with
+  no counterpart".
 * Figure matching is presence- and count-based across the whole document; a
   figure swapped between two rows that both exist would not be flagged —
   pair it with `fincheck` (sister tool in this repo), which verifies that

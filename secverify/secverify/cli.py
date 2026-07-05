@@ -17,7 +17,13 @@ def build_parser() -> argparse.ArgumentParser:
         "of the same document and write a green/red highlighted HTML review "
         "copy with remarks on every inconsistency. Runs fully offline.",
     )
-    parser.add_argument("pdf", help="reference PDF (the published statement)")
+    parser.add_argument(
+        "pdf",
+        nargs="+",
+        help="reference PDF(s) — the published statement, and optionally "
+        "further sources such as the signed auditor's report; the HTML is "
+        "validated against their combined content",
+    )
     parser.add_argument("html", help="HTML rendering to validate (SEC exhibit)")
     parser.add_argument(
         "-o",
@@ -31,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    for path, kind in ((args.pdf, "PDF"), (args.html, "HTML")):
+    for path, kind in [(p, "PDF") for p in args.pdf] + [(args.html, "HTML")]:
         if not Path(path).is_file():
             print(f"error: {kind} file not found: {path}", file=sys.stderr)
             return 2

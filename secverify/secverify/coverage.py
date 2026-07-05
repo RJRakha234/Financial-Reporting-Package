@@ -45,6 +45,8 @@ class CoverageLine:
     text: str
     status: str  # "ok" | "review" | "missing"
     remark: str = ""
+    #: display label for the page ("p.5" or "auditorsreport p.2")
+    label: str = ""
     #: review lines that indicate a probable omission (count shortfall) are
     #: escalated into the numbered issue list, not just the coverage map
     escalate: bool = False
@@ -143,7 +145,12 @@ def check_pdf_coverage(
     html: HtmlCorpus,
     pdf_alnum: str,
     pdf_letters: str,
+    page_labels: list[str] | None = None,
 ) -> CoverageResult:
+    def label_of(page_no: int) -> str:
+        if page_labels and 1 <= page_no <= len(page_labels):
+            return page_labels[page_no - 1]
+        return f"p.{page_no}"
     result = CoverageResult()
     flagged_shortfalls: set[str] = set()  # report each distinct string once
     reprints = _continuation_reprints(pages_raw)
@@ -189,6 +196,7 @@ def check_pdf_coverage(
                 continue
             result.total += 1
             page_no = page_idx + 1
+            page_label = label_of(page_no)
 
             # Tier 1: the whole line, figures included, appears verbatim.
             if c_alnum in html.alnum:
@@ -205,11 +213,12 @@ def check_pdf_coverage(
                             "instance may have been dropped. Check every place "
                             "it should appear.",
                             escalate=True,
+                            label=page_label,
                         )
                     )
                     continue
                 result.ok += 1
-                result.lines.append(CoverageLine(page_no, line, "ok"))
+                result.lines.append(CoverageLine(page_no, line, "ok", label=page_label))
                 continue
 
             letters = canonical(line, letters_only=True)
@@ -237,11 +246,12 @@ def check_pdf_coverage(
                             "instance may have been dropped. Check every place "
                             "it should appear.",
                             escalate=True,
+                            label=page_label,
                         )
                     )
                     continue
                 result.ok += 1
-                result.lines.append(CoverageLine(page_no, line, "ok"))
+                result.lines.append(CoverageLine(page_no, line, "ok", label=page_label))
                 continue
 
             if missing_figs:
@@ -252,9 +262,10 @@ def check_pdf_coverage(
                         "missing",
                         "Figure(s) "
                         + ", ".join(f"“{t.strip()}”" for t in missing_figs)
-                        + f" from PDF page {page_no} do not appear anywhere in "
+                        + f" from PDF {page_label} do not appear anywhere in "
                         "the HTML — a row or value may have been dropped or "
                         "mistyped.",
+                        label=page_label,
                     )
                 )
                 continue
@@ -270,6 +281,7 @@ def check_pdf_coverage(
                         "review",
                         f"Close match in the HTML (similarity {match[2]:.0%}) "
                         "but not identical — verify the wording.",
+                        label=page_label,
                     )
                 )
                 continue
@@ -285,6 +297,7 @@ def check_pdf_coverage(
                         "not contiguously — usually a table whose reading "
                         "order differs between the two renderings. Verify "
                         "manually.",
+                        label=page_label,
                     )
                 )
                 continue
@@ -293,8 +306,9 @@ def check_pdf_coverage(
                     page_no,
                     line,
                     "missing",
-                    f"This PDF page {page_no} content was not found in the "
+                    f"This PDF {page_label} content was not found in the "
                     "HTML — it may have been omitted from the filing.",
+                    label=page_label,
                 )
             )
     return result

@@ -121,8 +121,8 @@ class Annotator:
                     self.result.figures_ok += 1
                     pages = self.corpus.pages_for_number(key)
                     span["class"] = "secv-num-ok"
-                    span["title"] = "Validated: found in PDF on page(s) " + ", ".join(
-                        str(p) for p in pages[:6]
+                    span["title"] = "Validated: found in PDF at " + ", ".join(
+                        self.corpus.page_label(p) for p in pages[:6]
                     )
                     fragments.append(span)
                 else:
@@ -173,7 +173,10 @@ class Annotator:
                     {
                         "figure": token,
                         "value": key,
-                        "pdf_pages": self.corpus.pages_for_number(key),
+                        "pdf_pages": [
+                            self.corpus.page_label(p)
+                            for p in self.corpus.pages_for_number(key)
+                        ],
                         "occurrences": count,
                     }
                 )
@@ -186,7 +189,10 @@ class Annotator:
                         "value": key,
                         "pdf_count": count,
                         "html_count": html_count,
-                        "pdf_pages": self.corpus.pages_for_number(key),
+                        "pdf_pages": [
+                            self.corpus.page_label(p)
+                            for p in self.corpus.pages_for_number(key)
+                        ],
                     }
                 )
 
@@ -220,7 +226,7 @@ class Annotator:
                 page, pct = coverage
                 return "review", (
                     f"“{_shorten(sentence)}” is not contiguous in the PDF, but "
-                    f"{pct:.0%} of its words appear together on PDF page {page} — "
+                    f"{pct:.0%} of its words appear together on PDF {page} — "
                     "typically a multi-column table header that wraps onto "
                     "several lines in the PDF. Verify that page manually."
                 ), "layout"
@@ -235,31 +241,31 @@ class Annotator:
                 "or added relative to the PDF."
             ), "absent"
         start, end, ratio = match
-        page = view.page_of(start)
+        page = self.corpus.page_label(view.page_of(start))
         snippet = self.corpus.raw_snippet(view, start, end)
         if ratio >= FUZZY_REVIEW_RATIO:
             return "review", (
                 f"Close but not identical to the PDF (similarity {ratio:.0%}). "
                 f"HTML says: “{_shorten(sentence)}”. "
-                f"PDF page {page} says: “{snippet}”. Reconcile the wording/figures."
+                f"PDF {page} says: “{snippet}”. Reconcile the wording/figures."
             ), "discrepancy"
         coverage = self._word_coverage(sentence)
         if coverage is not None:
             cov_page, pct = coverage
             return "review", (
                 f"“{_shorten(sentence)}” is not contiguous in the PDF, but "
-                f"{pct:.0%} of its words appear together on PDF page {cov_page} — "
+                f"{pct:.0%} of its words appear together on PDF {cov_page} — "
                 "typically a table header/label whose columns the PDF wraps "
-                f"differently. Nearest contiguous passage (page {page}, "
+                f"differently. Nearest contiguous passage ({page}, "
                 f"similarity {ratio:.0%}): “{snippet}”. Verify manually."
             ), "layout"
         return "error", (
             f"Does not match the PDF. HTML says: “{_shorten(sentence)}”. "
-            f"The nearest passage (PDF page {page}, similarity {ratio:.0%}) is: "
+            f"The nearest passage (PDF {page}, similarity {ratio:.0%}) is: "
             f"“{snippet}”."
         ), "discrepancy"
 
-    def _word_coverage(self, sentence: str) -> tuple[int, float] | None:
+    def _word_coverage(self, sentence: str) -> tuple[str, float] | None:
         """Best single PDF page containing (almost) every word of *sentence*.
 
         Returns ``(page, coverage)`` when some page contains ≥85% of the
@@ -283,7 +289,7 @@ class Annotator:
             if best is None or pct > best[1]:
                 best = (page_idx + 1, pct)
         if best and best[1] >= 0.85:
-            return best
+            return (self.corpus.page_label(best[0]), best[1])
         return None
 
     def _annotate_blocks(self, soup: BeautifulSoup, root) -> None:
@@ -361,6 +367,7 @@ class Annotator:
             self.html_corpus,
             self.corpus.alnum.canon,
             self.corpus.letters.canon,
+            self.corpus.page_labels,
         )
         self._block_index = _collect_block_index(root)
         self._annotate_blocks(soup, root)
@@ -398,7 +405,7 @@ class Annotator:
                 else "CHECK — POSSIBLY DROPPED"
             )
             text = (
-                f"⛔ {heading} · PDF page {line.page}: “{line.text}” — "
+                f"⛔ {heading} · PDF {line.label or line.page}: “{line.text}” — "
                 f"{line.remark}"
             )
             row = block.find_parent("tr")
@@ -416,7 +423,7 @@ class Annotator:
             target.string = text
             insert_after.insert_after(holder)
             holder.insert_after(
-                Comment(f" SECVERIFY OMISSION (PDF p.{line.page}): {line.remark} ")
+                Comment(f" SECVERIFY OMISSION (PDF {line.label or line.page}): {line.remark} ")
             )
         return unplaced
 
@@ -482,7 +489,7 @@ class Annotator:
             issue = self._new_issue(
                 "omission",
                 severity,
-                f"(PDF p.{line.page}) {line.text}",
+                f"(PDF {line.label or line.page}) {line.text}",
                 line.remark,
             )
             # The highlight for an omission is an inline callout box (or a
@@ -490,7 +497,7 @@ class Annotator:
             issue.anchor = f"secv-cov-{idx}"
             anchors[idx] = issue.anchor
         for m in self.result.figure_count_mismatches:
-            pages = ", ".join(f"p.{p}" for p in m["pdf_pages"][:5])
+            pages = ", ".join(str(p) for p in m["pdf_pages"][:5])
             self._new_issue(
                 "figure-count",
                 "review",
@@ -659,7 +666,7 @@ def _inject_banner(
     review_section = ""
     if review_lines:
         rows_r = "".join(
-            f"<tr><td>p.{line.page}</td><td>{html_mod.escape(line.text[:160])}</td>"
+            f"<tr><td>{line.label or line.page}</td><td>{html_mod.escape(line.text[:160])}</td>"
             f"<td>{html_mod.escape(line.remark)}</td></tr>"
             for line in review_lines
         )
@@ -674,7 +681,7 @@ def _inject_banner(
     unplaced_section = ""
     if unplaced:
         items = "".join(
-            f'<li id="secv-cov-{idx}"><b>PDF p.{line.page}:</b> '
+            f'<li id="secv-cov-{idx}"><b>PDF {line.label or line.page}:</b> '
             f"{html_mod.escape(line.text)} — <i>{html_mod.escape(line.remark)}</i></li>"
             for idx, line in unplaced
         )
