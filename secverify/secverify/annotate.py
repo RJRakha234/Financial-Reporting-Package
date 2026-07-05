@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup, Comment, NavigableString
 
-from .coverage import CoverageResult, HtmlCorpus, check_pdf_coverage
+from .coverage import CoverageLine, CoverageResult, HtmlCorpus, check_pdf_coverage
 from .numbers import is_significant, iter_tokens
 from .pdfside import PdfCorpus
 from .textnorm import canonical, find_best_match, split_sentences
@@ -338,13 +338,108 @@ class Annotator:
             self.corpus.alnum.canon,
             self.corpus.letters.canon,
         )
+        self._block_index = _collect_block_index(root)
         self._annotate_blocks(soup, root)
         self._annotate_numbers(soup, root)
         cov_anchors = self._register_coverage_issues()
-        _inject_banner(soup, root, self.result, pdf_name, html_name)
-        _append_coverage_map(soup, root, self.result.coverage, cov_anchors)
+        unplaced = self._insert_inline_omissions(soup, cov_anchors)
+        _inject_banner(soup, root, self.result, pdf_name, html_name, unplaced)
         self.result.html_out = str(soup)
         return self.result
+
+    def _insert_inline_omissions(
+        self, soup: BeautifulSoup, anchors: dict[int, str]
+    ) -> list[tuple[int, "CoverageLine"]]:
+        """Place each omitted PDF line as a callout where it belongs.
+
+        For every missing/probably-dropped PDF line, the nearest *preceding*
+        PDF line that IS reflected in the HTML is located in the DOM, and a
+        red/amber callout box is inserted right after it — so the omission
+        shows up at the exact position in the document where the content
+        should have been.  Lines that cannot be anchored are returned so the
+        summary panel can list them instead.
+        """
+        unplaced: list[tuple[int, CoverageLine]] = []
+        lines = self.result.coverage.lines
+        for idx, anchor_id in anchors.items():
+            line = lines[idx]
+            block = self._find_anchor_block(idx)
+            if block is None:
+                unplaced.append((idx, line))
+                continue
+            severity = "bad" if line.status == "missing" else "warn"
+            heading = (
+                "MISSING FROM HTML"
+                if line.status == "missing"
+                else "CHECK — POSSIBLY DROPPED"
+            )
+            text = (
+                f"⛔ {heading} · PDF page {line.page}: “{line.text}” — "
+                f"{line.remark}"
+            )
+            row = block.find_parent("tr")
+            if row is not None:
+                holder = soup.new_tag("tr")
+                cell = soup.new_tag("td")
+                cell["colspan"] = str(max(1, len(row.find_all(["td", "th"]))))
+                holder.append(cell)
+                target, insert_after = cell, row
+            else:
+                holder = cell = soup.new_tag("div")
+                target, insert_after = holder, block
+            cell["class"] = f"secv-callout secv-callout-{severity}"
+            cell["id"] = anchor_id
+            target.string = text
+            insert_after.insert_after(holder)
+            holder.insert_after(
+                Comment(f" SECVERIFY OMISSION (PDF p.{line.page}): {line.remark} ")
+            )
+        return unplaced
+
+    def _match_block(self, a_letters: str, frac: float):
+        """Find the DOM block reflecting *a_letters*, or None."""
+        if len(a_letters) < 10:
+            return None
+        matches = [
+            b
+            for b in self._block_index
+            if (b["letters"] and a_letters in b["letters"])
+            or (len(b["letters"]) >= 10 and b["letters"] in a_letters)
+        ]
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]["el"]
+        # Same content appears in several places (e.g. an index entry and its
+        # section heading): pick the occurrence whose relative position in
+        # the HTML best matches the line's position in the PDF.
+        return min(
+            matches, key=lambda b: abs(b["pos"] / len(self._block_index) - frac)
+        )["el"]
+
+    def _find_anchor_block(self, line_idx: int):
+        """DOM element after which an omission callout should be placed."""
+        lines = self.result.coverage.lines
+        line = lines[line_idx]
+        frac = line_idx / max(1, len(lines))
+        # A count-shortfall line IS present in the HTML (just fewer times):
+        # anchor the callout on the reflected instance itself.
+        if line.status != "missing":
+            el = self._match_block(canonical(line.text, letters_only=True), frac)
+            if el is not None:
+                return el
+        # Otherwise anchor after the nearest preceding covered PDF line.
+        for back in range(1, 16):
+            j = line_idx - back
+            if j < 0:
+                break
+            prev = lines[j]
+            if prev.status != "ok":
+                continue
+            el = self._match_block(canonical(prev.text, letters_only=True), frac)
+            if el is not None:
+                return el
+        return None
 
     def _register_coverage_issues(self) -> dict[int, str]:
         """Turn missing PDF lines into numbered issues; map line idx→anchor."""
@@ -362,8 +457,8 @@ class Annotator:
                 f"(PDF p.{line.page}) {line.text}",
                 line.remark,
             )
-            # The highlight for an omission lives in the coverage map, not in
-            # the document body.
+            # The highlight for an omission is an inline callout box (or a
+            # summary-panel entry when it cannot be positioned).
             issue.anchor = f"secv-cov-{idx}"
             anchors[idx] = issue.anchor
         for m in self.result.figure_count_mismatches:
@@ -383,6 +478,28 @@ class Annotator:
 def _shorten(text: str, max_len: int = 300) -> str:
     text = " ".join(text.split())
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+def _collect_block_index(root) -> list[dict]:
+    """Snapshot every leaf block's canonical text (pre-annotation) for
+    anchoring omission callouts to their document position."""
+    index: list[dict] = []
+    for block in root.find_all(BLOCK_TAGS):
+        if block.find(BLOCK_TAGS) is not None:
+            continue
+        if block.find_parent(SKIP_PARENTS) is not None:
+            continue
+        text = block.get_text(" ", strip=True)
+        if not canonical(text):
+            continue
+        index.append(
+            {
+                "el": block,
+                "letters": canonical(text, letters_only=True),
+                "pos": len(index),
+            }
+        )
+    return index
 
 
 _CSS = """
@@ -405,19 +522,21 @@ _CSS = """
 #secv-summary .sev-error { color: #c00000; font-weight: bold; }
 #secv-summary .sev-review { color: #b8860b; font-weight: bold; }
 .secv-legend span { padding: 1px 6px; margin-right: 10px; }
-#secv-coverage { font: normal 9pt Arial, Helvetica, sans-serif; border: 3px solid #333;
-                 background: #fafafa; padding: 12px 16px; margin: 24px 0 0 0; }
-#secv-coverage h2 { font-size: 13pt; margin: 0 0 6px 0; }
-#secv-coverage h4 { margin: 10px 0 2px 0; border-bottom: 1px solid #999; }
-.secv-cov-line { margin: 1px 0; padding: 1px 4px; border-radius: 2px; }
-.secv-cov-ok { background: #a4e8a0; border-left: 5px solid #1e8a26; }
-.secv-cov-warn { background: #ffd24d; border-left: 5px solid #9a6a00; outline: 1px solid #9a6a00; }
-.secv-cov-bad { background: #ff9d9d; border-left: 5px solid #a00000; outline: 2px solid #a00000; }
-.secv-cov-remark { display: block; color: #7a0000; font-size: 8pt; font-style: italic; font-weight: bold; }
+.secv-callout { font: bold 9pt Arial, Helvetica, sans-serif !important;
+                padding: 6px 10px !important; margin: 4px 0; border-radius: 3px; }
+.secv-callout-bad { background: #ff9d9d !important; border: 2px solid #a00000 !important; }
+.secv-callout-warn { background: #ffd24d !important; border: 2px solid #9a6a00 !important; }
 """
 
 
-def _inject_banner(soup, root, result: Result, pdf_name: str, html_name: str) -> None:
+def _inject_banner(
+    soup,
+    root,
+    result: Result,
+    pdf_name: str,
+    html_name: str,
+    unplaced: list[tuple[int, CoverageLine]] | None = None,
+) -> None:
     style = soup.new_tag("style")
     style.string = _CSS
     head = soup.head
@@ -461,6 +580,39 @@ def _inject_banner(soup, root, result: Result, pdf_name: str, html_name: str) ->
         else "<p>Every significant PDF figure also appears in the HTML.</p>"
     )
 
+    review_lines = [
+        line
+        for line in result.coverage.lines
+        if line.status == "review" and not line.escalate
+    ]
+    review_section = ""
+    if review_lines:
+        rows_r = "".join(
+            f"<tr><td>p.{line.page}</td><td>{html_mod.escape(line.text[:160])}</td>"
+            f"<td>{html_mod.escape(line.remark)}</td></tr>"
+            for line in review_lines
+        )
+        review_section = (
+            f"<details><summary><b>{len(review_lines)} PDF lines to review "
+            "manually</b> (reflected in the HTML but not verbatim — mostly "
+            "signature blocks and table headers whose reading order differs; "
+            "click to expand)</summary><table><tr><th>PDF page</th>"
+            f"<th>PDF line</th><th>Remark</th></tr>{rows_r}</table></details>"
+        )
+
+    unplaced_section = ""
+    if unplaced:
+        items = "".join(
+            f'<li id="secv-cov-{idx}"><b>PDF p.{line.page}:</b> '
+            f"{html_mod.escape(line.text)} — <i>{html_mod.escape(line.remark)}</i></li>"
+            for idx, line in unplaced
+        )
+        unplaced_section = (
+            "<p><b>⚠ Omissions that could not be positioned inline</b> "
+            "(no nearby matching content to attach them to):</p>"
+            f"<ul>{items}</ul>"
+        )
+
     banner_html = f"""
 <div id="secv-summary">
 <h2>secverify — PDF ↔ HTML validation report</h2>
@@ -478,11 +630,14 @@ def _inject_banner(soup, root, result: Result, pdf_name: str, html_name: str) ->
 {result.text_blocks_review} need review, {result.text_blocks_bad} not found</p>
 <p><b>PDF → HTML coverage:</b> {result.coverage.ok}/{result.coverage.total} PDF lines
 reflected in the HTML, {result.coverage.review} to review,
-<span class="{'sev-error' if result.coverage.missing else ''}">{result.coverage.missing} missing</span>
-&nbsp;—&nbsp; see the <a href="#secv-coverage">page-by-page PDF coverage map</a> at the end of this document.</p>
+<span class="{'sev-error' if result.coverage.missing else ''}">{result.coverage.missing} missing</span>.
+Omitted PDF content is shown <b>inline</b> as a red callout box at the exact
+position in this document where it should have appeared.</p>
 <h3 style="margin:8px 0 0 0">Items to correct ({len(result.issues)})</h3>
 {issue_table}
 {missing_section}
+{review_section}
+{unplaced_section}
 <p style="font-size:8pt;color:#555">Generated offline by secverify. Hover any
 red/amber highlight for its remark; [n] markers link back to this panel.
 This annotated copy is for review only — do not file it.</p>
@@ -490,37 +645,3 @@ This annotated copy is for review only — do not file it.</p>
 """
     banner = BeautifulSoup(banner_html, "html.parser")
     root.insert(0, banner)
-
-
-def _append_coverage_map(
-    soup, root, coverage: CoverageResult, anchors: dict[int, str]
-) -> None:
-    """Render the PDF page-by-page coverage map at the end of the document."""
-    status_css = {"ok": "secv-cov-ok", "review": "secv-cov-warn", "missing": "secv-cov-bad"}
-    parts = [
-        '<div id="secv-coverage">',
-        "<h2>PDF → HTML coverage map</h2>",
-        "<p>Every line of the PDF, coloured by whether the HTML reflects it: "
-        '<span class="secv-cov-ok">green = reflected</span> '
-        '<span class="secv-cov-warn">amber = review manually</span> '
-        '<span class="secv-cov-bad">red = not found in the HTML (omission?)</span></p>',
-        f"<p><b>{coverage.ok}/{coverage.total}</b> lines reflected · "
-        f"<b>{coverage.review}</b> to review · <b>{coverage.missing}</b> missing</p>",
-    ]
-    current_page = None
-    for idx, line in enumerate(coverage.lines):
-        if line.page != current_page:
-            current_page = line.page
-            parts.append(f"<h4>PDF page {current_page}</h4>")
-        anchor = f' id="{anchors[idx]}"' if idx in anchors else ""
-        remark = (
-            f'<span class="secv-cov-remark">⚠ {html_mod.escape(line.remark)}</span>'
-            if line.status != "ok" and line.remark
-            else ""
-        )
-        parts.append(
-            f'<div class="secv-cov-line {status_css[line.status]}"{anchor}>'
-            f"{html_mod.escape(line.text)}{remark}</div>"
-        )
-    parts.append("</div>")
-    root.append(BeautifulSoup("".join(parts), "html.parser"))

@@ -17,9 +17,11 @@ both directions** — offline, and writes a **highlighted HTML review copy**:
 
 The summary panel at the top lists every item to correct with its remark.
 Because colouring the HTML alone cannot catch an **omission** (content in
-the PDF that the HTML dropped), the review copy ends with a **PDF → HTML
-coverage map**: every line of every PDF page, coloured by whether the HTML
-reflects it, with remarks on anything missing. Three omission detectors run:
+the PDF that the HTML dropped), every line of every PDF page is also checked
+against the HTML — and anything missing is rendered **inline as a red
+callout box at the exact position in the document where the content should
+have appeared** (as a table row when the omission belongs inside a table).
+Three omission detectors run:
 
 * PDF lines whose words are nowhere in the HTML;
 * significant PDF figures that never appear in the HTML;
@@ -94,9 +96,12 @@ machine.
    scrambled by extraction) from error to review.
 4. **Coverage** (`coverage.py`) — the reverse direction: every line of every
    PDF page is checked against the HTML's text and figures (same canonical
-   tiers), occurrence counts are compared for repeated content, and the
-   page-by-page coverage map is appended to the review copy. Missing lines
-   and count shortfalls join the numbered issue list.
+   tiers), and occurrence counts are compared for repeated content. Missing
+   lines and count shortfalls join the numbered issue list and are placed
+   inline: the callout is anchored to the DOM element reflecting the nearest
+   preceding covered PDF line (or the surviving instance, for count
+   shortfalls), so the reviewer sees the omission in context. Reflected-but-
+   not-verbatim lines are listed compactly in the summary panel.
 5. **Annotate** (`annotate.py`) — wraps every figure in a coloured span, tags
    every text block, injects the CSS + summary panel, and records remarks as
    tooltips, `[n]` markers and HTML comments.

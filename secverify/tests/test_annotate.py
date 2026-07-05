@@ -53,7 +53,7 @@ def test_full_reflection_goes_green_with_no_issues():
     assert "secv-text-ok" in result.html_out
 
 
-def test_omitted_pdf_row_is_reported():
+def test_omitted_pdf_row_gets_inline_callout_at_its_position():
     # Drop the Trade receivables row from the HTML entirely.
     html = FULL_HTML.replace(
         "<tr><td>Trade receivables</td><td>27,751</td></tr>", ""
@@ -63,8 +63,18 @@ def test_omitted_pdf_row_is_reported():
     assert len(omissions) == 1
     assert "Trade receivables" in omissions[0].excerpt
     assert result.coverage.missing == 1
-    assert "secv-cov-bad" in result.html_out
-    assert 'id="secv-coverage"' in result.html_out
+    # The callout is inserted inline, as a table row right after the last
+    # reflected PDF line (Total assets) — no separate coverage section.
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(result.html_out, "html.parser")
+    callout = soup.find(class_="secv-callout-bad")
+    assert callout is not None
+    assert "MISSING FROM HTML" in callout.get_text()
+    assert "Trade receivables" in callout.get_text()
+    prev_row = callout.find_parent("tr").find_previous_sibling("tr")
+    assert "Total assets" in prev_row.get_text()
+    assert soup.find(id="secv-coverage") is None
 
 
 def test_wrong_figure_goes_red_with_remark():
@@ -116,6 +126,14 @@ def test_dropped_instance_of_repeated_content_is_flagged():
     assert "2× in the PDF" in escalated[0].remark
     counts = [i for i in result.issues if i.kind == "figure-count"]
     assert len(counts) == 1 and "3,201" in counts[0].excerpt
+    # rendered as an amber inline callout after the one reflected instance
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(result.html_out, "html.parser")
+    callout = soup.find(class_="secv-callout-warn")
+    assert callout is not None and "POSSIBLY DROPPED" in callout.get_text()
+    anchor_p = callout.find_previous_sibling("p")
+    assert "Right-of-use assets" in anchor_p.get_text()
 
 
 def test_summary_banner_injected():
