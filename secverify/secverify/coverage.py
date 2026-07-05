@@ -20,6 +20,9 @@ WORD_COVERAGE_RATIO = 0.85
 #: minimum canonical length before occurrence counts are compared — short
 #: strings ("total", "particulars") repeat too freely to count reliably
 COUNT_CHECK_MIN_LEN = 12
+#: a line repeated within this many lines of the top of the following page is
+#: a table header reprinted after a page break, not a second occurrence
+CONTINUATION_TOP_LINES = 3
 
 
 @dataclass
@@ -70,24 +73,53 @@ def _word_coverage(sentence: str, letters_corpus: str) -> float | None:
 
 
 def _count_shortfall(
-    needle: str, pdf_corpus: str, html_corpus: str
+    needle: str,
+    pdf_corpus: str,
+    html_corpus: str,
+    reprints: int = 0,
 ) -> tuple[int, int] | None:
     """(pdf_count, html_count) when *needle* occurs fewer times in the HTML.
 
     Catches an omission of content that also appears elsewhere in the
     document (e.g. a balance-sheet row whose label and figures repeat in a
     note) — presence checks alone cannot see one dropped instance of a
-    repeated string.
+    repeated string.  *reprints* is the number of PDF occurrences that are
+    page-continuation reprints (a table header reprinted after a page
+    break); the HTML has no page breaks, so those are not real repeats and
+    are deducted before comparing.
     """
     if len(needle) < COUNT_CHECK_MIN_LEN:
         return None
-    pdf_count = pdf_corpus.count(needle)
+    pdf_count = pdf_corpus.count(needle) - reprints
     if pdf_count < 2:
         return None  # presence checks already cover the single-instance case
     html_count = html_corpus.count(needle)
     if html_count < pdf_count:
         return (pdf_count, html_count)
     return None
+
+
+def _continuation_reprints(pages_raw: list[str]) -> "Counter":
+    """Count page-continuation header reprints per canonical line.
+
+    A print layout reprints a table's column-header row at the top of the
+    next page when the table spans a page break.  Such a line — appearing in
+    the first few lines of a page AND also present on the previous page —
+    is one logical occurrence, not two.
+    """
+    from collections import Counter
+
+    reprints: Counter = Counter()
+    prev_lines: set[str] = set()
+    for raw in pages_raw:
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        canon_lines = [canonical(ln) for ln in lines]
+        for pos, c in enumerate(canon_lines):
+            if pos < CONTINUATION_TOP_LINES and c and c in prev_lines:
+                reprints[c] += 1
+                reprints[canonical(lines[pos], letters_only=True)] += 1
+        prev_lines = {c for c in canon_lines if c}
+    return reprints
 
 
 def check_pdf_coverage(
@@ -98,11 +130,14 @@ def check_pdf_coverage(
 ) -> CoverageResult:
     result = CoverageResult()
     flagged_shortfalls: set[str] = set()  # report each distinct string once
+    reprints = _continuation_reprints(pages_raw)
 
     def shortfall_for(needle: str, pdf_corpus: str, html_corpus: str):
         if needle in flagged_shortfalls:
             return None
-        shortfall = _count_shortfall(needle, pdf_corpus, html_corpus)
+        shortfall = _count_shortfall(
+            needle, pdf_corpus, html_corpus, reprints.get(needle, 0)
+        )
         if shortfall:
             flagged_shortfalls.add(needle)
         return shortfall

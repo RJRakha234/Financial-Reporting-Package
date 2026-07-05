@@ -400,11 +400,15 @@ class Annotator:
         """Find the DOM block reflecting *a_letters*, or None."""
         if len(a_letters) < 10:
             return None
+        # A block matching only a small piece of the line (a generic cell
+        # like "Particulars" that exists in every statement) must not anchor
+        # a callout — it would be planted at a guessed, likely wrong place.
+        min_cover = max(10, len(a_letters) // 2)
         matches = [
             b
             for b in self._block_index
             if (b["letters"] and a_letters in b["letters"])
-            or (len(b["letters"]) >= 10 and b["letters"] in a_letters)
+            or (len(b["letters"]) >= min_cover and b["letters"] in a_letters)
         ]
         if not matches:
             return None

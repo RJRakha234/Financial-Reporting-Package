@@ -113,11 +113,21 @@ def test_own_markers_are_not_treated_as_figures():
 
 def test_dropped_instance_of_repeated_content_is_flagged():
     # The same row appears on two PDF pages (e.g. balance sheet + note) but
-    # only once in the HTML: presence checks pass, counts must not.
+    # only once in the HTML: presence checks pass, counts must not.  The
+    # second occurrence sits mid-page, so it is a real repeat, not a
+    # page-continuation header reprint.
     corpus = make_corpus(
-        ["Right-of-use assets 3,201", "Right-of-use assets 3,201"]
+        [
+            "Right-of-use assets 3,201",
+            "Note on leases\nAccounting policy text\nCarrying values were\n"
+            "Right-of-use assets 3,201",
+        ]
     )
-    html = "<html><body><p>Right-of-use assets 3,201</p></body></html>"
+    html = (
+        "<html><body><p>Right-of-use assets 3,201</p>"
+        "<p>Note on leases</p><p>Accounting policy text</p>"
+        "<p>Carrying values were</p></body></html>"
+    )
     result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
     escalated = [
         i for i in result.issues if i.kind == "omission" and i.severity == "review"
@@ -134,6 +144,30 @@ def test_dropped_instance_of_repeated_content_is_flagged():
     assert callout is not None and "POSSIBLY DROPPED" in callout.get_text()
     anchor_p = callout.find_previous_sibling("p")
     assert "Right-of-use assets" in anchor_p.get_text()
+
+
+def test_page_continuation_header_reprint_is_not_flagged():
+    # A table spanning a PDF page break reprints its column-header row at
+    # the top of the next page; the HTML has no page breaks so the header
+    # appears once. That must not be reported as a dropped instance.
+    corpus = make_corpus(
+        [
+            "Statement of Cash Flows\n"
+            "Particulars Note No. Three months ended June 30,\n"
+            "Revenue received 4,204",
+            "Particulars Note No. Three months ended June 30,\n"
+            "Net cash generated 2,318",
+        ]
+    )
+    html = (
+        "<html><body><p>Statement of Cash Flows</p>"
+        "<p>Particulars Note No. Three months ended June 30,</p>"
+        "<p>Revenue received 4,204</p><p>Net cash generated 2,318</p>"
+        "</body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    assert not [i for i in result.issues if i.kind == "omission"]
+    assert result.coverage.missing == 0
 
 
 def test_summary_banner_injected():
