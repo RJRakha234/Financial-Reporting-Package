@@ -483,6 +483,47 @@ def test_consol_embed_survives_formula_like_notes(tmp_path):
                 if x.data_type == "f"]          # values-only: no formulas left
 
 
+def test_embed_replaces_outside_references_with_values(tmp_path):
+    """A source-sheet formula that points at another tab (or workbook) would
+    arrive dangling in the check file and trigger Excel's 'repair' prompt, so
+    it is embedded as its calculated value; same-sheet formulas stay live."""
+    import openpyxl as _xl
+    p = tmp_path / "src.xlsx"
+    wb = _xl.Workbook(); ws = wb.active
+    ws["A1"] = 7
+    ws["B1"] = "=A1*2"                    # same-sheet formula -> kept
+    ws["C1"] = "='Raw Data'!B2"           # cross-sheet, no cached value -> drop
+    wb.create_sheet("Raw Data")["B2"] = 42
+    wb.save(p)
+    sd = inputs.read_sheet(str(p), "TBcopy")
+    assert sd.cells["A1"] == 7
+    assert sd.cells["B1"] == "=A1*2"      # stays a live formula
+    assert "C1" not in sd.cells           # dangling ref not embedded
+
+
+def test_fx_skipped_with_warning_when_rate_missing(tmp_path):
+    """When the MA Rates table has no rate for the report's currencies, the
+    FX check is skipped with a warning — not reported as a fake difference
+    for every line of the report."""
+    import openpyxl as _xl
+    p = tmp_path / "rates_wrong.xlsx"
+    wb = _xl.Workbook(); ws = wb.active
+    ws.append(["Exchange Rate Type", "From Currency", "To Currency",
+               "Date", "Exchange Rate"])
+    ws.append(["MA", "ZZZ", "INR", 31032026, 42.5])   # none of the report's
+    wb.save(p)
+    ev = evaluate(inputs.read_report(REPORT), TB, AGG, str(p))
+    assert not [d for d in ev.diffs if d.kind == "fx"]     # no fake FX rows
+    assert "CHF" in ev.missing_rates                       # warned instead
+    # ...and the warning is surfaced in the HTML summary
+    from plcheck.htmlreport import build_html
+    html_out = build_html(inputs.read_report(REPORT), ev, title="t",
+                          tb_codes=[], agg_codes=[],
+                          is_minority=lambda c: False)
+    assert "FX conversion was not evaluated" in html_out
+    assert "CHF" in html_out
+
+
 def test_consol_credit_leg_nets_negative(tmp_path):
     """A 'To ...' credit-leg P&L account (amount in the Credit column) nets
     negative, matching the report's signed LC - Consol."""

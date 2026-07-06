@@ -140,19 +140,38 @@ def read_sheet(path: str, title: str, keep_formulas: bool = True,
     """Copy an input sheet verbatim so it can be embedded in the check file."""
     wb = load_workbook(path, data_only=not keep_formulas)
     ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
+    wsv = None
+    if keep_formulas:
+        # a second, values-only view of the same sheet, used to substitute the
+        # calculated value for any formula that cannot travel into the check
+        # file (see below).
+        wsv = load_workbook(path, data_only=True)[ws.title]
     cells: dict[str, object] = {}
     text_coords: set = set()
     for row in ws.iter_rows():
         for c in row:
-            if c.value is not None:
-                cells[c.coordinate] = c.value
-                # a *text* cell whose content starts with "=" (e.g. a note
-                # typed as "=Correction of ...") must stay text when embedded;
-                # written as-is openpyxl would store it as a broken formula
-                # and Excel would flag the workbook for repair.
-                if (c.data_type == "s" and isinstance(c.value, str)
-                        and c.value.lstrip().startswith("=")):
-                    text_coords.add(c.coordinate)
+            if c.value is None:
+                continue
+            v = c.value
+            if c.data_type == "f":
+                f = v if isinstance(v, str) else getattr(v, "text", None) or ""
+                # A formula that reaches outside its own sheet ('Other tab'!A1
+                # or [Book1.xlsx]...) would arrive dangling in the check file
+                # (its target isn't embedded) and Excel would offer to "repair"
+                # the workbook. Embed its calculated value instead. Non-string
+                # formula objects (array formulas etc.) get the same treatment.
+                if "!" in f or "[" in f or not isinstance(v, str):
+                    v = wsv.cell(row=c.row, column=c.column).value if wsv else None
+                    if v is None:
+                        continue
+            # a *text* cell whose content starts with "=" (e.g. a note typed
+            # as "=Correction of ...") must stay text when embedded; written
+            # as-is openpyxl would store it as a broken formula and Excel
+            # would flag the workbook for repair.
+            elif (c.data_type == "s" and isinstance(v, str)
+                    and v.lstrip().startswith("=")):
+                text_coords.add(c.coordinate)
+            cells[c.coordinate] = v
     return SheetData(title=title, cells=cells,
                      max_row=ws.max_row, max_col=ws.max_column,
                      text_coords=text_coords)

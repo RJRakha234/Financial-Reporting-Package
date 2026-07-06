@@ -54,6 +54,10 @@ class Evaluation:
     unmapped_categories: list[str] = field(default_factory=list)
     missing_blocks: list[str] = field(default_factory=list)
     missing_entities: list[str] = field(default_factory=list)
+    # currencies with no usable rate in the MA Rates table: their FX check is
+    # skipped (and warned about) rather than reported as thousands of fake
+    # differences of the full stated amount.
+    missing_rates: list[str] = field(default_factory=list)
     report_errors: list[str] = field(default_factory=list)
     tolerance: float = 0.5
 
@@ -97,6 +101,7 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
 
     ev = Evaluation(tolerance=cfg.tolerance)
     unmapped: set[str] = set()
+    no_rate: set[str] = set()
 
     for i, row in enumerate(report.rows):
         rule = cfg.effective_rule(row.category)
@@ -136,9 +141,15 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
 
         # --- 2. FX conversion (every row) ----------------------------------
         for e in report.entities:
+            rate = rates.get(e.currency, 0.0)
+            if not rate:
+                # no usable rate -> the check cannot be evaluated here; skip
+                # (with a warning) instead of flagging every line. The Excel
+                # check file still verifies FX with its live formulas.
+                no_rate.add(e.currency or f"{e.code} (blank currency)")
+                continue
             lc = (row.values.get((C.CHECK_LC_BALANCE, e.code), 0.0)
                   + row.values.get(("LC - Consol", e.code), 0.0))
-            rate = rates.get(e.currency, 0.0)
             expected = lc * rate / gc_divisor
             stated = row.values.get((C.CHECK_GC_BALANCE, e.code), 0.0)
             ev.diffs.append(Diff("fx", i, row.category, row.account,
@@ -170,6 +181,7 @@ def evaluate(report: ReportTable, tb_path: str, agg_path: str, rates_path: str,
         ))
 
     ev.unmapped_categories = sorted(unmapped)
+    ev.missing_rates = sorted(no_rate)
 
     # Flag any expected reconciliation block that the report did not contain, so
     # a skipped check (e.g. GC - Total under a different heading) is visible.

@@ -34,6 +34,13 @@ def to_console(ev: Evaluation) -> str:
                      "the TB.")
         lines.append("")
 
+    if ev.missing_rates:
+        lines.append("⚠ FX conversion skipped - no exchange rate found for: "
+                     + ", ".join(ev.missing_rates))
+        lines.append("  Check the MA Rates file covers these currencies. The "
+                     "Excel check file still verifies FX with live formulas.")
+        lines.append("")
+
     if ev.missing_blocks:
         lines.append("⚠ Expected column blocks not found in the report (their "
                      "checks were skipped): " + ", ".join(ev.missing_blocks))
@@ -79,6 +86,7 @@ def to_dict(ev: Evaluation) -> dict:
         "unmapped_categories": ev.unmapped_categories,
         "missing_blocks": ev.missing_blocks,
         "missing_entities": ev.missing_entities,
+        "missing_rates": ev.missing_rates,
         "report_errors": ev.report_errors,
         "differences": [
             {

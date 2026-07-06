@@ -33,6 +33,7 @@ tr:nth-child(even) td{background:#f7f9fc}
 .bad{color:#9C0006;font-weight:600}
 .ok{color:#006100;font-weight:600;background:#e9f6ec;padding:8px 10px;border-radius:4px;display:inline-block}
 .pill{font-size:11px;color:#666}
+.warn{background:#fff3cd;border:1px solid #ffe08a;padding:8px 10px;border-radius:4px;font-size:13px}
 """
 
 
@@ -148,11 +149,19 @@ def build_html(report, ev, *, title, tb_codes, agg_codes, is_minority,
               else '<p class="ok">All company codes present in every source.</p>')
 
     total = len(a_rows) + len(c_rows) + len(d_rows)
+    warn = ""
+    miss = getattr(ev, "missing_rates", None)
+    if miss:
+        warn = ('<p class="warn">⚠ FX conversion was not evaluated for: '
+                + _esc(", ".join(miss))
+                + " — no exchange rate found in the MA Rates file. The Excel "
+                  "check workbook still verifies FX with live formulas.</p>")
     return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{_esc(title)} - check summary</title><style>{_CSS}</style></head><body>
 <h1>{_esc(title)} — Check Error Summary</h1>
 <p class="sub">Differences below {min_amount:g} are ignored.
 &nbsp;<span class="pill">{total} item(s) reported</span></p>
+{warn}
 <h2>A. PL Check Summary</h2>{a_html}
 <h2>B. LC-Consol Check</h2>{c_html}
 <h2>C. Entity Reconciler</h2>{d_html}
