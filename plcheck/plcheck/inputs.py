@@ -556,8 +556,10 @@ def propagate_func_column(ws, concat_col, func_col, dr_col, cr_col,
     def num(r, c):
         if not c:
             return 0.0
-        v = ws.cell(row=r, column=c).value
-        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+        # text-formatted amounts count too (VBA coerces them silently, so the
+        # two editions must group entries identically)
+        v = _as_number(ws.cell(row=r, column=c).value)
+        return v if v is not None else 0.0
 
     def close(rows):
         gfunc = ""
@@ -662,8 +664,8 @@ def parse_consol(path: str) -> ConsolGeometry:
                           first_row, last_row)
 
     def _num(r, c):
-        v = ws.cell(row=r, column=c).value
-        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+        v = _as_number(ws.cell(row=r, column=c).value)
+        return v if v is not None else 0.0
 
     def _cell(r, c):
         return str(ws.cell(row=r, column=c).value or "").strip() if c else ""

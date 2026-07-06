@@ -227,12 +227,22 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
         _embed(wb, inputs.read_sheet(consol_path, C.SHEET_CONSOL,
                                      keep_formulas=False,
                                      sheet_name=consol.sheet_name))
+        # text-formatted Debit/Credit amounts would sum to 0 under SUMIF(S);
+        # coerce them to real numbers on the embedded copy.
+        emb = wb[C.SHEET_CONSOL]
+        for vc in consol.val_cols:
+            for r in range(consol.first_row, consol.last_row + 1):
+                cell = emb.cell(row=r, column=vc)
+                if isinstance(cell.value, str):
+                    n = inputs._as_number(cell.value)
+                    if n is not None:
+                        cell.value = n
         # mirror the entry-level functional-code fill onto the embedded copy, so
         # the live SUMIFS (which matches the code on the P&L leg's row) works
         # even when the code was typed on the contra leg.
         if consol.func_col:
             inputs.propagate_func_column(
-                wb[C.SHEET_CONSOL], consol.concat_col, consol.func_col,
+                emb, consol.concat_col, consol.func_col,
                 consol.val_cols[0],
                 consol.val_cols[1] if len(consol.val_cols) > 1 else 0,
                 consol.first_row, consol.last_row)

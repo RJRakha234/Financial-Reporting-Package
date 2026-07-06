@@ -483,6 +483,41 @@ def test_consol_embed_survives_formula_like_notes(tmp_path):
                 if x.data_type == "f"]          # values-only: no formulas left
 
 
+def test_consol_text_amounts_group_and_sum_correctly(tmp_path):
+    """Dr/Cr stored as TEXT ('5,000'): entries must still close on Debit =
+    Credit balance (so a COS typed on the contra leg propagates to the P&L
+    leg, as in VBA), the parsed net must be right, and the embedded copy must
+    hold real numbers so the live SUMIFS doesn't sum text as 0."""
+    import openpyxl as _xl
+    from plcheck.workbook import build_check_workbook
+    p = tmp_path / "consol_text.xlsx"
+    wb = _xl.Workbook(); ws = wb.active; ws.title = "Entries- GR"
+    ws.append(["Company", "Comp code", "Concatenate", "Group Account Number",
+               "Functional Group", "GL Descriptions",
+               "Feb Dr", "Feb Cr", "Mar Dr", "Mar Cr", "Currency", "Type"])
+    # entry 1: code on the CONTRA leg only; amounts as text, back-to-back with
+    # entry 2 (no blank row) so only balance-grouping can separate them
+    ws.append(["BALSCH", "BALSCH", "BALSCH290100", 290100, "", "charge",
+               "", "", "5,000", "", "CHF", "BPC"])          # P&L leg, blank
+    ws.append(["BALSCH", "BALSCH", "BALSCH804300", 804300, "COS", "To x",
+               "", "", "", "5,000", "CHF", "BPC"])          # contra, has COS
+    ws.append(["BALSCH", "BALSCH", "BALSCH290900", 290900, "S&M", "charge2",
+               "", "", "300", "", "CHF", "BPC"])
+    ws.append(["BALSCH", "BALSCH", "BALSCH804300", 804300, "", "To y",
+               "", "", "", "300", "CHF", "BPC"])
+    wb.save(p)
+    g = inputs.parse_consol(str(p))
+    assert g.totals["BALSCH290100"] == 5000.0               # text summed
+    assert g.totals_fn.get(("BALSCH290100", "COS")) == 5000.0   # contra code
+    assert g.totals_fn.get(("BALSCH290900", "S&M")) == 300.0    # no bleed
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(inputs.read_report(REPORT), TB, AGG, RATES,
+                         consol_path=str(p)).save(out)
+    emb = openpyxl.load_workbook(out)["Consol Entries"]
+    assert emb["I2"].value == 5000.0                        # number, not text
+    assert emb["E2"].value == "COS"                         # propagated
+
+
 def test_embed_replaces_outside_references_with_values(tmp_path):
     """A source-sheet formula that points at another tab (or workbook) would
     arrive dangling in the check file and trigger Excel's 'repair' prompt, so
