@@ -356,6 +356,22 @@ def _norm_hdr(v) -> str:
     return " ".join(str(v).replace(".", " ").split()).lower()
 
 
+def _as_number(v):
+    """Float from a numeric cell OR a numeric-looking text cell ('67.81',
+    '1,234.5') — ERP exports often store rates as text, which Excel happily
+    multiplies but a strict isinstance check would reject."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v.strip().replace(",", ""))
+        except ValueError:
+            return None
+    return None
+
+
 def _is_rate_header(v) -> bool:
     """True for an *exchange-rate* header, excluding 'From Ratio' / 'Rate Type'."""
     n = _norm_hdr(v)
@@ -365,12 +381,12 @@ def _is_rate_header(v) -> bool:
 
 
 def _col_has_decimals(ws, r1: int, r2: int, c: int) -> bool:
-    """True if the column holds a non-integer number (a rate, not a date/ratio)."""
+    """True if the column holds a non-integer number (a rate, not a date/ratio);
+    text-formatted numbers ('67.81') count too."""
     for r in range(r1, r2 + 1):
-        v = ws.cell(row=r, column=c).value
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            if float(v) != int(float(v)):
-                return True
+        v = _as_number(ws.cell(row=r, column=c).value)
+        if v is not None and v != int(v):
+            return True
     return False
 
 
@@ -415,9 +431,9 @@ def parse_rates(path: str) -> RatesGeometry:
     last = hdr_row
     for r in range(hdr_row + 1, ws.max_row + 1):
         cur = ws.cell(row=r, column=from_col).value
-        rate = ws.cell(row=r, column=rate_col).value
-        if isinstance(cur, str) and isinstance(rate, (int, float)):
-            rates[cur.strip()] = float(rate)
+        rate = _as_number(ws.cell(row=r, column=rate_col).value)
+        if isinstance(cur, str) and rate is not None:
+            rates[cur.strip()] = rate
             last = r
     return RatesGeometry(from_col=from_col, rate_col=rate_col,
                          first_row=hdr_row + 1, last_row=last, rates=rates)

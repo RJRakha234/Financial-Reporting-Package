@@ -501,6 +501,25 @@ def test_embed_replaces_outside_references_with_values(tmp_path):
     assert "C1" not in sd.cells           # dangling ref not embedded
 
 
+def test_rates_stored_as_text_are_read(tmp_path):
+    """ERP exports often store the exchange rate as *text* ('67.81'); Excel
+    multiplies text-numbers happily, so the live workbook ties while a strict
+    Python read would see no rates at all and skip every FX check."""
+    import openpyxl as _xl
+    p = tmp_path / "rates_text.xlsx"
+    wb = _xl.Workbook(); ws = wb.active
+    ws.append(["Exchange Rate Type", "From Currency", "To Currency",
+               "Date", "Exchange Rate"])
+    for cur, rt in [("CHF", "67.81"), ("EUR", "107.82"), ("DKK", "14.45")]:
+        ws.append(["MA", cur, "INR", "31.03.2026", rt])   # rate as TEXT
+    wb.save(p)
+    g = inputs.parse_rates(str(p))
+    assert g.rates == {"CHF": 67.81, "EUR": 107.82, "DKK": 14.45}
+    ev = evaluate(inputs.read_report(REPORT), TB, AGG, str(p))
+    assert not ev.missing_rates                         # nothing skipped
+    assert [d for d in ev.diffs if d.kind == "fx"]      # FX evaluated
+
+
 def test_fx_skipped_with_warning_when_rate_missing(tmp_path):
     """When the MA Rates table has no rate for the report's currencies, the
     FX check is skipped with a warning — not reported as a fake difference
