@@ -141,12 +141,21 @@ def read_sheet(path: str, title: str, keep_formulas: bool = True,
     wb = load_workbook(path, data_only=not keep_formulas)
     ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
     cells: dict[str, object] = {}
+    text_coords: set = set()
     for row in ws.iter_rows():
         for c in row:
             if c.value is not None:
                 cells[c.coordinate] = c.value
+                # a *text* cell whose content starts with "=" (e.g. a note
+                # typed as "=Correction of ...") must stay text when embedded;
+                # written as-is openpyxl would store it as a broken formula
+                # and Excel would flag the workbook for repair.
+                if (c.data_type == "s" and isinstance(c.value, str)
+                        and c.value.lstrip().startswith("=")):
+                    text_coords.add(c.coordinate)
     return SheetData(title=title, cells=cells,
-                     max_row=ws.max_row, max_col=ws.max_column)
+                     max_row=ws.max_row, max_col=ws.max_column,
+                     text_coords=text_coords)
 
 
 # --- Geometry of the source sheets -----------------------------------------

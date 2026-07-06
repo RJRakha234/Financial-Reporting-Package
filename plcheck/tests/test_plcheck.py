@@ -457,6 +457,33 @@ def test_consol_completeness_flags_orphan_entry(tmp_path):
     assert "299999" in cells                    # orphan listed
     assert "804340" not in cells                # BS contra leg ignored
     assert any("Unreconciled consol entries" in v for v in cells)
+
+
+def test_consol_embed_survives_formula_like_notes(tmp_path):
+    """A tracker note typed with a leading '=' must be embedded as *text*, and
+    the tracker is embedded values-only — otherwise Excel sees a malformed /
+    dangling formula in 'Consol Entries' and offers to 'repair' the workbook."""
+    from plcheck.workbook import build_check_workbook
+    p = tmp_path / "consol.xlsx"
+    _make_consol_tracker(p, [("BALSCH", 290100, 222.0, "")])
+    wb = openpyxl.load_workbook(p); ws = wb.active
+    note = ws.cell(row=8, column=6)
+    note.value = "=Correction of consol entries sheet"
+    note.data_type = "s"                        # text, as Excel stores it
+    ws["M2"] = "='Some Other Tab'!A1"           # live cross-sheet formula
+    wb.save(p)
+    out = tmp_path / "Check.xlsx"
+    build_check_workbook(inputs.read_report(REPORT), TB, AGG, RATES,
+                         consol_path=str(p)).save(out)
+    emb = openpyxl.load_workbook(out)["Consol Entries"]
+    c = emb.cell(row=8, column=6)
+    assert c.value == "=Correction of consol entries sheet"
+    assert c.data_type == "s"                   # stayed text, not a formula
+    assert not [x for row in emb.iter_rows() for x in row
+                if x.data_type == "f"]          # values-only: no formulas left
+
+
+def test_consol_credit_leg_nets_negative(tmp_path):
     """A 'To ...' credit-leg P&L account (amount in the Credit column) nets
     negative, matching the report's signed LC - Consol."""
     p = tmp_path / "consol.xlsx"

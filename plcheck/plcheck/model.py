@@ -70,3 +70,7 @@ class SheetData:
     cells: dict[str, object]   # "A1" -> value
     max_row: int
     max_col: int
+    # coordinates whose value is *text* that merely looks like a formula
+    # (a note typed with a leading "="); they must be written back as text,
+    # or Excel treats them as malformed formulas and offers to "repair".
+    text_coords: set = field(default_factory=set)

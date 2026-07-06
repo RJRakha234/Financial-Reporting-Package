@@ -39,6 +39,8 @@ def _embed(wb: Workbook, sheet: SheetData) -> None:
     ws = wb.create_sheet(sheet.title)
     for coord, value in sheet.cells.items():
         ws[coord] = value
+        if coord in sheet.text_coords:
+            ws[coord].data_type = "s"      # keep "=..."-looking notes as text
 
 
 def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
@@ -219,7 +221,11 @@ def build_check_workbook(report: ReportTable, tb_path: str, agg_path: str,
         _embed(wb, inputs.read_sheet(agg_path, C.SHEET_AGG))
     _embed(wb, inputs.read_sheet(rates_path, C.SHEET_RATES))
     if consol_path:
+        # values-only: a manual tracker often carries formulas that point at
+        # its *other* tabs, which would arrive broken (and make Excel offer to
+        # "repair" the file); the tie-out SUMIFs only need the values anyway.
         _embed(wb, inputs.read_sheet(consol_path, C.SHEET_CONSOL,
+                                     keep_formulas=False,
                                      sheet_name=consol.sheet_name))
         # mirror the entry-level functional-code fill onto the embedded copy, so
         # the live SUMIFS (which matches the code on the P&L leg's row) works
