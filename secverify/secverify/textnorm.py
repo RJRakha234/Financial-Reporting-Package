@@ -94,6 +94,43 @@ def find_best_match(
     return best
 
 
+def word_subsequence_span(
+    haystack: str, words: list[str], start: int = 0
+) -> tuple[int, int] | None:
+    """Earliest span of *haystack* containing *words* in order (gaps allowed).
+
+    Used to recognise a table label whose words the PDF layout interleaves
+    with other columns' text: the label's own words still appear in their
+    original order, just with junk in between.
+    """
+    pos = start
+    first = None
+    for word in words:
+        i = haystack.find(word, pos)
+        if i == -1:
+            return None
+        if first is None:
+            first = i
+        pos = i + len(word)
+    return (first, pos) if first is not None else None
+
+
+def smallest_subsequence_window(haystack: str, words: list[str]) -> int | None:
+    """Length of the tightest in-order window for *words*, or None."""
+    if not words:
+        return None
+    best: int | None = None
+    start = 0
+    while True:
+        span = word_subsequence_span(haystack, words, start)
+        if span is None:
+            return best
+        length = span[1] - span[0]
+        if best is None or length < best:
+            best = length
+        start = span[0] + 1
+
+
 def split_sentences(text: str) -> list[str]:
     """Split prose into sentence-ish chunks for granular matching."""
     import re

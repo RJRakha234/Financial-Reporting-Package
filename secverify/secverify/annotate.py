@@ -23,7 +23,13 @@ from bs4 import BeautifulSoup, Comment, NavigableString
 from .coverage import CoverageLine, CoverageResult, HtmlCorpus, check_pdf_coverage
 from .numbers import is_significant, iter_tokens
 from .pdfside import PdfCorpus
-from .textnorm import canonical, find_best_match, split_sentences
+from .textnorm import (
+    canonical,
+    find_best_match,
+    smallest_subsequence_window,
+    split_sentences,
+    word_subsequence_span,
+)
 
 BLOCK_TAGS = ("p", "td", "th", "li", "caption", "h1", "h2", "h3", "h4", "h5", "h6", "div")
 SKIP_PARENTS = {"script", "style", "title", "head"}
@@ -243,6 +249,26 @@ class Annotator:
         start, end, ratio = match
         page = self.corpus.page_label(view.page_of(start))
         snippet = self.corpus.raw_snippet(view, start, end)
+        # The PDF layout often interleaves other table columns' words between
+        # the words of one label.  If every word of the sentence appears IN
+        # ORDER within a bounded window around the match, the wording itself
+        # is present — a layout artifact, not a discrepancy.
+        words = [
+            canonical(w, letters_only=True)
+            for w in re.findall(r"[^\W\d_]+", sentence)
+        ]
+        words = [w for w in words if len(w) >= 2]
+        if len(words) >= 3:
+            w_start = max(0, start - 60)
+            window = view.canon[w_start : start + 3 * len(needle) + 80]
+            span = word_subsequence_span(window, words)
+            if span is not None and span[1] - span[0] <= 3 * len(needle) + 60:
+                return "review", (
+                    f"“{_shorten(sentence)}” is present on PDF {page}, but the "
+                    "PDF layout interleaves other table columns' text between "
+                    f"its words (the PDF reads: “{snippet}”). The wording "
+                    "itself matches in order — a quick glance suffices."
+                ), "layout"
         if ratio >= FUZZY_REVIEW_RATIO:
             return "review", (
                 f"Close but not identical to the PDF (similarity {ratio:.0%}). "
@@ -280,17 +306,32 @@ class Annotator:
         # Need enough signal: several words, or a name-like word plus initials.
         if len(words) < 2 or sum(len(w) for w in words) < 8:
             return None
-        best: tuple[int, float] | None = None
+    # noqa: kept simple — pages are few and short
+        candidates: list[tuple[int, float]] = []
         for page_idx, page_canon in enumerate(self.corpus.page_letters):
             if not page_canon:
                 continue
             hit = sum(1 for w in words if w in page_canon)
             pct = hit / len(words)
-            if best is None or pct > best[1]:
-                best = (page_idx + 1, pct)
-        if best and best[1] >= 0.85:
-            return (self.corpus.page_label(best[0]), best[1])
-        return None
+            if pct >= 0.85:
+                candidates.append((page_idx + 1, pct))
+        if not candidates:
+            return None
+        best_pct = max(pct for _p, pct in candidates)
+        if best_pct < 0.999:
+            # An unmatched word may be a genuine wording change: not layout.
+            return None
+        candidates = [c for c in candidates if c[1] == best_pct]
+        # Among full-coverage pages, the one where the words cluster into the
+        # tightest in-order window is where the content actually lives.
+        def window_size(page_no: int) -> int:
+            size = smallest_subsequence_window(
+                self.corpus.page_letters[page_no - 1], words
+            )
+            return size if size is not None else 10**9
+
+        page_no = min(candidates, key=lambda c: window_size(c[0]))[0]
+        return (self.corpus.page_label(page_no), best_pct)
 
     def _annotate_blocks(self, soup: BeautifulSoup, root) -> None:
         for block in root.find_all(BLOCK_TAGS):

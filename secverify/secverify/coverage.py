@@ -72,12 +72,28 @@ class HtmlCorpus:
     def __init__(self, visible_text: str):
         from collections import Counter
 
+        from .textnorm import canonicalize
+
+        self.visible_text = visible_text
         self.alnum = canonical(visible_text)
-        self.letters = canonical(visible_text, letters_only=True)
+        self.letters, self._letters_map = canonicalize(
+            visible_text, letters_only=True
+        )
         self.number_counts: Counter = Counter(
             key for _s, _e, _t, key in iter_tokens(visible_text)
         )
         self.number_keys = set(self.number_counts)
+
+    def letters_snippet(self, start: int, end: int, max_len: int = 200) -> str:
+        """Original HTML wording for a letters-canonical range."""
+        if not self._letters_map:
+            return ""
+        end = min(end, len(self._letters_map)) - 1
+        if end < start:
+            end = start
+        raw = self.visible_text[self._letters_map[start] : self._letters_map[end] + 1]
+        raw = " ".join(raw.split())
+        return raw if len(raw) <= max_len else raw[: max_len - 1] + "…"
 
 
 def _word_coverage(sentence: str, letters_corpus: str) -> float | None:
@@ -112,9 +128,53 @@ def _count_shortfall(
     if pdf_count < 2:
         return None  # presence checks already cover the single-instance case
     html_count = html_corpus.count(needle)
-    if html_count < pdf_count:
-        return (pdf_count, html_count)
-    return None
+    if html_count >= pdf_count:
+        return None
+    # A phrase occurring dozens of times (boilerplate embedded in longer
+    # sentences) cannot be counted reliably — extraction quirks shift a
+    # count by one or two.  Flag only few-occurrence content, or a
+    # substantial relative shortfall.
+    if pdf_count > 8 and (pdf_count - html_count) / pdf_count < 0.25:
+        return None
+    return (pdf_count, html_count)
+
+
+def _shortfall_remark(
+    shortfall: tuple[int, int],
+    needle: str,
+    page_canons: list[str],
+    label_of,
+    html: HtmlCorpus,
+    letters_needle: str,
+) -> str:
+    """Explain a count shortfall in plain language, with locations and —
+    when the HTML contains a near-variant — what the HTML says instead."""
+    pdf_count, html_count = shortfall
+    locs = [
+        label_of(i + 1) for i, pc in enumerate(page_canons) if needle in pc
+    ]
+    diff = pdf_count - html_count
+    remark = (
+        f"The PDF contains this line {pdf_count}× (at "
+        f"{', '.join(locs[:8]) or 'several places'}), but the HTML matches it "
+        f"only {html_count}× — so {diff} occurrence"
+        f"{'s are' if diff != 1 else ' is'} missing or worded differently in "
+        "the HTML. Compare the HTML against each listed PDF location."
+    )
+    if letters_needle and len(letters_needle) >= COUNT_CHECK_MIN_LEN:
+        masked = html.letters.replace(
+            letters_needle, "\x00" * len(letters_needle)
+        )
+        variant = find_best_match(masked, letters_needle, min_ratio=0.70)
+        if variant is not None:
+            s, e, ratio = variant
+            snippet = html.letters_snippet(s, e)
+            if snippet:
+                remark += (
+                    f" Likely cause: in at least one place the HTML instead "
+                    f"says “{snippet}” (similarity {ratio:.0%})."
+                )
+    return remark
 
 
 def _continuation_reprints(pages_raw: list[str]) -> "Counter":
@@ -154,6 +214,8 @@ def check_pdf_coverage(
     result = CoverageResult()
     flagged_shortfalls: set[str] = set()  # report each distinct string once
     reprints = _continuation_reprints(pages_raw)
+    page_alnums = [canonical(raw) for raw in pages_raw]
+    page_letts = [canonical(raw, letters_only=True) for raw in pages_raw]
 
     def shortfall_for(needle: str, pdf_corpus: str, html_corpus: str):
         if needle in flagged_shortfalls:
@@ -208,10 +270,10 @@ def check_pdf_coverage(
                             page_no,
                             line,
                             "review",
-                            f"This content appears {shortfall[0]}× in the PDF "
-                            f"but only {shortfall[1]}× in the HTML — one "
-                            "instance may have been dropped. Check every place "
-                            "it should appear.",
+                            _shortfall_remark(
+                                shortfall, c_alnum, page_alnums, label_of,
+                                html, canonical(line, letters_only=True),
+                            ),
                             escalate=True,
                             label=page_label,
                         )
@@ -241,10 +303,10 @@ def check_pdf_coverage(
                             page_no,
                             line,
                             "review",
-                            f"This wording appears {shortfall[0]}× in the PDF "
-                            f"but only {shortfall[1]}× in the HTML — one "
-                            "instance may have been dropped. Check every place "
-                            "it should appear.",
+                            _shortfall_remark(
+                                shortfall, letters, page_letts, label_of,
+                                html, letters,
+                            ),
                             escalate=True,
                             label=page_label,
                         )

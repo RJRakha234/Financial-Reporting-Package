@@ -134,7 +134,8 @@ def test_dropped_instance_of_repeated_content_is_flagged():
         i for i in result.issues if i.kind == "omission" and i.severity == "review"
     ]
     assert len(escalated) == 1  # deduplicated: one report per distinct string
-    assert "2× in the PDF" in escalated[0].remark
+    assert "2×" in escalated[0].remark and "only 1×" in escalated[0].remark
+    assert "p.1" in escalated[0].remark  # cites where in the PDF it lives
     counts = [i for i in result.issues if i.kind == "figure-count"]
     assert len(counts) == 1 and "3,201" in counts[0].excerpt
     # rendered as an amber inline callout after the one reflected instance
@@ -224,6 +225,75 @@ def test_issue_tiers_separate_discrepancies_from_noise():
     assert any("Column Three" in i.excerpt for i in by_tier.get("layout", []))
     assert any("unrelated" in i.excerpt for i in by_tier.get("absent", []))
     assert "Discrepancies — act on these" in result.html_out
+
+
+def test_interleaved_table_label_is_layout_not_discrepancy():
+    # PDF extraction interleaves another column's words into the label; the
+    # label's own words appear IN ORDER, so it must classify as layout.
+    corpus = make_corpus(
+        [
+            "Certificates of deposit carried at fair value through other "
+            "Market observable inputs 1,196 3,257 comprehensive income"
+        ]
+    )
+    html = (
+        "<html><body><p>Certificates of deposit carried at fair value "
+        "through other comprehensive income</p>"
+        "<p>Market observable inputs</p><p>1,196</p><p>3,257</p>"
+        "</body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    label_issues = [i for i in result.issues if "Certificates" in i.excerpt]
+    assert len(label_issues) == 1
+    assert label_issues[0].tier == "layout"
+    assert "interleaves" in label_issues[0].remark
+    # A real wording change must NOT be excused by the interleaving rule.
+    html_bad = html.replace("through other comprehensive", "through the consolidated")
+    result_bad = Annotator(make_corpus([
+        "Certificates of deposit carried at fair value through other "
+        "Market observable inputs 1,196 3,257 comprehensive income"
+    ])).run(html_bad, "ref.pdf", "doc.html")
+    bad = [i for i in result_bad.issues if "Certificates" in i.excerpt]
+    assert bad and bad[0].tier == "act"
+
+
+def test_high_frequency_phrase_shortfall_is_ignored():
+    # A boilerplate phrase occurring dozens of times cannot be counted
+    # reliably; a 1-off must not flag.
+    from secverify.coverage import _count_shortfall
+
+    assert _count_shortfall("condensedstandalone", "x" * 0 + "condensedstandalone" * 39,
+                            "condensedstandalone" * 37) is None
+    assert _count_shortfall("condensedstandalone", "condensedstandalone" * 4,
+                            "condensedstandalone" * 2) == (4, 2)
+
+
+def test_shortfall_remark_names_locations_and_html_variant():
+    corpus = make_corpus(
+        [
+            "The notes form an integral part of the standalone statements",
+            "Other content here entirely different\n"
+            "More filler content on this page\n"
+            "Yet another filler line to avoid the continuation-reprint rule\n"
+            "The notes form an integral part of the standalone statements",
+        ]
+    )
+    html = (
+        "<html><body><p>The notes form an integral part of the standalone statements</p>"
+        "<p>Other content here entirely different</p>"
+        "<p>More filler content on this page</p>"
+        "<p>The notes form an integral part of the consolidated statements</p>"
+        "</body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    shortfalls = [
+        i for i in result.issues
+        if i.kind == "omission" and "worded differently" in i.remark
+    ]
+    assert shortfalls, [i.remark for i in result.issues]
+    remark = shortfalls[0].remark
+    assert "p.1" in remark and "p.2" in remark          # PDF locations
+    assert "consolidated" in remark                     # the HTML variant
 
 
 def test_summary_banner_injected():
