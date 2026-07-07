@@ -1655,17 +1655,46 @@ End Sub
 
 Private Sub ImportFirstSheet(wb As Workbook, ByVal path As String, ByVal newName As String)
     Dim src As Workbook
-    Set src = Workbooks.Open(Filename:=path, ReadOnly:=True, UpdateLinks:=0)
+    Dim openedHere As Boolean
+    Set src = OpenSource(path, openedHere)
     src.Worksheets(1).Copy After:=wb.Worksheets(wb.Worksheets.Count)
     wb.Worksheets(wb.Worksheets.Count).Name = newName
-    src.Close SaveChanges:=False
+    If openedHere Then src.Close SaveChanges:=False
 End Sub
+
+' Open a source workbook read-only. If a workbook with that file name is
+' already open in this Excel, reuse it (openedHere = False, so it is not
+' closed afterwards) - Excel cannot open a second copy of an open file, which
+' otherwise fails with "Method 'Open' of object 'Workbooks' failed". If the
+' open still fails (Protected View, another program locking the file, ...)
+' raise a message that names the file and says what to do.
+Private Function OpenSource(ByVal path As String, ByRef openedHere As Boolean) As Workbook
+    Dim nm As String: nm = Mid$(path, InStrRev(path, "\") + 1)
+    Dim w As Workbook
+    For Each w In Application.Workbooks
+        If StrComp(w.Name, nm, vbTextCompare) = 0 Then
+            Set OpenSource = w
+            openedHere = False
+            Exit Function
+        End If
+    Next w
+    On Error GoTo OpenFail
+    Set OpenSource = Workbooks.Open(Filename:=path, ReadOnly:=True, UpdateLinks:=0)
+    openedHere = True
+    Exit Function
+OpenFail:
+    Err.Raise vbObjectError + 513, , _
+        "Could not open '" & path & "'." & vbCrLf & vbCrLf & _
+        "If it is open in Excel or another program, close it and re-run. " & _
+        "If Excel shows it in Protected View (a downloaded file), open it " & _
+        "once, click 'Enable Editing', save it, then run the macro again."
+End Function
 
 ' Import the tracker's data sheet (the one with a 'Concatenate' header), since
 ' it may not be the first tab in the source workbook.
 Private Sub ImportConsolSheet(wb As Workbook, ByVal path As String, ByVal newName As String)
-    Dim src As Workbook
-    Set src = Workbooks.Open(Filename:=path, ReadOnly:=True, UpdateLinks:=0)
+    Dim src As Workbook, openedHere As Boolean
+    Set src = OpenSource(path, openedHere)
     Dim sh As Worksheet, pick As Worksheet: Set pick = Nothing
     Dim r As Long, c As Long, rMax As Long, cMax As Long, found As Boolean
     For Each sh In src.Worksheets
@@ -1685,7 +1714,7 @@ Private Sub ImportConsolSheet(wb As Workbook, ByVal path As String, ByVal newNam
     If pick Is Nothing Then Set pick = src.Worksheets(1)
     pick.Copy After:=wb.Worksheets(wb.Worksheets.Count)
     wb.Worksheets(wb.Worksheets.Count).Name = newName
-    src.Close SaveChanges:=False
+    If openedHere Then src.Close SaveChanges:=False
 End Sub
 
 
