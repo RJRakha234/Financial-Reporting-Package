@@ -24,7 +24,13 @@ It builds the same two outputs as the Python tool:
 * a **Selected GL TB Check** sheet — for the configured GL accounts
   (`TB_OVERRIDE`, default `333200, 333230`) the report's LC‑Balance figure is
   verified against the **Real Time TB** (instead of the Aggregate Expenses
-  report their section would normally use); independent of the other checks.
+  report their section would normally use); independent of the other checks;
+* a **bonus HTML error summary** (`<report>_Check_Summary.html`, written next
+  to the report file) — the same three sections as the Python edition's
+  `--html`: **A. PL Check Summary**, **B. LC‑Consol Check**, **C. Entity
+  Reconciler**, listing only differences of **1 or more** (`HTML_MIN`); open it
+  in any browser. Control!**B7** controls it: leave blank for the default,
+  `N` to skip, or a full `.html` path to redirect it.
 
 It handles **IFRS INR**, **Ind‑AS Function‑wise** and **Ind‑AS Nature‑wise**
 reports from the one module (Nature‑wise = no Aggregate Exp; just leave the Agg
@@ -48,6 +54,7 @@ the TB.
    | 4 | Rates | `C:\…\MA_Rates.xlsx` |
    | 5 | GC currency | *(optional — auto‑detected; only set to force `INR`/`USD`)* |
    | 6 | Consol entries | `C:\…\Consolidation entries.xlsx`  *(optional — tie LC‑Consol to the tracker)* |
+   | 7 | HTML summary | *(optional — blank = auto next to the report; `N` = skip; or a full `.html` path)* |
 
    **Function‑wise** reports (IFRS INR, Ind‑AS Function‑wise) need the Aggregate
    Expenses path in **B3**. For an **Ind‑AS Nature‑wise** report there is no

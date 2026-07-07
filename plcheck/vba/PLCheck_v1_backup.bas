@@ -628,29 +628,127 @@ Private Sub BuildLcConsolCheck(wb As Workbook)
     Next r
     Dim lastK As Long: lastK = k - 1
 
-    If lastK < 3 Then
+    If lastK >= 3 Then
+        With ws.Range("F3:F" & lastK)
+            .FormatConditions.Delete
+            .FormatConditions.Add Type:=xlExpression, Formula1:="=ABS(F3)>" & TOL
+            .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+            .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+        End With
+        ws.Range("B1").Formula = "=SUMPRODUCT(--(ABS(F3:F" & lastK & ")>" & TOL & "))"
+        ws.Range("A1").Formula = "=IF(B1=0,""LC - Consol: ALL entries tie""," & _
+            """LC - Consol: ""&B1&"" difference(s) NOT tied - see red"")"
+        ws.Range("A1").Font.Bold = True
+        With ws.Range("A1:B1")
+            .FormatConditions.Delete
+            .FormatConditions.Add Type:=xlExpression, Formula1:="=$B$1>0"
+            .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
+            .FormatConditions(1).Font.Color = RGB(156, 0, 6)
+        End With
+    Else
         ws.Cells(1, 1).Value = "LC - Consol: no consolidation entries with a balance"
         ws.Cells(1, 1).Font.Bold = True
+    End If
+
+    ' completeness: tracker P&L entries not reflected in the report
+    Dim lastMain As Long: If lastK >= 3 Then lastMain = lastK Else lastMain = 2
+    BuildConsolCompleteness ws, ck, cs, ents, lastData, lastMain
+
+    ws.Columns("B").ColumnWidth = 22: ws.Columns("D").ColumnWidth = 30
+End Sub
+
+' Lists P&L consol entries (current month) whose GL isn't a line in the report -
+' i.e. entries the report-vs-tracker check above never picked up (left
+' unreconciled). Contra/BS legs (non 1/2/3 series) are excluded.
+Private Sub BuildConsolCompleteness(ws As Worksheet, ck As Worksheet, cs As Worksheet, _
+                                    ents As Collection, ByVal lastData As Long, _
+                                    ByVal lastMainRow As Long)
+    Dim hdrRow As Long: hdrRow = gCcFirst - 1
+    Dim acctCol As Long, compCol As Long, descCol As Long
+    Dim cN As Long: cN = cs.UsedRange.Column + cs.UsedRange.Columns.Count - 1
+    Dim c As Long, hh As String
+    For c = 1 To cN
+        hh = NormHdr(CStr(cs.Cells(hdrRow, c).Value))
+        If acctCol = 0 And (hh = "group account number" Or hh = "group account no" _
+           Or hh = "account" Or hh = "glaccount" Or hh = "gl account") Then acctCol = c
+        If compCol = 0 And (hh = "comp code" Or hh = "company code" Or hh = "compcode") Then compCol = c
+        If descCol = 0 And (hh = "gl descriptions" Or hh = "gl description" _
+           Or hh = "description") Then descCol = c
+    Next c
+
+    Dim base As Long: base = lastMainRow + 2
+    ws.Cells(base, 1).Value = "Unreconciled consol entries (current month, P&L, not found in report)"
+    ws.Cells(base, 1).Font.Bold = True
+    Dim hr As Long: hr = base + 1
+    ws.Cells(hr, 1).Value = "Company": ws.Cells(hr, 2).Value = "GLACCOUNT"
+    ws.Cells(hr, 3).Value = "GL Description": ws.Cells(hr, 4).Value = "Net (Dr-Cr)"
+    ws.Cells(hr, 5).Value = "Status"
+    ws.Range(ws.Cells(hr, 1), ws.Cells(hr, 5)).Font.Bold = True
+    If acctCol = 0 Then
+        ws.Cells(hr + 1, 1).Value = "(no Group Account Number column in tracker - check skipped)"
         Exit Sub
     End If
 
-    With ws.Range("F3:F" & lastK)
-        .FormatConditions.Delete
-        .FormatConditions.Add Type:=xlExpression, Formula1:="=ABS(F3)>" & TOL
-        .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
-        .FormatConditions(1).Font.Color = RGB(156, 0, 6)
-    End With
-    ws.Range("B1").Formula = "=SUMPRODUCT(--(ABS(F3:F" & lastK & ")>" & TOL & "))"
-    ws.Range("A1").Formula = "=IF(B1=0,""LC - Consol: ALL entries tie""," & _
-        """LC - Consol: ""&B1&"" difference(s) NOT tied - see red"")"
-    ws.Range("A1").Font.Bold = True
-    With ws.Range("A1:B1")
-        .FormatConditions.Delete
-        .FormatConditions.Add Type:=xlExpression, Formula1:="=$B$1>0"
-        .FormatConditions(1).Interior.Color = RGB(255, 199, 206)
-        .FormatConditions(1).Font.Color = RGB(156, 0, 6)
-    End With
-    ws.Columns("B").ColumnWidth = 22: ws.Columns("D").ColumnWidth = 30
+    Dim repAcct As Object: Set repAcct = CreateObject("Scripting.Dictionary")
+    Dim r As Long, a As String
+    For r = CK_DATA0 To lastData
+        a = Trim$(CStr(ck.Cells(r, 3).Value))
+        If Len(a) > 0 And IsPlAcct(a) Then repAcct(UCase$(a)) = 1
+    Next r
+    Dim entCodes As Object: Set entCodes = CreateObject("Scripting.Dictionary")
+    Dim j As Long
+    For j = 1 To ents.Count
+        entCodes(UCase$(CStr(ents(j)))) = 1
+    Next j
+
+    Dim netByKey As Object: Set netByKey = CreateObject("Scripting.Dictionary")
+    Dim infoByKey As Object: Set infoByKey = CreateObject("Scripting.Dictionary")
+    For r = gCcFirst To gCcLast
+        Dim kc As String: kc = Trim$(CStr(cs.Cells(r, gCcConcat).Value))
+        If Len(kc) > 0 Then
+            Dim net As Double: net = Val0(cs.Cells(r, gCcVal1).Value)
+            If gCcVal2 > 0 Then net = net - Val0(cs.Cells(r, gCcVal2).Value)
+            If netByKey.Exists(kc) Then netByKey(kc) = netByKey(kc) + net Else netByKey(kc) = net
+            If Not infoByKey.Exists(kc) Then
+                Dim cmp As String, act As String, dsc As String
+                cmp = "": If compCol > 0 Then cmp = Trim$(CStr(cs.Cells(r, compCol).Value))
+                act = Trim$(CStr(cs.Cells(r, acctCol).Value))
+                dsc = "": If descCol > 0 Then dsc = Trim$(CStr(cs.Cells(r, descCol).Value))
+                infoByKey(kc) = cmp & vbTab & act & vbTab & dsc
+            End If
+        End If
+    Next r
+
+    Dim k As Long: k = hr + 1
+    Dim found As Long: found = 0
+    Dim ky As Variant
+    For Each ky In netByKey.Keys
+        Dim parts() As String: parts = Split(CStr(infoByKey(ky)), vbTab)
+        Dim acc2 As String: acc2 = parts(1)
+        If IsPlAcct(acc2) And Abs(netByKey(ky)) > TOL Then
+            Dim cmp2 As String: cmp2 = parts(0)
+            Dim covered As Boolean
+            covered = repAcct.Exists(UCase$(acc2)) And (Len(cmp2) = 0 Or entCodes.Exists(UCase$(cmp2)))
+            If Not covered Then
+                ws.Cells(k, 1).Value = cmp2: ws.Cells(k, 2).Value = acc2
+                ws.Cells(k, 3).Value = parts(2): ws.Cells(k, 4).Value = netByKey(ky)
+                ws.Cells(k, 5).Value = "NOT reconciled"
+                Dim cc As Long
+                For cc = 1 To 5
+                    ws.Cells(k, cc).Interior.Color = RGB(255, 199, 206)
+                    ws.Cells(k, cc).Font.Color = RGB(156, 0, 6)
+                Next cc
+                k = k + 1: found = found + 1
+            End If
+        End If
+    Next ky
+    If found = 0 Then
+        ws.Cells(k, 1).Value = "All consol entries reconciled."
+        ws.Cells(k, 1).Font.Color = RGB(0, 97, 0): ws.Cells(k, 1).Font.Bold = True
+    Else
+        ws.Cells(base, 5).Value = found & " NOT reconciled"
+        ws.Cells(base, 5).Font.Color = RGB(156, 0, 6): ws.Cells(base, 5).Font.Bold = True
+    End If
 End Sub
 
 ' Fill the Functional Group code across both legs of each entry, in place. An

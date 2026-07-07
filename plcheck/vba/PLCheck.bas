@@ -19,6 +19,8 @@ Attribute VB_Name = "PLCheck"
 '         B4: <full path to MA Rates .xlsx>
 '         B5: <group currency INR/USD>                  (optional; auto-detected)
 '         B6: <full path to Consolidation entries .xlsx>(optional; LC-Consol tie-out)
+'         B7: <HTML summary>   (optional: blank = auto "<report>_Check_Summary
+'             .html" next to the report; "N" = skip; or a full .html path)
 '    4. Run it: Developer > Macros > GenerateCheckFile > Run
 '       (or add a button on a sheet and assign GenerateCheckFile to it).
 '
@@ -48,6 +50,9 @@ Private Const PL_DIGITS As String = "123"     ' P&L account leading digits
 ' GL accounts verified against the Real Time TB on the "Selected GL TB Check"
 ' tab (comma-separated; extend as needed).
 Private Const TB_OVERRIDE As String = "333200,333230"
+' HTML error summary: differences below this are left out of the .html file
+' (the sheets themselves still highlight everything above TOL).
+Private Const HTML_MIN As Double = 1#
 
 ' ---- check-sheet row map ---------------------------------------------------
 Private Const CK_TB As Long = 2
@@ -117,6 +122,9 @@ Public Sub GenerateCheckFile()
         MsgBox "Consolidation entry tracker not found (Control!B6). Leave B6 " & _
                "blank to skip the LC-Consol check.", vbExclamation: Exit Sub
     End If
+    ' HTML error summary (B7): blank = write "<report>_Check_Summary.html"
+    ' next to the report; "N" = skip; any other text = full output path.
+    Dim pHtml As String: pHtml = Trim$(CStr(ctl.Range("B7").Value))
 
     ' Remember Excel's current state so we can restore it exactly afterwards.
     Dim savedCalc As XlCalculation, savedEvents As Boolean
@@ -160,6 +168,17 @@ Public Sub GenerateCheckFile()
 
     Application.Calculate            ' recalculate the whole workbook once, now
 
+    ' bonus HTML error summary (A/B/C sections, mirrors the Python --html);
+    ' reads the freshly calculated Diff values, so it costs no extra recalc.
+    Dim htmlNote As String: htmlNote = ""
+    If StrComp(pHtml, "N", vbTextCompare) <> 0 _
+       And StrComp(pHtml, "NO", vbTextCompare) <> 0 Then
+        Dim htmlOut As String
+        If Len(pHtml) > 0 Then htmlOut = pHtml Else htmlOut = DefaultHtmlPath(pReport)
+        If BuildHtmlReport(wb, pReport, htmlOut) Then _
+            htmlNote = vbCrLf & "HTML summary: " & htmlOut
+    End If
+
     ' restore Excel to exactly how we found it
     Application.Calculation = savedCalc
     Application.EnableEvents = savedEvents
@@ -169,7 +188,7 @@ Public Sub GenerateCheckFile()
     wb.Worksheets(SH_CHECK).Activate
     MsgBox "Done. Built '" & SH_CHECK & "', '" & SH_MIN & "', '" & SH_LCCONSOL & _
            "', '" & SH_COVERAGE & "' and '" & SH_SELTB & "'. " & _
-           "Use File > Save As to keep a copy.", vbInformation
+           "Use File > Save As to keep a copy." & htmlNote, vbInformation
     Exit Sub
 
 CleanFail:
@@ -1668,3 +1687,290 @@ Private Sub ImportConsolSheet(wb As Workbook, ByVal path As String, ByVal newNam
     wb.Worksheets(wb.Worksheets.Count).Name = newName
     src.Close SaveChanges:=False
 End Sub
+
+
+'============================================================================
+'  BONUS HTML ERROR SUMMARY
+'----------------------------------------------------------------------------
+'  Mirrors the Python edition's --html output: one self-contained .html file
+'  with three sections - A. PL Check Summary, B. LC-Consol Check, C. Entity
+'  Reconciler - listing only differences of HTML_MIN or more. All values are
+'  read from the already-calculated sheets, so it adds no recalculation time.
+'  Control!B7 governs it: blank = "<report>_Check_Summary.html" next to the
+'  report, "N" = skip, anything else = full output path. The HTML_MIN
+'  threshold (ignore differences below 1) is declared with the tunables at
+'  the top of the module.
+'============================================================================
+
+Private Function DefaultHtmlPath(ByVal reportPath As String) As String
+    Dim p As Long: p = InStrRev(reportPath, ".")
+    If p > InStrRev(reportPath, "\") Then
+        DefaultHtmlPath = Left$(reportPath, p - 1) & "_Check_Summary.html"
+    Else
+        DefaultHtmlPath = reportPath & "_Check_Summary.html"
+    End If
+End Function
+
+Private Function BuildHtmlReport(wb As Workbook, ByVal reportPath As String, _
+                                 ByVal outPath As String) As Boolean
+    Dim f As Integer
+    On Error GoTo HtmlFail
+
+    Dim ck As Worksheet: Set ck = wb.Worksheets(SH_CHECK)
+    Dim lastC As Long, lastData As Long, r As Long, c As Long
+    Dim aRows As String, bRows As String, cRows As String, cHead As String
+    Dim aN As Long, bN As Long, cN As Long, errN As Long
+    Dim acc As String, cat As String, blk As String, code As String
+    Dim dv As Variant, stated As Double
+
+    lastC = ck.Cells(CK_BLOCK, ck.Columns.Count).End(xlToLeft).Column
+    lastData = ck.Cells(ck.Rows.Count, 3).End(xlUp).Row
+
+    ' ---- A. PL Check Summary: the Check tab's calculated Diff cells --------
+    ' (minority rows are excluded, as in the Python HTML)
+    For r = CK_DATA0 To lastData
+        acc = Trim$(CStr(ck.Cells(r, 3).Value))
+        If Len(acc) > 0 Then
+            cat = Trim$(CStr(ck.Cells(r, 2).Value))
+            If Not IsMinority(cat) Then
+                For c = 6 To lastC
+                    If CStr(ck.Cells(CK_BLOCK, c).Value) = "Diff" Then
+                        dv = ck.Cells(r, c).Value
+                        If IsError(dv) Then
+                            errN = errN + 1
+                        ElseIf IsNumeric(dv) Then
+                            If Abs(CDbl(dv)) >= HTML_MIN Then
+                                blk = CStr(ck.Cells(CK_BLOCK, c - 1).Value)
+                                code = CStr(ck.Cells(CK_SUB, c - 1).Value)
+                                stated = Val0(ck.Cells(r, c - 1).Value)
+                                aRows = aRows & HtmlDiffRow(code, acc, cat, blk, _
+                                                            stated, CDbl(dv))
+                                aN = aN + 1
+                            End If
+                        End If
+                    End If
+                Next c
+            End If
+        End If
+    Next r
+
+    ' ---- A (continued): the net-profit reconciliation block ----------------
+    Dim rNp2 As Long, rCalc2 As Long, rTb2 As Long, rChk2 As Long
+    For r = lastData + 1 To lastData + 12
+        Select Case Trim$(CStr(ck.Cells(r, 4).Value))
+            Case "Net Profit":                     If rNp2 = 0 Then rNp2 = r
+            Case "Calc Check":                     rCalc2 = r
+            Case "Net Profit as per Real Time TB": rTb2 = r
+            Case "Check":                          rChk2 = r
+        End Select
+    Next r
+    Dim calcV As Double, chkV As Double, npV As Double, tbV As Double
+    If rNp2 > 0 And rCalc2 > 0 And rTb2 > 0 And rChk2 > 0 Then
+        For c = 6 To lastC
+            If CStr(ck.Cells(CK_BLOCK, c).Value) = "Diff" And _
+               CStr(ck.Cells(CK_BLOCK, c - 1).Value) = "LC - Balance" Then
+                calcV = Val0(ck.Cells(rCalc2, c).Value)
+                chkV = Val0(ck.Cells(rChk2, c).Value)
+                npV = Val0(ck.Cells(rNp2, c).Value)
+                tbV = Val0(ck.Cells(rTb2, c).Value)
+                If Abs(calcV) >= HTML_MIN Or Abs(chkV) >= HTML_MIN Then
+                    aRows = aRows & "<tr>" & TdText(CStr(ck.Cells(CK_SUB, c - 1).Value)) & _
+                            TdText("(net profit)") & TdText("Net Profit reconciliation") & _
+                            TdText("Net profit") & TdNum(npV, False) & TdNum(-tbV, False) & _
+                            TdNum(chkV, True) & _
+                            TdText("calc-check " & FmtN(calcV) & ", TB tie " & FmtN(chkV)) & "</tr>"
+                    aN = aN + 1
+                End If
+            End If
+        Next c
+    End If
+
+    ' ---- B. LC-Consol Check: the dedicated tab's Diff column ---------------
+    ' (the loop stops at the blank row before the completeness section)
+    Dim lcs As Worksheet, k As Long, rv As Double
+    If SheetExists(wb, SH_LCCONSOL) Then
+        Set lcs = wb.Worksheets(SH_LCCONSOL)
+        k = 3
+        Do While Len(Trim$(CStr(lcs.Cells(k, 1).Value))) > 0
+            dv = lcs.Cells(k, 6).Value
+            If IsError(dv) Then
+                errN = errN + 1
+            ElseIf IsNumeric(dv) Then
+                If Abs(CDbl(dv)) >= HTML_MIN Then
+                    rv = Val0(lcs.Cells(k, 5).Value)
+                    bRows = bRows & "<tr>" & TdText(CStr(lcs.Cells(k, 1).Value)) & _
+                            TdText(CStr(lcs.Cells(k, 3).Value)) & _
+                            TdText(CStr(lcs.Cells(k, 2).Value)) & _
+                            TdNum(rv, False) & TdNum(rv + CDbl(dv), False) & _
+                            TdNum(CDbl(dv), True) & _
+                            TdText("Report " & FmtN(rv) & " vs tracker Dr-Cr " & _
+                                   FmtN(rv + CDbl(dv))) & "</tr>"
+                    bN = bN + 1
+                End If
+            End If
+            k = k + 1
+        Loop
+    End If
+
+    ' ---- C. Entity Reconciler: codes missing from some source --------------
+    Dim cov As Worksheet, baseC As Long, noteC As Long, rr2 As Long, cc2 As Long
+    Dim note As String, yn As String
+    If SheetExists(wb, SH_COVERAGE) Then
+        Set cov = wb.Worksheets(SH_COVERAGE)
+        For cc2 = 1 To 12
+            If CStr(cov.Cells(2, cc2).Value) = "Company Code" Then baseC = cc2: Exit For
+        Next cc2
+        If baseC > 0 Then
+            noteC = baseC + 1
+            Do While Len(Trim$(CStr(cov.Cells(2, noteC).Value))) > 0
+                noteC = noteC + 1
+            Loop
+            noteC = noteC - 1                     ' the "Note (where missing)" col
+            cHead = "<th>Company Code</th>"
+            For cc2 = baseC + 1 To noteC - 1
+                cHead = cHead & "<th>" & HtmlEsc(CStr(cov.Cells(2, cc2).Value)) & "</th>"
+            Next cc2
+            cHead = cHead & "<th>Note</th>"
+            rr2 = 3
+            Do While Len(Trim$(CStr(cov.Cells(rr2, baseC).Value))) > 0
+                note = CStr(cov.Cells(rr2, noteC).Value)
+                If Left$(note, 12) = "missing from" Then
+                    cRows = cRows & "<tr>" & TdText(CStr(cov.Cells(rr2, baseC).Value))
+                    For cc2 = baseC + 1 To noteC - 1
+                        yn = CStr(cov.Cells(rr2, cc2).Value)
+                        cRows = cRows & "<td class=""" & IIf(yn = "Yes", "", "bad") & _
+                                """>" & HtmlEsc(yn) & "</td>"
+                    Next cc2
+                    cRows = cRows & "<td class=""bad"">" & HtmlEsc(note) & "</td></tr>"
+                    cN = cN + 1
+                End If
+                rr2 = rr2 + 1
+            Loop
+        End If
+    End If
+
+    ' ---- write the file -----------------------------------------------------
+    Dim ttl As String, q As Long
+    ttl = Mid$(reportPath, InStrRev(reportPath, "\") + 1)
+    q = InStrRev(ttl, ".")
+    If q > 0 Then ttl = Left$(ttl, q - 1)
+
+    f = FreeFile
+    Open outPath For Output As #f
+    Print #f, "<!doctype html><html><head><meta charset=""utf-8""><title>" & _
+              HtmlEsc(ttl) & " - check summary</title><style>" & HtmlCss() & _
+              "</style></head><body>"
+    Print #f, "<h1>" & HtmlEsc(ttl) & " - Check Error Summary</h1>"
+    Print #f, "<p class=""sub"">Differences below " & HTML_MIN & " are ignored. " & _
+              "<span class=""pill"">" & (aN + bN + cN) & " item(s) reported</span></p>"
+    If errN > 0 Then Print #f, "<p class=""warn"">Note: " & errN & _
+        " Diff cell(s) show an Excel error (e.g. a missing FX rate) and could " & _
+        "not be summarised - open the Check tab to inspect.</p>"
+    Print #f, "<h2>A. PL Check Summary</h2>"
+    Print #f, HtmlTable("<th>Entity</th><th>Group Account</th><th>Section</th>" & _
+        "<th>Check</th><th>Stated</th><th>Expected</th><th>Difference</th>" & _
+        "<th>Remark</th>", aRows, "No differences found.")
+    Print #f, "<h2>B. LC-Consol Check</h2>"
+    Print #f, HtmlTable("<th>Entity</th><th>Group Account</th><th>Section</th>" & _
+        "<th>Report value</th><th>Tracker (Dr-Cr)</th><th>Difference</th>" & _
+        "<th>Remark</th>", bRows, IIf(gHasConsol, "No differences found.", _
+        "No consolidation-entry tracker supplied (Control!B6)."))
+    Print #f, "<h2>C. Entity Reconciler</h2>"
+    If Len(cHead) > 0 Then
+        Print #f, HtmlTable(cHead, cRows, "All company codes present in every source.")
+    Else
+        Print #f, "<p class=""ok"">All company codes present in every source.</p>"
+    End If
+    Print #f, "</body></html>"
+    Close #f
+    BuildHtmlReport = True
+    Exit Function
+
+HtmlFail:
+    On Error Resume Next
+    If f <> 0 Then Close #f
+    MsgBox "HTML summary could not be written (" & Err.Description & "). " & _
+           "The check sheets themselves are complete.", vbExclamation
+    BuildHtmlReport = False
+End Function
+
+' one <tr> for section A: entity / account / section / check / stated /
+' expected / difference / remark (expected = stated + diff, since every Diff
+' formula is  expected - stated)
+Private Function HtmlDiffRow(ByVal code As String, ByVal acc As String, _
+                             ByVal cat As String, ByVal blk As String, _
+                             ByVal stated As Double, ByVal dv As Double) As String
+    HtmlDiffRow = "<tr>" & TdText(code) & TdText(acc) & TdText(cat) & _
+        TdText(KindLabel(blk)) & TdNum(stated, False) & TdNum(stated + dv, False) & _
+        TdNum(dv, True) & TdText(RemarkFor(blk, stated, stated + dv)) & "</tr>"
+End Function
+
+Private Function KindLabel(ByVal blk As String) As String
+    Select Case blk
+        Case "LC - Balance": KindLabel = "LC tie-out"
+        Case "GC - Balance": KindLabel = "FX conversion"
+        Case "GC - Total":   KindLabel = "GC consolidation"
+        Case Else:           KindLabel = blk
+    End Select
+End Function
+
+Private Function RemarkFor(ByVal blk As String, ByVal stated As Double, _
+                           ByVal expected As Double) As String
+    Select Case blk
+        Case "LC - Balance"
+            RemarkFor = "Report LC " & FmtN(stated) & " vs source " & FmtN(expected)
+        Case "GC - Balance"
+            RemarkFor = "GC-Balance " & FmtN(stated) & " vs (LC+Consol)*rate " & FmtN(expected)
+        Case "GC - Total"
+            RemarkFor = "GC-Total " & FmtN(stated) & " vs sum of GC blocks " & FmtN(expected)
+        Case Else
+            RemarkFor = ""
+    End Select
+End Function
+
+Private Function HtmlTable(ByVal headHtml As String, ByVal rowsHtml As String, _
+                           ByVal emptyMsg As String) As String
+    If Len(rowsHtml) = 0 Then
+        HtmlTable = "<p class=""ok"">" & HtmlEsc(emptyMsg) & "</p>"
+    Else
+        HtmlTable = "<table><thead><tr>" & headHtml & "</tr></thead><tbody>" & _
+                    rowsHtml & "</tbody></table>"
+    End If
+End Function
+
+Private Function TdText(ByVal s As String) As String
+    TdText = "<td>" & HtmlEsc(s) & "</td>"
+End Function
+
+Private Function TdNum(ByVal v As Double, ByVal bad As Boolean) As String
+    TdNum = "<td class=""num" & IIf(bad, " bad", "") & """>" & FmtN(v) & "</td>"
+End Function
+
+Private Function FmtN(ByVal v As Double) As String
+    FmtN = Format$(v, "#,##0.00")
+End Function
+
+Private Function HtmlEsc(ByVal s As String) As String
+    s = Replace(s, "&", "&amp;")
+    s = Replace(s, "<", "&lt;")
+    s = Replace(s, ">", "&gt;")
+    HtmlEsc = s
+End Function
+
+' same look as the Python edition's HTML summary
+Private Function HtmlCss() As String
+    Dim s As String
+    s = "body{font-family:Segoe UI,Arial,sans-serif;margin:24px;color:#222}"
+    s = s & "h1{font-size:20px;margin:0 0 4px} .sub{color:#666;margin:0 0 18px;font-size:13px}"
+    s = s & "h2{font-size:15px;margin:26px 0 8px;border-bottom:2px solid #4472C4;padding-bottom:4px}"
+    s = s & "table{border-collapse:collapse;width:100%;font-size:13px;margin-top:6px}"
+    s = s & "th{background:#4472C4;color:#fff;text-align:left;padding:6px 8px;font-weight:600}"
+    s = s & "td{padding:5px 8px;border-bottom:1px solid #e3e3e3}"
+    s = s & "tr:nth-child(even) td{background:#f7f9fc}"
+    s = s & ".num{text-align:right;font-variant-numeric:tabular-nums}"
+    s = s & ".bad{color:#9C0006;font-weight:600}"
+    s = s & ".ok{color:#006100;font-weight:600;background:#e9f6ec;padding:8px 10px;border-radius:4px;display:inline-block}"
+    s = s & ".pill{font-size:11px;color:#666}"
+    s = s & ".warn{background:#fff3cd;border:1px solid #ffe08a;padding:8px 10px;border-radius:4px;font-size:13px}"
+    HtmlCss = s
+End Function
