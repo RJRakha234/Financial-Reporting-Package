@@ -257,6 +257,35 @@ def test_interleaved_table_label_is_layout_not_discrepancy():
     assert bad and bad[0].tier == "act"
 
 
+def test_scrambled_row_wins_over_similar_sentence_elsewhere():
+    # The fair-valuation row exists (scrambled) on page 1, while page 2 has
+    # a DIFFERENT sentence sharing the long tail "...carried at fair value
+    # through other comprehensive income". The checker must tie the HTML
+    # label to its real row on p.1 (layout), not fuzzy-match the similar
+    # sentence on p.2 and call it a discrepancy.
+    corpus = make_corpus(
+        [
+            "Commercial Papers carried at fair value through other Market "
+            "observable inputs 1,196 comprehensive income",
+            "Interest income on financial assets carried at fair value "
+            "through other comprehensive income 512",
+        ]
+    )
+    html = (
+        "<html><body><p>Commercial Papers carried at fair value through "
+        "other comprehensive income</p>"
+        "<p>Market observable inputs</p><p>1,196</p>"
+        "<p>Interest income on financial assets carried at fair value "
+        "through other comprehensive income</p><p>512</p></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    cp = [i for i in result.issues if "Commercial Papers" in i.excerpt]
+    assert len(cp) == 1
+    assert cp[0].tier == "layout"
+    assert "p.1" in cp[0].remark          # tied to the real row's page
+    assert "p.2" not in cp[0].remark
+
+
 def test_high_frequency_phrase_shortfall_is_ignored():
     # A boilerplate phrase occurring dozens of times cannot be counted
     # reliably; a 1-off must not flag.

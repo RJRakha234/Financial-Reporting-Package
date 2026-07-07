@@ -225,6 +225,33 @@ class Annotator:
             return "ok", "", ""
         needle = letters or canon
         view = self.corpus.letters if letters else self.corpus.alnum
+        # Before trusting a fuzzy match — which may land on a *similar
+        # sentence elsewhere in the document* — look for the sentence as a
+        # scrambled table row: all of its words, in order, within a tight
+        # window on some page (the PDF layout interleaves other columns'
+        # words between them).  The tightest such window is where the
+        # content actually lives.
+        words = [
+            canonical(w, letters_only=True)
+            for w in re.findall(r"[^\W\d_]+", sentence)
+        ]
+        words = [w for w in words if len(w) >= 2]
+        if len(words) >= 3:
+            hit = self._find_interleaved_page(words, len(needle))
+            if hit is not None:
+                page_no, local_start, local_end = hit
+                g_start = self.corpus.letters.page_starts[page_no - 1] + local_start
+                g_end = self.corpus.letters.page_starts[page_no - 1] + local_end
+                label = self.corpus.page_label(page_no)
+                snippet = self.corpus.raw_snippet(
+                    self.corpus.letters, g_start, g_end
+                )
+                return "review", (
+                    f"“{_shorten(sentence)}” is present on PDF {label}, but the "
+                    "PDF layout interleaves other table columns' text between "
+                    f"its words (the PDF reads: “{snippet}”). The wording "
+                    "itself matches in order — a quick glance suffices."
+                ), "layout"
         match = find_best_match(view.canon, needle)
         if match is None:
             coverage = self._word_coverage(sentence)
@@ -249,26 +276,6 @@ class Annotator:
         start, end, ratio = match
         page = self.corpus.page_label(view.page_of(start))
         snippet = self.corpus.raw_snippet(view, start, end)
-        # The PDF layout often interleaves other table columns' words between
-        # the words of one label.  If every word of the sentence appears IN
-        # ORDER within a bounded window around the match, the wording itself
-        # is present — a layout artifact, not a discrepancy.
-        words = [
-            canonical(w, letters_only=True)
-            for w in re.findall(r"[^\W\d_]+", sentence)
-        ]
-        words = [w for w in words if len(w) >= 2]
-        if len(words) >= 3:
-            w_start = max(0, start - 60)
-            window = view.canon[w_start : start + 3 * len(needle) + 80]
-            span = word_subsequence_span(window, words)
-            if span is not None and span[1] - span[0] <= 3 * len(needle) + 60:
-                return "review", (
-                    f"“{_shorten(sentence)}” is present on PDF {page}, but the "
-                    "PDF layout interleaves other table columns' text between "
-                    f"its words (the PDF reads: “{snippet}”). The wording "
-                    "itself matches in order — a quick glance suffices."
-                ), "layout"
         if ratio >= FUZZY_REVIEW_RATIO:
             return "review", (
                 f"Close but not identical to the PDF (similarity {ratio:.0%}). "
@@ -290,6 +297,34 @@ class Annotator:
             f"The nearest passage (PDF {page}, similarity {ratio:.0%}) is: "
             f"“{snippet}”."
         ), "discrepancy"
+
+    def _find_interleaved_page(
+        self, words: list[str], needle_len: int
+    ) -> tuple[int, int, int] | None:
+        """Page holding *words* in order within a tight window, or None.
+
+        Returns ``(page_no, local_start, local_end)`` in that page's
+        letters-canonical coordinates.  The window bound keeps this honest:
+        the words must sit close together (a table row with interleaved
+        column text), not merely be scattered across the page.
+        """
+        bound = 3 * needle_len + 60
+        best: tuple[int, int, int, int] | None = None  # (size, page, s, e)
+        for page_idx, page_canon in enumerate(self.corpus.page_letters):
+            if not page_canon or any(w not in page_canon for w in words):
+                continue
+            start = 0
+            while True:
+                span = word_subsequence_span(page_canon, words, start)
+                if span is None:
+                    break
+                size = span[1] - span[0]
+                if size <= bound and (best is None or size < best[0]):
+                    best = (size, page_idx + 1, span[0], span[1])
+                start = span[0] + 1
+        if best is None:
+            return None
+        return (best[1], best[2], best[3])
 
     def _word_coverage(self, sentence: str) -> tuple[str, float] | None:
         """Best single PDF page containing (almost) every word of *sentence*.
