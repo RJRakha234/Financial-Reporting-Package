@@ -533,12 +533,12 @@ class Annotator:
         lines = self.result.coverage.lines
         line = lines[line_idx]
         frac = line_idx / max(1, len(lines))
-        # A count-shortfall line IS present in the HTML (just fewer times):
-        # anchor the callout on the reflected instance itself.
-        if line.status != "missing":
-            el = self._match_block(canonical(line.text, letters_only=True), frac)
-            if el is not None:
-                return el
+        # Try the line's own text first: count-shortfall lines and
+        # row-integrity mismatches have their label present in the HTML —
+        # the callout belongs right there.
+        el = self._match_block(canonical(line.text, letters_only=True), frac)
+        if el is not None:
+            return el
         # Otherwise anchor after the nearest preceding covered PDF line.
         for back in range(1, 16):
             j = line_idx - back

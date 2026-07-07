@@ -197,6 +197,68 @@ def _shortfall_remark(
     return remark
 
 
+def _row_figures_near_label(
+    label_letters: str,
+    row_keys: list[str],
+    html: HtmlCorpus,
+    line_len: int,
+    next_letters: str,
+    occ_index: int,
+) -> tuple[bool, str]:
+    """Do the row's figures sit beside the RIGHT occurrence of its label?
+
+    Presence checks alone would accept two line items whose figures were
+    swapped — every value still exists somewhere, and an identical intact
+    row elsewhere (a note repeating a balance-sheet row) could vouch for a
+    corrupted one.  Both documents present content in the same order (the
+    content-order check enforces this), so the *occ_index*-th PDF
+    occurrence of the label is examined against the corresponding HTML
+    occurrence (±1 to tolerate a single wording variation elsewhere).  The
+    window is truncated at the next PDF row's label so an adjacent row
+    cannot lend its figures.  Returns ``(ok, html_snippet)``.
+    """
+    from .textnorm import canonicalize
+
+    window_len = max(240, line_len * 2)
+    positions: list[int] = []
+    pos = html.letters.find(label_letters)
+    while pos != -1 and len(positions) < occ_index + 2:
+        positions.append(pos)
+        pos = html.letters.find(label_letters, pos + 1)
+    candidates = [
+        p for k, p in enumerate(positions) if occ_index - 1 <= k <= occ_index + 1
+    ]
+    if not candidates:
+        return True, ""  # cannot locate: count checks report the shortfall
+
+    best_snippet = ""
+    best_hit = -1
+    for cand in candidates:
+        raw_start = html._letters_map[cand]
+        window = html.visible_text[raw_start : raw_start + window_len]
+        if next_letters:
+            wl, wmap = canonicalize(window, letters_only=True)
+            cut = wl.find(next_letters, len(label_letters))
+            if cut != -1 and wmap:
+                label_end_raw = wmap[min(len(label_letters), len(wmap)) - 1]
+                raw_cut = wmap[cut]
+                between = window[label_end_raw + 1 : raw_cut]
+                if not any(ch.isdigit() for ch in between):
+                    # The "next row's label" follows immediately with no
+                    # figures in between: this PDF line is a label wrapped
+                    # across lines, not a complete row — cannot assess.
+                    return True, ""
+                window = window[:raw_cut]
+        window_keys = {key for _s, _e, _t, key in iter_tokens(window)}
+        hit = sum(1 for k in row_keys if k in window_keys)
+        if hit == len(row_keys):
+            return True, ""
+        if hit > best_hit:
+            best_hit = hit
+            best_snippet = " ".join(window.split())[:220]
+    return False, best_snippet
+
+
 def _continuation_reprints(pages_raw: list[str]) -> "Counter":
     """Count page-continuation header reprints per canonical line.
 
@@ -345,6 +407,11 @@ def check_pdf_coverage(
     reprints = _continuation_reprints(pages_raw)
     page_alnums = [canonical(raw) for raw in pages_raw]
     page_letts = [canonical(raw, letters_only=True) for raw in pages_raw]
+    page_letts_starts: list[int] = []
+    _acc = 0
+    for _pl in page_letts:
+        page_letts_starts.append(_acc)
+        _acc += len(_pl)
 
     def shortfall_for(needle: str, pdf_corpus: str, html_corpus: str):
         if needle in flagged_shortfalls:
@@ -364,8 +431,11 @@ def check_pdf_coverage(
     }
 
     for page_idx, raw in enumerate(pages_raw):
-        for line in raw.splitlines():
-            line = line.strip()
+        page_lines = [ln.strip() for ln in raw.splitlines()]
+        page_letters_offset = 0
+        for line_no, line in enumerate(page_lines):
+            line_letters_offset = page_letters_offset
+            page_letters_offset += len(canonical(line, letters_only=True))
 
             index_entry = parse_index_line(line)
             if index_entry:
@@ -425,6 +495,42 @@ def check_pdf_coverage(
                 # Words match contiguously and every significant figure is in
                 # the HTML — but if this wording repeats, make sure the HTML
                 # repeats it just as often.
+                row_keys = [k for _s, _e, _t, k in iter_tokens(line)]
+                if row_keys and len(letters) >= 8:
+                    next_letters = ""
+                    for nl in page_lines[line_no + 1 :]:
+                        nl_letters = canonical(nl, letters_only=True)
+                        if nl_letters:
+                            next_letters = nl_letters[:30]
+                            break
+                    abs_pos = page_letts_starts[page_idx] + line_letters_offset
+                    occ_index = pdf_letters.count(letters, 0, abs_pos)
+                    intact, html_read = _row_figures_near_label(
+                        letters, row_keys, html, len(line), next_letters,
+                        occ_index,
+                    )
+                    if not intact:
+                        result.lines.append(
+                            CoverageLine(
+                                page_no,
+                                line,
+                                "missing",
+                                f"Row integrity: in the PDF this row reads "
+                                f"“{line}”, but the HTML shows different "
+                                "figures next to this label"
+                                + (
+                                    f" (the HTML reads: “{html_read}”)"
+                                    if html_read
+                                    else ""
+                                )
+                                + ". The figures exist elsewhere in the "
+                                "document, so values may have been swapped "
+                                "between line items. Compare this row against "
+                                f"PDF {page_label}.",
+                                label=page_label,
+                            )
+                        )
+                        continue
                 shortfall = shortfall_for(letters, pdf_letters, html.letters)
                 if shortfall:
                     result.review += 1
