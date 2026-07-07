@@ -29,7 +29,8 @@ def to_console(result: Result) -> str:
     cov = result.coverage
     lines.append(
         f"PDF → HTML coverage: {cov.ok}/{cov.total} PDF lines reflected, "
-        f"{cov.review} to review, {cov.missing} missing"
+        f"{cov.review} to review, {cov.missing} missing, "
+        f"{len(cov.order_issues)} content-order violation(s)"
     )
     if result.pdf_figures_missing:
         lines.append(
@@ -54,6 +55,17 @@ def to_json(result: Result) -> str:
                 "not_found": result.text_blocks_bad,
             },
             "figure_count_mismatches": result.figure_count_mismatches,
+            "content_order_violations": [
+                {
+                    "pdf_page": oi.pdf_label,
+                    "first_line": oi.first_text,
+                    "last_line": oi.last_text,
+                    "lines_affected": oi.count,
+                    "appears": oi.direction,
+                    "near_pdf_page": oi.near_label,
+                }
+                for oi in result.coverage.order_issues
+            ],
             "pdf_coverage": {
                 "lines_total": result.coverage.total,
                 "reflected": result.coverage.ok,

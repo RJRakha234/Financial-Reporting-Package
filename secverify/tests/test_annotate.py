@@ -325,6 +325,49 @@ def test_shortfall_remark_names_locations_and_html_variant():
     assert "consolidated" in remark                     # the HTML variant
 
 
+SECTION_A = (
+    "Property plant and equipment are stated at cost less accumulated "
+    "depreciation and impairment charges if any thereon"
+)
+SECTION_B = (
+    "Goodwill represents the excess of consideration transferred over the "
+    "fair value of net identifiable assets acquired in business combinations"
+)
+SECTION_C = (
+    "Leases are recognised as a right of use asset with a corresponding "
+    "liability at the date at which the leased asset becomes available"
+)
+
+
+def _order_corpus():
+    return make_corpus([SECTION_A, SECTION_B, SECTION_C])
+
+
+def test_content_in_pdf_order_passes(monkeypatch):
+    from secverify import coverage as cov_mod
+
+    monkeypatch.setattr(cov_mod, "ORDER_SLACK", 10)
+    html = f"<html><body><p>{SECTION_A}</p><p>{SECTION_B}</p><p>{SECTION_C}</p></body></html>"
+    result = Annotator(_order_corpus()).run(html, "ref.pdf", "doc.html")
+    assert not result.coverage.order_issues
+    assert not [i for i in result.issues if i.kind == "order"]
+
+
+def test_out_of_order_section_is_flagged(monkeypatch):
+    from secverify import coverage as cov_mod
+
+    monkeypatch.setattr(cov_mod, "ORDER_SLACK", 10)
+    # PDF order is A(p.1), B(p.2), C(p.3) — the HTML puts C before B.
+    html = f"<html><body><p>{SECTION_A}</p><p>{SECTION_C}</p><p>{SECTION_B}</p></body></html>"
+    result = Annotator(_order_corpus()).run(html, "ref.pdf", "doc.html")
+    order = [i for i in result.issues if i.kind == "order"]
+    assert len(order) == 1
+    assert order[0].tier == "act" and order[0].severity == "error"
+    assert "Out of sequence" in order[0].remark
+    # cites the misplaced content's PDF page and where it sits in the HTML
+    assert "p.2" in order[0].remark or "p.3" in order[0].remark
+
+
 def test_summary_banner_injected():
     result = run("<html><body><p>Total assets 1,23,696</p></body></html>")
     assert 'id="secv-summary"' in result.html_out

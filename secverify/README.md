@@ -30,14 +30,20 @@ the PDF that the HTML dropped), every line of every PDF page is also checked
 against the HTML — and anything missing is rendered **inline as a red
 callout box at the exact position in the document where the content should
 have appeared** (as a table row when the omission belongs inside a table).
-Three omission detectors run:
+Four structural detectors run:
 
 * PDF lines whose words are nowhere in the HTML;
 * significant PDF figures that never appear in the HTML;
 * **occurrence counting** — content that appears, say, 2× in the PDF but
   only 1× in the HTML is flagged, so dropping one instance of a repeated
   row (its label and figures also live in a note) is still caught. The same
-  counting runs per significant figure.
+  counting runs per significant figure;
+* **content ordering** — distinctive PDF lines that occur exactly once in
+  both documents act as sequence anchors; their HTML positions must be
+  increasing (per source PDF, via longest-increasing-subsequence). A
+  section moved during conversion — page 12's content pasted before page
+  1's — is flagged as an out-of-sequence error naming both locations, so
+  presence checks can never be satisfied by a scrambled document.
 
 ## Install
 

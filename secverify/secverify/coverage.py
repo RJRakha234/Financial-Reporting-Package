@@ -24,6 +24,12 @@ COUNT_CHECK_MIN_LEN = 12
 #: a table header reprinted after a page break, not a second occurrence
 CONTINUATION_TOP_LINES = 3
 
+#: sequence anchors must be this distinctive (letters) to vote on ordering
+ORDER_ANCHOR_MIN_LEN = 25
+#: displacement below this many letters-canon characters is table/cell
+#: jitter, not a moved section
+ORDER_SLACK = 400
+
 #: an index / table-of-contents entry: label, dot leader, then a page number
 #: (text extraction often garbles the number with leader dots: 19 → "1.9")
 _INDEX_LINE_RE = re.compile(r"^(?P<label>.{3,}?)[.…]{4,}\s*(?P<pageno>[\d][\d.…\s]*)$")
@@ -53,6 +59,18 @@ class CoverageLine:
 
 
 @dataclass
+class OrderIssue:
+    """A run of PDF lines whose HTML position breaks the PDF sequence."""
+
+    pdf_label: str      # page label of the first misplaced line
+    first_text: str
+    last_text: str
+    count: int          # lines in the run
+    direction: str      # "earlier" | "later"
+    near_label: str     # PDF page whose content surrounds it in the HTML
+
+
+@dataclass
 class CoverageResult:
     lines: list[CoverageLine] = field(default_factory=list)
     total: int = 0
@@ -60,6 +78,8 @@ class CoverageResult:
     review: int = 0
     #: print-index entries whose page-number column was excluded from checks
     index_entries: int = 0
+    #: runs of content that appear out of sequence in the HTML
+    order_issues: list[OrderIssue] = field(default_factory=list)
 
     @property
     def missing(self) -> int:
@@ -200,6 +220,96 @@ def _continuation_reprints(pages_raw: list[str]) -> "Counter":
     return reprints
 
 
+def _lis_indices(values: list[int]) -> set[int]:
+    """Indices forming a longest strictly-increasing subsequence."""
+    if not values:
+        return set()
+    from bisect import bisect_left
+
+    tails: list[int] = []          # last value of LIS of each length
+    tails_idx: list[int] = []      # index of that value
+    prev = [-1] * len(values)
+    for i, v in enumerate(values):
+        j = bisect_left(tails, v)
+        if j == len(tails):
+            tails.append(v)
+            tails_idx.append(i)
+        else:
+            tails[j] = v
+            tails_idx[j] = i
+        prev[i] = tails_idx[j - 1] if j > 0 else -1
+    out: set[int] = set()
+    i = tails_idx[-1]
+    while i != -1:
+        out.add(i)
+        i = prev[i]
+    return out
+
+
+def _order_issues(
+    anchors: list[tuple[int, str, str, int]],
+    label_of,
+    lines: list[CoverageLine],
+) -> list[OrderIssue]:
+    """Detect PDF content that the HTML presents out of sequence.
+
+    *anchors* are ``(line_idx, doc, label, html_pos)`` for PDF lines that
+    occur exactly once in the HTML — reliable sequence markers.  Within each
+    source document their HTML positions must increase; anchors outside the
+    longest increasing subsequence, displaced by more than ORDER_SLACK, are
+    misplaced content.  Consecutive misplaced anchors merge into one issue.
+    """
+    issues: list[OrderIssue] = []
+    by_doc: dict[str, list[tuple[int, str, int]]] = {}
+    for line_idx, doc, label, pos in anchors:
+        by_doc.setdefault(doc, []).append((line_idx, label, pos))
+
+    for doc_anchors in by_doc.values():
+        positions = [pos for _i, _l, pos in doc_anchors]
+        keep = _lis_indices(positions)
+        violators: list[int] = []
+        for a_idx in range(len(doc_anchors)):
+            if a_idx in keep:
+                continue
+            pos = positions[a_idx]
+            lo = max((positions[k] for k in keep if k < a_idx), default=None)
+            hi = min((positions[k] for k in keep if k > a_idx), default=None)
+            if (lo is None or pos >= lo - ORDER_SLACK) and (
+                hi is None or pos <= hi + ORDER_SLACK
+            ):
+                continue  # small displacement: table/cell jitter
+            violators.append(a_idx)
+
+        run: list[int] = []
+        for a_idx in [*violators, None]:
+            if run and (a_idx is None or a_idx != run[-1] + 1):
+                first_i, first_label, first_pos = doc_anchors[run[0]]
+                last_i, _l, _p = doc_anchors[run[-1]]
+                lo = max((positions[k] for k in keep if k < run[0]), default=None)
+                direction = (
+                    "earlier" if lo is not None and first_pos < lo else "later"
+                )
+                near = min(
+                    (doc_anchors[k] for k in keep),
+                    key=lambda a: abs(a[2] - first_pos),
+                    default=None,
+                )
+                issues.append(
+                    OrderIssue(
+                        pdf_label=first_label,
+                        first_text=lines[first_i].text,
+                        last_text=lines[last_i].text,
+                        count=len(run),
+                        direction=direction,
+                        near_label=near[1] if near else "?",
+                    )
+                )
+                run = []
+            if a_idx is not None:
+                run.append(a_idx)
+    return issues
+
+
 def check_pdf_coverage(
     pages_raw: list[str],
     html: HtmlCorpus,
@@ -212,6 +322,25 @@ def check_pdf_coverage(
             return page_labels[page_no - 1]
         return f"p.{page_no}"
     result = CoverageResult()
+    #: (line_idx, doc, label, html_pos) for lines occurring exactly once in
+    #: the HTML — sequence markers for the content-order check
+    anchors: list[tuple[int, str, str, int]] = []
+
+    def collect_anchor(line: str, page_label: str) -> None:
+        letters_line = canonical(line, letters_only=True)
+        if len(letters_line) < ORDER_ANCHOR_MIN_LEN:
+            return
+        pos = html.letters.find(letters_line)
+        if pos == -1 or html.letters.find(letters_line, pos + 1) != -1:
+            return  # absent or ambiguous in the HTML: cannot vote on ordering
+        if pdf_letters.count(letters_line) != 1:
+            # Repeated in the PDF (e.g. a table header reprinted after a
+            # page break): its single HTML occurrence cannot say which PDF
+            # occurrence it reflects.
+            return
+        doc = page_label.rsplit(" p.", 1)[0] if " p." in page_label else ""
+        anchors.append((len(result.lines) - 1, doc, page_label, pos))
+
     flagged_shortfalls: set[str] = set()  # report each distinct string once
     reprints = _continuation_reprints(pages_raw)
     page_alnums = [canonical(raw) for raw in pages_raw]
@@ -281,6 +410,7 @@ def check_pdf_coverage(
                     continue
                 result.ok += 1
                 result.lines.append(CoverageLine(page_no, line, "ok", label=page_label))
+                collect_anchor(line, page_label)
                 continue
 
             letters = canonical(line, letters_only=True)
@@ -314,6 +444,7 @@ def check_pdf_coverage(
                     continue
                 result.ok += 1
                 result.lines.append(CoverageLine(page_no, line, "ok", label=page_label))
+                collect_anchor(line, page_label)
                 continue
 
             if missing_figs:
@@ -373,4 +504,5 @@ def check_pdf_coverage(
                     label=page_label,
                 )
             )
+    result.order_issues = _order_issues(anchors, label_of, result.lines)
     return result
