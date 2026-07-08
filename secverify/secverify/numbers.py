@@ -109,6 +109,13 @@ def iter_tokens(text: str):
     """Yield ``(match_start, match_end, token, key)`` for amounts in *text*."""
     for m in TOKEN_RE.finditer(text):
         token = m.group(0)
+        start = m.start()
+        # A leading minus glued to a preceding letter/digit is a hyphen /
+        # separator inside a code ("W-100018", "2019-20"), not a negative
+        # sign — drop it so the figure is read as positive.
+        if token[:1] in "-−" and start > 0 and text[start - 1].isalnum():
+            token = token[1:]
+            start += 1
         if not valid_grouping(token):
             # Not a grouped amount (e.g. "30,2025" in a date): treat each
             # digit run as its own value.
@@ -116,8 +123,8 @@ def iter_tokens(text: str):
                 value = canonical_value(sub.group(0))
                 if value is not None:
                     yield (
-                        m.start() + sub.start(),
-                        m.start() + sub.end(),
+                        start + sub.start(),
+                        start + sub.end(),
                         sub.group(0),
                         canonical_key(value),
                     )
@@ -125,7 +132,7 @@ def iter_tokens(text: str):
         value = canonical_value(token)
         if value is None:
             continue
-        yield m.start(), m.end(), token, canonical_key(value)
+        yield start, m.end(), token, canonical_key(value)
 
 
 def is_significant(key: str, token: str) -> bool:

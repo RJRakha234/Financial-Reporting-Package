@@ -516,6 +516,30 @@ def check_pdf_coverage(
                 for _s, _e, _t, k in iter_tokens(src):
                     section_ref_keys.add(k)
 
+    # A label that is a PREFIX of a longer line's label is ambiguous: string
+    # search would pair it with the longer sibling (e.g. "Total comprehensive
+    # income" vs "Total comprehensive income for the period" in the statement
+    # of changes in equity).  Such labels are excluded from the placement,
+    # duplicate and count checks so a mispairing cannot raise a false alarm.
+    _all_line_letters = sorted(
+        {
+            canonical(ln, letters_only=True)
+            for raw in pages_raw
+            for ln in raw.splitlines()
+            if len(canonical(ln, letters_only=True)) >= 8
+        }
+    )
+
+    def prefix_ambiguous(letters_line: str) -> bool:
+        from bisect import bisect_right
+
+        i = bisect_right(_all_line_letters, letters_line)
+        return (
+            i < len(_all_line_letters)
+            and _all_line_letters[i].startswith(letters_line)
+            and _all_line_letters[i] != letters_line
+        )
+
     flagged_shortfalls: set[str] = set()  # report each distinct string once
     reprints = _continuation_reprints(pages_raw)
     page_alnums = [canonical(raw) for raw in pages_raw]
@@ -603,6 +627,11 @@ def check_pdf_coverage(
                 # and other checks already cover those lines.
                 if len(letters) < 12:
                     result.rows_value_skipped["short label (<12 chars)"] += 1
+                    return None
+                if prefix_ambiguous(letters):
+                    result.rows_value_skipped[
+                        "label is a prefix of a longer line"
+                    ] += 1
                     return None
                 if pdf_letters.count(letters) != html.letters.count(letters):
                     result.rows_value_skipped["label repeats unevenly"] += 1
@@ -790,6 +819,8 @@ def check_pdf_coverage(
         # single-source line the HTML repeats is an unambiguous duplication.
         if pdf_letters.count(letters_line) != 1:
             continue
+        if prefix_ambiguous(letters_line):
+            continue  # phrase is reused as the prefix of a longer heading
         html_n = html.letters.count(letters_line)
         if html_n >= 2:
             seen_dup.add(letters_line)

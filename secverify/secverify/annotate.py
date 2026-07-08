@@ -116,6 +116,11 @@ class Annotator:
             cursor = 0
             replaced = False
             for start, end, token, key in tokens:
+                # Leading-zero runs are identifiers (DIN 00041245, registration
+                # numbers), never monetary amounts — leave them unchecked so
+                # they are not flagged as "figures not in the PDF".
+                if re.match(r"^\(?0\d", token.strip()):
+                    continue
                 html_number_keys.add(key)
                 self.result.figures_total += 1
                 ok = self.corpus.has_number(key)
