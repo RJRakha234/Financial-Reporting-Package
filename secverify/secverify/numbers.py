@@ -21,7 +21,7 @@ from decimal import Decimal, InvalidOperation
 _AMOUNT = r"\d(?:[\d,]*\d)?(?:\.\d+)?"
 TOKEN_RE = re.compile(
     rf"\(\s?(?:[₹$]\s?)?{_AMOUNT}\s?\)%?"  # (1,234) possibly (₹ 1,234)
-    rf"|(?:[₹$]\s?)?{_AMOUNT}%?"           # 1,234  ₹1,234  21.1%
+    rf"|[-−]?(?:[₹$]\s?)?{_AMOUNT}%?"      # 1,234  -1,234  ₹1,234  21.1%
 )
 
 
@@ -31,8 +31,11 @@ def canonical_value(token: str) -> Decimal | None:
     Returns None when the token is not actually a parseable amount.
     """
     t = token.strip()
-    negative = t.startswith("(") and t.endswith((")", ")%"))
-    t = t.strip("()%")
+    negative = (
+        (t.startswith("(") and t.endswith((")", ")%")))
+        or t.startswith(("-", "−"))
+    )
+    t = t.strip("()%").lstrip("-−")
     t = t.replace("₹", "").replace("$", "").replace(",", "").strip()
     if not t:
         return None
@@ -41,6 +44,27 @@ def canonical_value(token: str) -> Decimal | None:
     except InvalidOperation:
         return None
     return -value if negative else value
+
+
+def token_attrs(token: str) -> tuple[int, str, bool]:
+    """Return ``(sign, currency, is_percent)`` of a figure token.
+
+    * ``sign``   — -1 when parenthesised or lead by a minus, else +1;
+    * ``currency`` — "₹", "$" or "" ;
+    * ``is_percent`` — the token carries a trailing ``%``.
+
+    These attributes are dropped by :func:`canonical_key` (so magnitudes
+    still match across formatting) but are compared *within a row* so a lost
+    negative, a swapped currency, or a dropped ``%`` cannot pass unseen.
+    """
+    t = token.strip()
+    negative = (
+        (t.startswith("(") and t.endswith((")", ")%")))
+        or t.startswith(("-", "−"))
+    )
+    currency = "₹" if "₹" in t else ("$" if "$" in t else "")
+    is_percent = t.rstrip().endswith("%")
+    return (-1 if negative else 1, currency, is_percent)
 
 
 def canonical_key(value: Decimal) -> str:

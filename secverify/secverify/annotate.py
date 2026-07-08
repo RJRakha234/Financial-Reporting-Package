@@ -475,10 +475,18 @@ class Annotator:
                 unplaced.append((idx, line))
                 continue
             severity = "bad" if line.status == "missing" else "warn"
-            heading = (
+            heading = {
+                "sign": "SIGN ERROR",
+                "column-order": "COLUMN ORDER",
+                "currency": "CURRENCY MISMATCH",
+                "percent": "PERCENT MISMATCH",
+                "row-value": "WRONG FIGURE IN ROW",
+                "duplicate": "DUPLICATED IN HTML",
+            }.get(
+                line.issue_kind,
                 "MISSING FROM HTML"
                 if line.status == "missing"
-                else "CHECK — POSSIBLY DROPPED"
+                else "CHECK — POSSIBLY DROPPED",
             )
             text = (
                 f"⛔ {heading} · PDF {line.label or line.page}: “{line.text}” — "
@@ -563,13 +571,13 @@ class Annotator:
             else:
                 continue
             issue = self._new_issue(
-                "omission",
+                line.issue_kind,
                 severity,
                 f"(PDF {line.label or line.page}) {line.text}",
                 line.remark,
             )
-            # The highlight for an omission is an inline callout box (or a
-            # summary-panel entry when it cannot be positioned).
+            # The highlight for a coverage finding is an inline callout box
+            # (or a summary-panel entry when it cannot be positioned).
             issue.anchor = f"secv-cov-{idx}"
             anchors[idx] = issue.anchor
         for oi in self.result.coverage.order_issues:

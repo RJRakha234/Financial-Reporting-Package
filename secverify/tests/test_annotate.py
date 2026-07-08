@@ -257,6 +257,110 @@ def test_interleaved_table_label_is_layout_not_discrepancy():
     assert bad and bad[0].tier == "act"
 
 
+def _row_corpus():
+    return make_corpus(
+        ["Interest and dividend income (691) (576)\n"
+         "Cash and cash equivalents at end 16,556 14,265"]
+    )
+
+
+def _row_html(a="(691)", b="(576)", c="16,556", d="14,265"):
+    return (
+        "<html><body><table>"
+        f"<tr><td>Interest and dividend income</td><td>{a}</td><td>{b}</td></tr>"
+        f"<tr><td>Cash and cash equivalents at end</td><td>{c}</td><td>{d}</td></tr>"
+        "</table></body></html>"
+    )
+
+
+def test_clean_rows_pass_value_integrity():
+    result = Annotator(_row_corpus()).run(_row_html(), "ref.pdf", "doc.html")
+    assert not [
+        i for i in result.issues
+        if i.kind in ("sign", "column-order", "row-value", "currency", "percent")
+    ]
+
+
+def test_sign_flip_is_caught():
+    # PDF shows (691) negative; HTML shows 691 positive.
+    result = Annotator(_row_corpus()).run(_row_html(a="691"), "ref.pdf", "doc.html")
+    sign = [i for i in result.issues if i.kind == "sign"]
+    assert len(sign) == 1 and sign[0].severity == "error"
+    assert "negative" in sign[0].remark and "positive" in sign[0].remark
+
+
+def test_column_order_swap_is_caught():
+    # The two period columns transposed.
+    result = Annotator(_row_corpus()).run(
+        _row_html(c="14,265", d="16,556"), "ref.pdf", "doc.html"
+    )
+    order = [i for i in result.issues if i.kind == "column-order"]
+    assert len(order) == 1 and order[0].severity == "error"
+
+
+def test_currency_symbol_swap_is_caught():
+    corpus = make_corpus(["Fair value of the grant is ₹34.75 crore per tranche"])
+    html = (
+        "<html><body><p>Fair value of the grant is $34.75 crore per tranche</p>"
+        "</body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    cur = [i for i in result.issues if i.kind == "currency"]
+    assert len(cur) == 1 and "₹" in cur[0].remark and "$" in cur[0].remark
+
+
+def test_currency_symbol_absent_on_one_side_is_not_flagged():
+    # ₹ in the PDF, plain number in the HTML (unit stated in a header) — fine.
+    corpus = make_corpus(["Fair value of the grant is ₹34.75 crore per tranche"])
+    html = (
+        "<html><body><p>Fair value of the grant is 34.75 crore per tranche</p>"
+        "</body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    assert not [i for i in result.issues if i.kind == "currency"]
+
+
+def test_duplicated_content_is_flagged():
+    corpus = make_corpus(
+        ["The special economic zone reinvestment reserve was created in the period"]
+    )
+    html = (
+        "<html><body>"
+        "<p>The special economic zone reinvestment reserve was created in the period</p>"
+        "<p>The special economic zone reinvestment reserve was created in the period</p>"
+        "</body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    dup = [i for i in result.issues if i.kind == "duplicate"]
+    assert len(dup) == 1 and "2×" in dup[0].remark
+
+
+def test_section_numbers_are_not_treated_as_figures():
+    # "2.15 Provisions 888 993" — 2.15 is a note ref, not an amount; a clean
+    # HTML row must not raise a value-integrity issue.
+    corpus = make_corpus(["Provisions 2.15 888 993"])
+    html = (
+        "<html><body><table><tr><td>Provisions</td><td>2.15</td>"
+        "<td>888</td><td>993</td></tr></table></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    assert not [
+        i for i in result.issues
+        if i.kind in ("sign", "column-order", "row-value")
+    ]
+
+
+def test_minus_sign_negative_matches_parenthesised_negative():
+    # PDF (691), HTML -691 — both negative, no sign issue.
+    corpus = make_corpus(["Interest and dividend income (691) (576)"])
+    html = (
+        "<html><body><table><tr><td>Interest and dividend income</td>"
+        "<td>-691</td><td>-576</td></tr></table></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    assert not [i for i in result.issues if i.kind == "sign"]
+
+
 def test_scrambled_row_wins_over_similar_sentence_elsewhere():
     # The fair-valuation row exists (scrambled) on page 1, while page 2 has
     # a DIFFERENT sentence sharing the long tail "...carried at fair value

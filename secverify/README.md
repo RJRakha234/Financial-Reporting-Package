@@ -30,7 +30,7 @@ the PDF that the HTML dropped), every line of every PDF page is also checked
 against the HTML — and anything missing is rendered **inline as a red
 callout box at the exact position in the document where the content should
 have appeared** (as a table row when the omission belongs inside a table).
-Five structural detectors run:
+Six structural detectors run:
 
 * PDF lines whose words are nowhere in the HTML;
 * significant PDF figures that never appear in the HTML;
@@ -38,11 +38,19 @@ Five structural detectors run:
   only 1× in the HTML is flagged, so dropping one instance of a repeated
   row (its label and figures also live in a note) is still caught. The same
   counting runs per significant figure;
-* **row integrity** — every PDF row's figures must appear beside the
+* **row value integrity** — every PDF row's figures must appear beside the
   corresponding occurrence of that row's label in the HTML (window truncated
-  at the next row). Two line items whose values were interchanged both still
-  pass presence and count checks — this is the check that catches the swap,
-  quoting the PDF row against what the HTML shows next to the label;
+  at the next row), matched as an **ordered, signed, currency- and
+  %-aware** sequence. This one check catches: figures **swapped between line
+  items** (both still exist, so presence/count pass); the two **comparative
+  period columns transposed** (same figures, wrong order); a **negative shown
+  as positive** or vice versa (parentheses/minus stripped by text
+  canonicalisation); a **₹↔$ currency swap**; and a **gained or lost %**.
+  Section/note numbers (`2.15`), identifiers (membership/UDIN numbers),
+  and figures-first movement lines are excluded so they cannot misfire;
+* **extra / duplicated content** — a distinctive line the PDF states once
+  but the HTML repeats is flagged: "faithful" is bidirectional, the HTML
+  must carry nothing more than the PDF, not merely nothing less;
 * **content ordering** — distinctive PDF lines that occur exactly once in
   both documents act as sequence anchors; their HTML positions must be
   increasing (per source PDF, via longest-increasing-subsequence). A
@@ -150,10 +158,10 @@ machine.
   reference PDF. Pass every source the exhibit is assembled from (statements
   + signed auditor's report), otherwise their sections show as "content with
   no counterpart".
-* Figures are checked four ways: presence, occurrence counts, row
-  integrity (beside the right label occurrence), and inside exact line
-  matches. A swap between two rows inside the same tight window (adjacent
-  single-figure rows) can still evade the row check — `fincheck` (sister
-  tool in this repo) complements it by verifying totals/subtotals foot
-  within each statement, which a swap almost always breaks.
+* Figures are checked for presence, occurrence counts, and — beside the
+  right label occurrence — value, order, sign, currency and %. What remains
+  outside scope: **totals/subtotals are not re-footed** (that is `fincheck`,
+  the sister tool in this repo — run both), and value integrity is assessed
+  for label-led rows, so a swap between two adjacent figures-first movement
+  lines is left to presence/count and to `fincheck`'s footing.
 * Works on text-based PDFs. Scanned/image PDFs need OCR first.

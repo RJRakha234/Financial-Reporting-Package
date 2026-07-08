@@ -56,6 +56,9 @@ class CoverageLine:
     #: review lines that indicate a probable omission (count shortfall) are
     #: escalated into the numbered issue list, not just the coverage map
     escalate: bool = False
+    #: issue kind for the panel: "omission" | "sign" | "column-order" |
+    #: "currency" | "row-value" | "duplicate"
+    issue_kind: str = "omission"
 
 
 @dataclass
@@ -197,25 +200,108 @@ def _shortfall_remark(
     return remark
 
 
+def _rich_figs(
+    text: str, significant_only: bool = False
+) -> list[tuple[str, int, str, bool]]:
+    """Ordered ``(magnitude_key, sign, currency, is_percent)`` for *text*.
+
+    With *significant_only*, footnote markers like ``(1)`` and note
+    references (bare integers < 100, year-like values) are dropped so they
+    cannot masquerade as negative figures in the row comparison.
+    """
+    from .numbers import token_attrs
+
+    out = []
+    for _s, _e, token, key in iter_tokens(text):
+        if significant_only and not is_significant(key, token):
+            continue
+        # A leading zero marks an identifier (membership/UDIN/registration
+        # number), never a monetary amount.
+        if re.match(r"^\(?0\d", token.strip()):
+            continue
+        sign, currency, pct = token_attrs(token)
+        out.append((key, sign, currency, pct))
+    return out
+
+
+def _subseq_indices(hay: list[str], needle: list[str]) -> list[int] | None:
+    """Indices of the first in-order occurrence of *needle* within *hay*."""
+    idx = []
+    pos = 0
+    for want in needle:
+        while pos < len(hay) and hay[pos] != want:
+            pos += 1
+        if pos == len(hay):
+            return None
+        idx.append(pos)
+        pos += 1
+    return idx
+
+
+def _compare_row(
+    row_figs: list[tuple[str, int, str, bool]],
+    win_figs: list[tuple[str, int, str, bool]],
+) -> tuple[str, str]:
+    """Classify how a row's figures differ between PDF and an HTML window.
+
+    Returns ``(verdict, detail)`` where verdict is one of ``ok`` /
+    ``row-value`` (a magnitude missing → likely swapped/wrong value) /
+    ``column-order`` (all magnitudes present but in a different left-to-right
+    order → comparative columns transposed) / ``sign`` (a negative shown
+    positive or vice versa) / ``currency`` (₹↔$) / ``percent`` (a % gained
+    or lost).
+    """
+    from collections import Counter
+
+    row_mag = [f[0] for f in row_figs]
+    win_mag = [f[0] for f in win_figs]
+    if not (Counter(row_mag) <= Counter(win_mag)):
+        return "row-value", ""
+    idx = _subseq_indices(win_mag, row_mag)
+    if idx is None:
+        return "column-order", ""
+    for r, wi in zip(row_figs, idx):
+        w = win_figs[wi]
+        if r[1] != w[1]:
+            r_txt = "negative" if r[1] < 0 else "positive"
+            w_txt = "negative" if w[1] < 0 else "positive"
+            return "sign", f"figure {r[0]}: PDF {r_txt}, HTML {w_txt}"
+        if r[2] and w[2] and r[2] != w[2]:
+            # Only a genuine symbol swap (₹↔$); a symbol present on one side
+            # and absent on the other is normal (the unit sits in a header).
+            return "currency", f"figure {r[0]}: PDF “{r[2]}”, HTML “{w[2]}”"
+        if r[3] != w[3]:
+            return "percent", (
+                f"figure {r[0]}: PDF {'%' if r[3] else 'plain'}, "
+                f"HTML {'%' if w[3] else 'plain'}"
+            )
+    return "ok", ""
+
+
+#: severity order for choosing which occurrence's verdict to report
+_ROW_SEVERITY = {"ok": 0, "sign": 1, "currency": 2, "percent": 3,
+                 "column-order": 4, "row-value": 5}
+
+
 def _row_figures_near_label(
     label_letters: str,
-    row_keys: list[str],
+    row_figs: list[tuple[str, int, str, bool]],
     html: HtmlCorpus,
     line_len: int,
     next_letters: str,
     occ_index: int,
-) -> tuple[bool, str]:
-    """Do the row's figures sit beside the RIGHT occurrence of its label?
+) -> tuple[str, str, str]:
+    """Do the row's figures sit — same values, order, sign, currency — beside
+    the RIGHT occurrence of its label?
 
-    Presence checks alone would accept two line items whose figures were
-    swapped — every value still exists somewhere, and an identical intact
-    row elsewhere (a note repeating a balance-sheet row) could vouch for a
-    corrupted one.  Both documents present content in the same order (the
-    content-order check enforces this), so the *occ_index*-th PDF
+    Presence checks alone accept two line items whose figures were swapped,
+    period columns transposed, or a negative shown positive: every value
+    still exists somewhere.  Both documents present content in the same
+    order (the content-order check enforces this), so the *occ_index*-th PDF
     occurrence of the label is examined against the corresponding HTML
-    occurrence (±1 to tolerate a single wording variation elsewhere).  The
-    window is truncated at the next PDF row's label so an adjacent row
-    cannot lend its figures.  Returns ``(ok, html_snippet)``.
+    occurrence (±1 to tolerate a wording variation elsewhere).  The window
+    is truncated at the next PDF row's label so an adjacent row cannot lend
+    its figures.  Returns ``(verdict, detail, html_snippet)``.
     """
     from .textnorm import canonicalize
 
@@ -229,10 +315,9 @@ def _row_figures_near_label(
         p for k, p in enumerate(positions) if occ_index - 1 <= k <= occ_index + 1
     ]
     if not candidates:
-        return True, ""  # cannot locate: count checks report the shortfall
+        return "ok", "", ""  # cannot locate: count checks report the shortfall
 
-    best_snippet = ""
-    best_hit = -1
+    best = ("row-value", "", "")
     for cand in candidates:
         raw_start = html._letters_map[cand]
         window = html.visible_text[raw_start : raw_start + window_len]
@@ -247,16 +332,15 @@ def _row_figures_near_label(
                     # The "next row's label" follows immediately with no
                     # figures in between: this PDF line is a label wrapped
                     # across lines, not a complete row — cannot assess.
-                    return True, ""
+                    return "ok", "", ""
                 window = window[:raw_cut]
-        window_keys = {key for _s, _e, _t, key in iter_tokens(window)}
-        hit = sum(1 for k in row_keys if k in window_keys)
-        if hit == len(row_keys):
-            return True, ""
-        if hit > best_hit:
-            best_hit = hit
-            best_snippet = " ".join(window.split())[:220]
-    return False, best_snippet
+        win_figs = _rich_figs(window)
+        verdict, detail = _compare_row(row_figs, win_figs)
+        if verdict == "ok":
+            return "ok", "", ""
+        if _ROW_SEVERITY[verdict] < _ROW_SEVERITY[best[0]]:
+            best = (verdict, detail, " ".join(window.split())[:220])
+    return best
 
 
 def _continuation_reprints(pages_raw: list[str]) -> "Counter":
@@ -403,6 +487,24 @@ def check_pdf_coverage(
         doc = page_label.rsplit(" p.", 1)[0] if " p." in page_label else ""
         anchors.append((len(result.lines) - 1, doc, page_label, pos))
 
+    # Section / note reference numbers ("1.1", "2.15", "2.11.1") are outline
+    # identifiers, not monetary figures — collect them so the row value check
+    # never treats them as amounts.
+    _section_re = re.compile(r"^\s*(\d+(?:\.\d+)+)")
+    section_ref_keys: set[str] = set()
+    for raw in pages_raw:
+        for ln in raw.splitlines():
+            m = _section_re.match(ln)
+            src = m.group(1) if m else None
+            ie = parse_index_line(ln)
+            if ie:
+                m2 = _section_re.match(ie[0])
+                if m2:
+                    src = m2.group(1)
+            if src:
+                for _s, _e, _t, k in iter_tokens(src):
+                    section_ref_keys.add(k)
+
     flagged_shortfalls: set[str] = set()  # report each distinct string once
     reprints = _continuation_reprints(pages_raw)
     page_alnums = [canonical(raw) for raw in pages_raw]
@@ -458,6 +560,76 @@ def check_pdf_coverage(
             result.total += 1
             page_no = page_idx + 1
             page_label = label_of(page_no)
+            letters = canonical(line, letters_only=True)
+
+            is_index_entry = bool(index_entry)
+
+            def value_integrity_line() -> "CoverageLine | None":
+                """Row value check, run only once the label+figures are
+                confirmed present (a reliable anchor).  Catches sign flips,
+                column-order swaps, currency and %—which the canonical text
+                forms strip and would otherwise pass unseen."""
+                if is_index_entry:
+                    return None  # section numbers are not monetary figures
+                if line[:1].isdigit() or line[:2] in ("(1", "(2", "(3", "(4",
+                                                       "(5", "(6", "(7", "(8",
+                                                       "(9", "(0"):
+                    # A line that starts with figures is a movement /
+                    # reconciliation line, not a "label … figures" row; its
+                    # values are covered by presence and count checks.
+                    return None
+                row_figs = [
+                    f
+                    for f in _rich_figs(line, significant_only=True)
+                    if f[0] not in section_ref_keys
+                ]
+                # Distinctive, unambiguously-placed label only: too-short or
+                # repeated-a-different-number-of-times labels risk mispairing,
+                # and other checks already cover those lines.
+                if not row_figs or len(letters) < 12:
+                    return None
+                if pdf_letters.count(letters) != html.letters.count(letters):
+                    return None
+                next_letters = ""
+                for nl in page_lines[line_no + 1 :]:
+                    nl_letters = canonical(nl, letters_only=True)
+                    if nl_letters:
+                        next_letters = nl_letters[:30]
+                        break
+                abs_pos = page_letts_starts[page_idx] + line_letters_offset
+                occ_index = pdf_letters.count(letters, 0, abs_pos)
+                verdict, detail, html_read = _row_figures_near_label(
+                    letters, row_figs, html, len(line), next_letters, occ_index
+                )
+                if verdict == "ok":
+                    return None
+                reads = f" (the HTML reads: “{html_read}”)" if html_read else ""
+                headline = {
+                    "row-value": "Row integrity — the HTML shows different "
+                    "figures next to this label; values may have been swapped "
+                    "between line items or mistyped.",
+                    "column-order": "Column order — the same figures appear but "
+                    "in a different left-to-right order; the comparative "
+                    "columns (e.g. the two reporting periods) may be transposed.",
+                    "sign": f"Sign — {detail}. A negative shown as positive (or "
+                    "vice versa) changes the meaning.",
+                    "currency": f"Currency — {detail}. The currency symbol "
+                    "differs.",
+                    "percent": f"Percentage — {detail}. A % was gained or lost.",
+                }[verdict]
+                status = "review" if verdict == "percent" else "missing"
+                if status == "review":
+                    result.review += 1
+                return CoverageLine(
+                    page_no,
+                    line,
+                    status,
+                    f"{headline} In the PDF this row reads “{line}”{reads}. "
+                    f"Compare against PDF {page_label}.",
+                    label=page_label,
+                    escalate=(status == "review"),
+                    issue_kind=verdict,
+                )
 
             # Tier 1: the whole line, figures included, appears verbatim.
             if c_alnum in html.alnum:
@@ -478,12 +650,17 @@ def check_pdf_coverage(
                         )
                     )
                     continue
+                # Text (incl. figures) matched — but sign/currency/% are
+                # stripped by canonicalisation, so verify value integrity.
+                vline = value_integrity_line()
+                if vline is not None:
+                    result.lines.append(vline)
+                    continue
                 result.ok += 1
                 result.lines.append(CoverageLine(page_no, line, "ok", label=page_label))
                 collect_anchor(line, page_label)
                 continue
 
-            letters = canonical(line, letters_only=True)
             text_ok = not letters or letters in html.letters
             missing_figs = [
                 token
@@ -492,45 +669,15 @@ def check_pdf_coverage(
             ]
 
             if text_ok and not missing_figs:
-                # Words match contiguously and every significant figure is in
-                # the HTML — but if this wording repeats, make sure the HTML
-                # repeats it just as often.
-                row_keys = [k for _s, _e, _t, k in iter_tokens(line)]
-                if row_keys and len(letters) >= 8:
-                    next_letters = ""
-                    for nl in page_lines[line_no + 1 :]:
-                        nl_letters = canonical(nl, letters_only=True)
-                        if nl_letters:
-                            next_letters = nl_letters[:30]
-                            break
-                    abs_pos = page_letts_starts[page_idx] + line_letters_offset
-                    occ_index = pdf_letters.count(letters, 0, abs_pos)
-                    intact, html_read = _row_figures_near_label(
-                        letters, row_keys, html, len(line), next_letters,
-                        occ_index,
-                    )
-                    if not intact:
-                        result.lines.append(
-                            CoverageLine(
-                                page_no,
-                                line,
-                                "missing",
-                                f"Row integrity: in the PDF this row reads "
-                                f"“{line}”, but the HTML shows different "
-                                "figures next to this label"
-                                + (
-                                    f" (the HTML reads: “{html_read}”)"
-                                    if html_read
-                                    else ""
-                                )
-                                + ". The figures exist elsewhere in the "
-                                "document, so values may have been swapped "
-                                "between line items. Compare this row against "
-                                f"PDF {page_label}.",
-                                label=page_label,
-                            )
-                        )
-                        continue
+                # Words match and every significant figure is present — verify
+                # the figures sit beside THIS label with the right value,
+                # order, sign and currency.
+                vline = value_integrity_line()
+                if vline is not None:
+                    result.lines.append(vline)
+                    continue
+                # Then, if this wording repeats, make sure the HTML repeats it
+                # as often.
                 shortfall = shortfall_for(letters, pdf_letters, html.letters)
                 if shortfall:
                     result.review += 1
@@ -610,5 +757,32 @@ def check_pdf_coverage(
                     label=page_label,
                 )
             )
+    # Extra / duplicated content: a distinctive line the PDF states once but
+    # the HTML repeats.  "Faithful" is bidirectional — the HTML must contain
+    # nothing more than the PDF, not merely nothing less.
+    seen_dup: set[str] = set()
+    for cl in result.lines:
+        if cl.status != "ok":
+            continue
+        letters_line = canonical(cl.text, letters_only=True)
+        if len(letters_line) < ORDER_ANCHOR_MIN_LEN or letters_line in seen_dup:
+            continue
+        if pdf_letters.count(letters_line) != 1:
+            continue
+        html_n = html.letters.count(letters_line)
+        if html_n >= 2:
+            seen_dup.add(letters_line)
+            cl.status = "review"
+            cl.escalate = True
+            cl.issue_kind = "duplicate"
+            cl.remark = (
+                f"Duplicated in the HTML: the PDF states this line once "
+                f"(at {cl.label}) but the HTML repeats it {html_n}× — extra "
+                "content may have been inserted during conversion. Confirm the "
+                "HTML should not carry it more than once."
+            )
+            result.ok -= 1
+            result.review += 1
+
     result.order_issues = _order_issues(anchors, label_of, result.lines)
     return result
