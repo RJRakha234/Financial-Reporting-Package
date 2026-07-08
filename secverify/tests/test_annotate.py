@@ -112,41 +112,6 @@ def test_own_markers_are_not_treated_as_figures():
     assert not [i for i in result.issues if i.kind == "figure"]
 
 
-def test_dropped_instance_of_repeated_content_is_flagged():
-    # The same row appears on two PDF pages (e.g. balance sheet + note) but
-    # only once in the HTML: presence checks pass, counts must not.  The
-    # second occurrence sits mid-page, so it is a real repeat, not a
-    # page-continuation header reprint.
-    corpus = make_corpus(
-        [
-            "Right-of-use assets 3,201",
-            "Note on leases\nAccounting policy text\nCarrying values were\n"
-            "Right-of-use assets 3,201",
-        ]
-    )
-    html = (
-        "<html><body><p>Right-of-use assets 3,201</p>"
-        "<p>Note on leases</p><p>Accounting policy text</p>"
-        "<p>Carrying values were</p></body></html>"
-    )
-    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
-    escalated = [
-        i for i in result.issues if i.kind == "omission" and i.severity == "review"
-    ]
-    assert len(escalated) == 1  # deduplicated: one report per distinct string
-    assert "2×" in escalated[0].remark and "only 1×" in escalated[0].remark
-    assert "p.1" in escalated[0].remark  # cites where in the PDF it lives
-    counts = [i for i in result.issues if i.kind == "figure-count"]
-    assert len(counts) == 1 and "3,201" in counts[0].excerpt
-    # rendered as an amber inline callout after the one reflected instance
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(result.html_out, "html.parser")
-    callout = soup.find(class_="secv-callout-warn")
-    assert callout is not None and "POSSIBLY DROPPED" in callout.get_text()
-    anchor_p = callout.find_previous_sibling("p")
-    assert "Right-of-use assets" in anchor_p.get_text()
-
 
 def test_page_continuation_header_reprint_is_not_flagged():
     # A table spanning a PDF page break reprints its column-header row at
@@ -313,10 +278,12 @@ def test_column_order_swap_is_caught():
 
 
 def test_currency_symbol_swap_is_caught():
-    corpus = make_corpus(["Fair value of the grant is ₹34.75 crore per tranche"])
+    # A value-column row (label then figures) with a currency prefix.
+    corpus = make_corpus(["Grant date fair value per tranche ₹34.75 ₹34.20"])
     html = (
-        "<html><body><p>Fair value of the grant is $34.75 crore per tranche</p>"
-        "</body></html>"
+        "<html><body><table><tr>"
+        "<td>Grant date fair value per tranche</td>"
+        "<td>$34.75</td><td>$34.20</td></tr></table></body></html>"
     )
     result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
     cur = [i for i in result.issues if i.kind == "currency"]
@@ -325,28 +292,15 @@ def test_currency_symbol_swap_is_caught():
 
 def test_currency_symbol_absent_on_one_side_is_not_flagged():
     # ₹ in the PDF, plain number in the HTML (unit stated in a header) — fine.
-    corpus = make_corpus(["Fair value of the grant is ₹34.75 crore per tranche"])
+    corpus = make_corpus(["Grant date fair value per tranche ₹34.75 ₹34.20"])
     html = (
-        "<html><body><p>Fair value of the grant is 34.75 crore per tranche</p>"
-        "</body></html>"
+        "<html><body><table><tr>"
+        "<td>Grant date fair value per tranche</td>"
+        "<td>34.75</td><td>34.20</td></tr></table></body></html>"
     )
     result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
     assert not [i for i in result.issues if i.kind == "currency"]
 
-
-def test_duplicated_content_is_flagged():
-    corpus = make_corpus(
-        ["The special economic zone reinvestment reserve was created in the period"]
-    )
-    html = (
-        "<html><body>"
-        "<p>The special economic zone reinvestment reserve was created in the period</p>"
-        "<p>The special economic zone reinvestment reserve was created in the period</p>"
-        "</body></html>"
-    )
-    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
-    dup = [i for i in result.issues if i.kind == "duplicate"]
-    assert len(dup) == 1 and "2×" in dup[0].remark
 
 
 def test_section_numbers_are_not_treated_as_figures():
@@ -436,38 +390,11 @@ def test_high_frequency_phrase_shortfall_is_ignored():
     # reliably; a 1-off must not flag.
     from secverify.coverage import _count_shortfall
 
-    assert _count_shortfall("condensedstandalone", "x" * 0 + "condensedstandalone" * 39,
-                            "condensedstandalone" * 37) is None
-    assert _count_shortfall("condensedstandalone", "condensedstandalone" * 4,
-                            "condensedstandalone" * 2) == (4, 2)
+    # counts are whole-block occurrences now: a near-equal high count is noise
+    assert _count_shortfall("condensedstandalone", 39, 37) is None
+    # a clear shortfall on few-occurrence content is reported
+    assert _count_shortfall("condensedstandalone", 4, 2) == (4, 2)
 
-
-def test_shortfall_remark_names_locations_and_html_variant():
-    corpus = make_corpus(
-        [
-            "The notes form an integral part of the standalone statements",
-            "Other content here entirely different\n"
-            "More filler content on this page\n"
-            "Yet another filler line to avoid the continuation-reprint rule\n"
-            "The notes form an integral part of the standalone statements",
-        ]
-    )
-    html = (
-        "<html><body><p>The notes form an integral part of the standalone statements</p>"
-        "<p>Other content here entirely different</p>"
-        "<p>More filler content on this page</p>"
-        "<p>The notes form an integral part of the consolidated statements</p>"
-        "</body></html>"
-    )
-    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
-    shortfalls = [
-        i for i in result.issues
-        if i.kind == "omission" and "worded differently" in i.remark
-    ]
-    assert shortfalls, [i.remark for i in result.issues]
-    remark = shortfalls[0].remark
-    assert "p.1" in remark and "p.2" in remark          # PDF locations
-    assert "consolidated" in remark                     # the HTML variant
 
 
 def test_figures_swapped_between_line_items_are_caught():

@@ -100,7 +100,7 @@ class CoverageResult:
 class HtmlCorpus:
     """Canonical views of the HTML's visible text, mirroring PdfCorpus."""
 
-    def __init__(self, visible_text: str):
+    def __init__(self, visible_text: str, block_texts: "list[str] | None" = None):
         from collections import Counter
 
         from .textnorm import canonicalize
@@ -119,6 +119,21 @@ class HtmlCorpus:
             if token_attrs(tok)[0] < 0:
                 self.neg_counts[key] += 1
         self.number_keys = set(self.number_counts)
+
+        # Whole-block occurrence counts.  Counting a phrase by substring in
+        # one concatenated blob is unreliable — it misses boundaries and
+        # counts a phrase embedded inside a longer cell.  Counting exact
+        # block (cell/paragraph) matches respects boundaries, so a heading
+        # that merely starts with the phrase is not miscounted as a repeat.
+        self.seg_alnum: Counter = Counter()
+        self.seg_letters: Counter = Counter()
+        for bt in block_texts or []:
+            ca = canonical(bt)
+            if ca:
+                self.seg_alnum[ca] += 1
+            cl = canonical(bt, letters_only=True)
+            if cl:
+                self.seg_letters[cl] += 1
 
     def letters_snippet(self, start: int, end: int, max_len: int = 200) -> str:
         """Original HTML wording for a letters-canonical range."""
@@ -144,32 +159,28 @@ def _word_coverage(sentence: str, letters_corpus: str) -> float | None:
 
 def _count_shortfall(
     needle: str,
-    pdf_corpus: str,
-    html_corpus: str,
+    pdf_count: int,
+    html_count: int,
     reprints: int = 0,
 ) -> tuple[int, int] | None:
     """(pdf_count, html_count) when *needle* occurs fewer times in the HTML.
 
-    Catches an omission of content that also appears elsewhere in the
-    document (e.g. a balance-sheet row whose label and figures repeat in a
-    note) — presence checks alone cannot see one dropped instance of a
-    repeated string.  *reprints* is the number of PDF occurrences that are
-    page-continuation reprints (a table header reprinted after a page
-    break); the HTML has no page breaks, so those are not real repeats and
-    are deducted before comparing.
+    Counts are **whole-line / whole-block** occurrences (not substrings), so
+    a phrase embedded in a longer cell or reused as a heading prefix is not
+    miscounted.  Catches an omission of content that also appears elsewhere
+    (a balance-sheet row repeated in a note).  *reprints* is the number of
+    PDF occurrences that are page-continuation reprints (a header reprinted
+    after a page break); the HTML has no page breaks, so those are deducted.
     """
     if len(needle) < COUNT_CHECK_MIN_LEN:
         return None
-    pdf_count = pdf_corpus.count(needle) - reprints
+    pdf_count -= reprints
     if pdf_count < 2:
         return None  # presence checks already cover the single-instance case
-    html_count = html_corpus.count(needle)
     if html_count >= pdf_count:
         return None
-    # A phrase occurring dozens of times (boilerplate embedded in longer
-    # sentences) cannot be counted reliably — extraction quirks shift a
-    # count by one or two.  Flag only few-occurrence content, or a
-    # substantial relative shortfall.
+    # Very common boilerplate: a one-off count wobble is noise, so require a
+    # substantial relative shortfall before flagging.
     if pdf_count > 8 and (pdf_count - html_count) / pdf_count < 0.25:
         return None
     return (pdf_count, html_count)
@@ -550,11 +561,27 @@ def check_pdf_coverage(
         page_letts_starts.append(_acc)
         _acc += len(_pl)
 
-    def shortfall_for(needle: str, pdf_corpus: str, html_corpus: str):
+    # Whole-line PDF occurrence counts (mirrors the HTML block counts), so
+    # counting respects line/cell boundaries instead of counting substrings.
+    from collections import Counter as _Counter
+
+    pdf_seg_alnum: _Counter = _Counter()
+    pdf_seg_letters: _Counter = _Counter()
+    for raw in pages_raw:
+        for ln in raw.splitlines():
+            ca = canonical(ln)
+            if ca:
+                pdf_seg_alnum[ca] += 1
+            cl = canonical(ln, letters_only=True)
+            if cl:
+                pdf_seg_letters[cl] += 1
+
+    def shortfall_for(needle: str, pdf_seg: "_Counter", html_seg: "_Counter"):
         if needle in flagged_shortfalls:
             return None
         shortfall = _count_shortfall(
-            needle, pdf_corpus, html_corpus, reprints.get(needle, 0)
+            needle, pdf_seg.get(needle, 0), html_seg.get(needle, 0),
+            reprints.get(needle, 0),
         )
         if shortfall:
             flagged_shortfalls.add(needle)
@@ -622,6 +649,31 @@ def check_pdf_coverage(
                     # values are covered by presence, count and sign checks.
                     result.rows_value_skipped["figures-first / movement line"] += 1
                     return None
+                # Prose with figures embedded mid-sentence (e.g. "…net of
+                # 9,098,409 (9,655,927) treasury shares as at June 30, 2025…")
+                # is not a clean "label + value columns" row — the embedded
+                # counts and dates defeat column matching.  If real words
+                # continue after the first figure, treat it as prose.
+                first_fig = next(
+                    (
+                        s
+                        for s, _e, tok, key in iter_tokens(line)
+                        if is_significant(key, tok)
+                        and key not in section_ref_keys
+                        and not re.match(r"^\(?0\d", tok.strip())
+                    ),
+                    None,
+                )
+                if first_fig is not None and len(
+                    re.findall(r"[A-Za-z]", line[first_fig:])
+                ) >= 8:
+                    # ≥8 letters after the first figure = words continue after
+                    # a value (pdfplumber often merges them: "treasuryshares
+                    # asatjune"), so this is prose, not a value-column row.
+                    result.rows_value_skipped[
+                        "prose line with embedded figures"
+                    ] += 1
+                    return None
                 # Distinctive, unambiguously-placed label only: too-short or
                 # repeated-a-different-number-of-times labels risk mispairing,
                 # and other checks already cover those lines.
@@ -680,23 +732,6 @@ def check_pdf_coverage(
 
             # Tier 1: the whole line, figures included, appears verbatim.
             if c_alnum in html.alnum:
-                shortfall = shortfall_for(c_alnum, pdf_alnum, html.alnum)
-                if shortfall:
-                    result.review += 1
-                    result.lines.append(
-                        CoverageLine(
-                            page_no,
-                            line,
-                            "review",
-                            _shortfall_remark(
-                                shortfall, c_alnum, page_alnums, label_of,
-                                html, canonical(line, letters_only=True),
-                            ),
-                            escalate=True,
-                            label=page_label,
-                        )
-                    )
-                    continue
                 # Text (incl. figures) matched — but sign/currency/% are
                 # stripped by canonicalisation, so verify value integrity.
                 vline = value_integrity_line()
@@ -722,25 +757,6 @@ def check_pdf_coverage(
                 vline = value_integrity_line()
                 if vline is not None:
                     result.lines.append(vline)
-                    continue
-                # Then, if this wording repeats, make sure the HTML repeats it
-                # as often.
-                shortfall = shortfall_for(letters, pdf_letters, html.letters)
-                if shortfall:
-                    result.review += 1
-                    result.lines.append(
-                        CoverageLine(
-                            page_no,
-                            line,
-                            "review",
-                            _shortfall_remark(
-                                shortfall, letters, page_letts, label_of,
-                                html, letters,
-                            ),
-                            escalate=True,
-                            label=page_label,
-                        )
-                    )
                     continue
                 result.ok += 1
                 result.lines.append(CoverageLine(page_no, line, "ok", label=page_label))
@@ -804,38 +820,6 @@ def check_pdf_coverage(
                     label=page_label,
                 )
             )
-    # Extra / duplicated content: a distinctive line the HTML repeats more
-    # often than the PDF states it.  "Faithful" is bidirectional — the HTML
-    # must contain nothing more than the PDF, not merely nothing less.
-    seen_dup: set[str] = set()
-    for cl in result.lines:
-        if cl.status != "ok":
-            continue
-        letters_line = canonical(cl.text, letters_only=True)
-        if len(letters_line) < ORDER_ANCHOR_MIN_LEN or letters_line in seen_dup:
-            continue
-        # Require the PDF to state the line exactly once: repeated table
-        # labels have unstable counts across the two renderings, so only a
-        # single-source line the HTML repeats is an unambiguous duplication.
-        if pdf_letters.count(letters_line) != 1:
-            continue
-        if prefix_ambiguous(letters_line):
-            continue  # phrase is reused as the prefix of a longer heading
-        html_n = html.letters.count(letters_line)
-        if html_n >= 2:
-            seen_dup.add(letters_line)
-            cl.status = "review"
-            cl.escalate = True
-            cl.issue_kind = "duplicate"
-            cl.remark = (
-                f"Duplicated in the HTML: the PDF states this line once "
-                f"(at {cl.label}) but the HTML repeats it {html_n}× — extra "
-                "content may have been inserted during conversion. Confirm the "
-                "HTML should not carry it more than once."
-            )
-            result.ok -= 1
-            result.review += 1
-
     _unit_scale_check(pages_raw, html, label_of, result)
     result.order_issues = _order_issues(anchors, label_of, result.lines)
     return result

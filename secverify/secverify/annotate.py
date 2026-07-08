@@ -488,7 +488,10 @@ class Annotator:
         root = soup.body or soup
         # Snapshot the HTML's visible text before any highlighting is added,
         # then verify the reverse direction: every PDF line must be reflected.
-        self.html_corpus = HtmlCorpus(root.get_text(" "))
+        # Per-leaf-block texts feed boundary-respecting occurrence counts.
+        self._block_index = _collect_block_index(root)
+        block_texts = [b["text"] for b in self._block_index]
+        self.html_corpus = HtmlCorpus(root.get_text(" "), block_texts)
         self.result.coverage = check_pdf_coverage(
             self.corpus.pages_raw,
             self.html_corpus,
@@ -497,7 +500,6 @@ class Annotator:
             self.corpus.page_labels,
         )
         self.result.coverage.low_text_pages = list(self.corpus.low_text_pages)
-        self._block_index = _collect_block_index(root)
         self._annotate_blocks(soup, root)
         self._annotate_numbers(soup, root)
         self._sign_census()
@@ -685,6 +687,7 @@ def _collect_block_index(root) -> list[dict]:
         index.append(
             {
                 "el": block,
+                "text": text,
                 "letters": canonical(text, letters_only=True),
                 "pos": len(index),
             }

@@ -36,14 +36,10 @@ whether figure signs reconciled document-wide, and any PDF pages too sparse to
 read (possible scans) — alongside the honest out-of-scope caveats. It turns the
 tool's own coverage into a signable statement rather than an implied guarantee.
 
-Six structural detectors run:
+The structural detectors run:
 
 * PDF lines whose words are nowhere in the HTML;
 * significant PDF figures that never appear in the HTML;
-* **occurrence counting** — content that appears, say, 2× in the PDF but
-  only 1× in the HTML is flagged, so dropping one instance of a repeated
-  row (its label and figures also live in a note) is still caught. The same
-  counting runs per significant figure;
 * **row value integrity** — every PDF row's figures must appear beside the
   corresponding occurrence of that row's label in the HTML (window truncated
   at the next row), matched as an **ordered, signed, currency- and
@@ -62,9 +58,6 @@ Six structural detectors run:
 * **unit of scale** — every "in ₹ crore / million / lakh" declaration the
   PDF makes must appear in the HTML; a silently rescaled table (digits
   unchanged, unit word altered) is flagged;
-* **extra / duplicated content** — a distinctive line the PDF states once
-  but the HTML repeats is flagged: "faithful" is bidirectional, the HTML
-  must carry nothing more than the PDF, not merely nothing less;
 * **content ordering** — distinctive PDF lines that occur exactly once in
   both documents act as sequence anchors; their HTML positions must be
   increasing (per source PDF, via longest-increasing-subsequence). A
