@@ -733,6 +733,16 @@ def _inject_banner(
     head = soup.head
     (head or root).insert(0, style)
 
+    # Declare UTF-8 so browsers render typographic characters (non-breaking
+    # spaces, em-dashes, curly quotes, ₹) correctly instead of mojibake like
+    # "Â" — many SEC exhibit HTMLs ship without a charset meta.
+    if head is not None and not head.find(
+        "meta", attrs={"charset": True}
+    ):
+        meta = soup.new_tag("meta")
+        meta["charset"] = "utf-8"
+        head.insert(0, meta)
+
     ok_pct = (
         f"{result.figures_ok}/{result.figures_total}"
         if result.figures_total
