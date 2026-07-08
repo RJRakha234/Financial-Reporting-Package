@@ -601,6 +601,19 @@ def check_pdf_coverage(
             line_letters_offset = page_letters_offset
             page_letters_offset += len(canonical(line, letters_only=True))
 
+            # Strip a leading run of 1-3 identical capital letters that some
+            # PDFs prepend to headings as invisible navigation anchors
+            # ("XINFOSYS LIMITED", "XXX2.1 BUSINESS", "X2.11 EQUITY") — only
+            # when doing so makes the line match the HTML, so real content is
+            # never altered.
+            m_anchor = re.match(r"^([A-Z])\1{0,2}(?=[A-Z0-9])", line)
+            if m_anchor:
+                stripped = line[m_anchor.end():]
+                if canonical(stripped) in html.alnum or canonical(
+                    stripped, letters_only=True
+                ) in html.letters:
+                    line = stripped
+
             index_entry = parse_index_line(line)
             if index_entry:
                 # A print index entry: validate the label; the page-number
@@ -676,7 +689,10 @@ def check_pdf_coverage(
                     return None
                 # Distinctive, unambiguously-placed label only: too-short or
                 # repeated-a-different-number-of-times labels risk mispairing,
-                # and other checks already cover those lines.
+                # and other checks already cover those lines.  (A lenient
+                # any-occurrence fallback was trialled and rejected: generic
+                # labels like "Total" are too weak an anchor and it produced
+                # false positives.)
                 if len(letters) < 12:
                     result.rows_value_skipped["short label (<12 chars)"] += 1
                     return None

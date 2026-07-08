@@ -255,6 +255,26 @@ def test_sign_flip_is_caught():
     assert "691" in sign[0].excerpt
 
 
+def test_wrong_identifier_is_caught_and_correct_one_is_not():
+    corpus = make_corpus(
+        ["Vikas Bagaria Partner Membership No. 060408 UDIN: 25060408BMOCJH5716"]
+    )
+    # Correct identifiers -> no issue.
+    ok_html = (
+        "<html><body><p>Vikas Bagaria Partner Membership No. 060408 "
+        "UDIN: 25060408BMOCJH5716</p></body></html>"
+    )
+    r_ok = Annotator(make_corpus(
+        ["Vikas Bagaria Partner Membership No. 060408 UDIN: 25060408BMOCJH5716"]
+    )).run(ok_html, "ref.pdf", "doc.html")
+    assert not [i for i in r_ok.issues if i.kind == "identifier"]
+    # A transposed UDIN -> flagged.
+    bad_html = ok_html.replace("BMOCJH5716", "BMOCJH5761")
+    r_bad = Annotator(corpus).run(bad_html, "ref.pdf", "doc.html")
+    ids = [i for i in r_bad.issues if i.kind == "identifier"]
+    assert len(ids) == 1 and "UDIN" in ids[0].excerpt
+
+
 def test_sign_flip_on_short_label_row_is_caught():
     # The demonstrated audit miss: a short-label row's sign flip must be
     # caught by the document-wide census, not the (skipped) row check.

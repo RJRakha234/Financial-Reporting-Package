@@ -74,22 +74,21 @@ def find_best_match(
         w_end = min(len(corpus), cand + n + pad)
         window = corpus[w_start:w_end]
         sm = SequenceMatcher(None, window, needle, autojunk=False)
-        if sm.real_quick_ratio() < min_ratio or sm.quick_ratio() < min_ratio:
+        # Cheap overlap gate only — the padded window is longer than the
+        # needle, so its raw ratio is diluted (a perfect substring of a
+        # window 40 chars too long caps near 0.6).  The real decision is made
+        # on the TRIMMED matched region below, against min_ratio.
+        if sm.real_quick_ratio() < 0.3:
             continue
-        if sm.ratio() < min_ratio:
-            continue
-        # Trim the window to the matched region and re-score there, so the
-        # padding does not dilute the reported similarity.
         blocks = sm.get_matching_blocks()[:-1]
-        if blocks:
-            m_start = w_start + blocks[0].a
-            m_end = w_start + blocks[-1].a + blocks[-1].size
-        else:
-            m_start, m_end = w_start, w_end
+        if not blocks:
+            continue
+        m_start = w_start + blocks[0].a
+        m_end = w_start + blocks[-1].a + blocks[-1].size
         ratio = SequenceMatcher(
             None, corpus[m_start:m_end], needle, autojunk=False
         ).ratio()
-        if best is None or ratio > best[2]:
+        if ratio >= min_ratio and (best is None or ratio > best[2]):
             best = (m_start, m_end, ratio)
     return best
 

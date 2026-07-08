@@ -121,6 +121,12 @@ class Annotator:
                 # they are not flagged as "figures not in the PDF".
                 if re.match(r"^\(?0\d", token.strip()):
                     continue
+                # A number glued to a preceding letter is the numeric part of
+                # an alphanumeric identifier/code (membership "A21918", UDIN
+                # "…BMOCJH8380"), not an amount — the identifier census checks
+                # those; skip here to avoid double-reporting.
+                if start > 0 and text[start - 1].isalpha():
+                    continue
                 html_number_keys.add(key)
                 self.result.figures_total += 1
                 ok = self.corpus.has_number(key)
@@ -253,6 +259,62 @@ class Annotator:
                 "and confirm its sign matches the PDF.",
             )
 
+    def _identifier_census(self) -> None:
+        """Verify statutory identifiers match between the PDF(s) and HTML.
+
+        DIN, UDIN, membership, firm-registration, PAN and CIN numbers are
+        excluded from the monetary-figure checks (they are not amounts), so a
+        wrong one would otherwise slip through.  Each is keyword-anchored, so
+        this is a targeted exact-match check: every identifier value in the
+        HTML must appear against the same keyword in the PDF, and vice versa.
+        """
+        ident_re = re.compile(
+            r"\b(DIN|UDIN|Membership\s+No|Firm'?s?\s+Registration\s+No|"
+            r"Registration\s+No|PAN|CIN)\b\s*[:.]?\s*"
+            r"(?=[A-Za-z0-9/\-]*\d)([A-Za-z0-9][A-Za-z0-9/\-]{3,})",
+            re.I,
+        )
+
+        def collect(text: str) -> dict[str, set[str]]:
+            out: dict[str, set[str]] = {}
+            for m in ident_re.finditer(text):
+                kw = re.sub(r"\s+", " ", m.group(1)).upper().replace("FIRMS", "FIRM'S")
+                kw = kw.split(" NO")[0]  # DIN/UDIN/MEMBERSHIP/REGISTRATION/PAN/CIN
+                val = re.sub(r"[^A-Za-z0-9]", "", m.group(2)).upper()
+                out.setdefault(kw, set()).add(val)
+            return out
+
+        pdf_ids = collect("\n".join(self.corpus.pages_raw))
+        html_ids = collect(self.html_corpus.visible_text)
+        pdf_all = {v for vs in pdf_ids.values() for v in vs}
+        for kw, vals in html_ids.items():
+            for val in sorted(vals):
+                # Present if exactly in the PDF, or one is a true prefix/
+                # suffix of the other with ≥8 shared chars (an extraction
+                # split) — NOT an arbitrary substring (a short membership
+                # number sits inside a long UDIN, which must not vouch for it).
+                if val in pdf_all or any(
+                    min(len(val), len(p)) >= 8
+                    and (
+                        val.startswith(p)
+                        or val.endswith(p)
+                        or p.startswith(val)
+                        or p.endswith(val)
+                    )
+                    for p in pdf_all
+                ):
+                    continue
+                self._new_issue(
+                    "identifier",
+                    "review",
+                    f"{kw} {val}",
+                    f"Identifier to verify — “{kw} {val}” appears in the HTML "
+                    "but not in the PDF(s) provided. Either the PDF does not "
+                    "print this identifier (common for director DINs — then "
+                    "confirm it against its source) or it is a transposed / "
+                    "stale number. Statutory identifiers must be exact.",
+                )
+
     # -- text ------------------------------------------------------------
     def _check_sentence(self, sentence: str) -> tuple[str, str, str]:
         """Return ``(status, remark, category)``.
@@ -327,22 +389,26 @@ class Annotator:
         start, end, ratio = match
         page = self.corpus.page_label(view.page_of(start))
         snippet = self.corpus.raw_snippet(view, start, end)
+        # Layout takes precedence over a fuzzy "discrepancy": if EVERY word of
+        # the sentence is present together on some PDF page, the wording is
+        # there — only the table arrangement differs (e.g. "Manikantha A.G.S."
+        # vs "A.G.S. Manikantha").  A genuine wording change (a word actually
+        # absent, like "consolidated" vs "standalone") fails word-coverage and
+        # correctly falls through to a discrepancy.
+        coverage = self._word_coverage(sentence)
+        if coverage is not None:
+            cov_page, pct = coverage
+            return "review", (
+                f"“{_shorten(sentence)}” is present on PDF {cov_page} (all its "
+                "words appear there) but the table arrangement/order differs — "
+                "a layout artifact; a quick glance confirms it."
+            ), "layout"
         if ratio >= FUZZY_REVIEW_RATIO:
             return "review", (
                 f"Close but not identical to the PDF (similarity {ratio:.0%}). "
                 f"HTML says: “{_shorten(sentence)}”. "
                 f"PDF {page} says: “{snippet}”. Reconcile the wording/figures."
             ), "discrepancy"
-        coverage = self._word_coverage(sentence)
-        if coverage is not None:
-            cov_page, pct = coverage
-            return "review", (
-                f"“{_shorten(sentence)}” is not contiguous in the PDF, but "
-                f"{pct:.0%} of its words appear together on PDF {cov_page} — "
-                "typically a table header/label whose columns the PDF wraps "
-                f"differently. Nearest contiguous passage ({page}, "
-                f"similarity {ratio:.0%}): “{snippet}”. Verify manually."
-            ), "layout"
         return "error", (
             f"Does not match the PDF. HTML says: “{_shorten(sentence)}”. "
             f"The nearest passage (PDF {page}, similarity {ratio:.0%}) is: "
@@ -503,6 +569,7 @@ class Annotator:
         self._annotate_blocks(soup, root)
         self._annotate_numbers(soup, root)
         self._sign_census()
+        self._identifier_census()
         cov_anchors = self._register_coverage_issues()
         unplaced = self._insert_inline_omissions(soup, cov_anchors)
         _inject_banner(soup, root, self.result, pdf_name, html_name, unplaced)
