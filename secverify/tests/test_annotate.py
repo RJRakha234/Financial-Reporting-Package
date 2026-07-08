@@ -325,6 +325,34 @@ def test_shortfall_remark_names_locations_and_html_variant():
     assert "consolidated" in remark                     # the HTML variant
 
 
+def test_figures_swapped_between_line_items_are_caught():
+    # Both values exist in the document, so presence/count checks pass —
+    # only the row-integrity check can see the swap.
+    corpus = make_corpus(
+        ["Trade receivables current portion 27,751\nLoans to employees granted 195"]
+    )
+    good = (
+        "<html><body><table>"
+        "<tr><td>Trade receivables current portion</td><td>27,751</td></tr>"
+        "<tr><td>Loans to employees granted</td><td>195</td></tr>"
+        "</table></body></html>"
+    )
+    result = Annotator(make_corpus(
+        ["Trade receivables current portion 27,751\nLoans to employees granted 195"]
+    )).run(good, "ref.pdf", "doc.html")
+    assert not [i for i in result.issues if "Row integrity" in i.remark]
+
+    swapped = good.replace("<td>27,751</td>", "<td>__X__</td>").replace(
+        "<td>195</td>", "<td>27,751</td>"
+    ).replace("<td>__X__</td>", "<td>195</td>")
+    result = Annotator(corpus).run(swapped, "ref.pdf", "doc.html")
+    rows = [i for i in result.issues if "Row integrity" in i.remark]
+    assert len(rows) == 2  # both rows now show the wrong figure
+    assert all(i.severity == "error" and i.tier == "act" for i in rows)
+    assert any("27,751" in i.remark for i in rows)
+    assert "swapped" in rows[0].remark
+
+
 SECTION_A = (
     "Property plant and equipment are stated at cost less accumulated "
     "depreciation and impairment charges if any thereon"
