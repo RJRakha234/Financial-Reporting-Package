@@ -66,6 +66,14 @@ def to_json(result: Result) -> str:
                 }
                 for oi in result.coverage.order_issues
             ],
+            "assurance": {
+                "figures_validated": result.figures_ok,
+                "figures_total": result.figures_total,
+                "rows_with_figures": result.coverage.rows_with_figures,
+                "rows_value_checked": result.coverage.rows_value_checked,
+                "rows_value_skipped": dict(result.coverage.rows_value_skipped),
+                "low_text_pages": result.coverage.low_text_pages,
+            },
             "pdf_coverage": {
                 "lines_total": result.coverage.total,
                 "reflected": result.coverage.ok,

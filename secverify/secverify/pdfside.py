@@ -50,6 +50,11 @@ class PdfCorpus:
     #: canonical number key -> a raw token as it appeared in the PDF
     number_sample: dict[str, str] = field(default_factory=dict)
     number_counts: Counter = field(default_factory=Counter)
+    #: canonical number key -> how many times it appeared NEGATIVE
+    neg_counts: Counter = field(default_factory=Counter)
+    #: page labels whose text extraction was suspiciously sparse
+    #: (possible scanned / image content the tool cannot read)
+    low_text_pages: list[str] = field(default_factory=list)
 
     def raw_snippet(
         self, view: SearchText, canon_start: int, canon_end: int, max_len: int = 400
@@ -116,9 +121,13 @@ class PdfCorpus:
         return out
 
     def _add_number(self, token: str, key: str, page_no: int) -> None:
+        from .numbers import token_attrs
+
         self.number_counts[key] += 1
         self.number_pages.setdefault(key, Counter())[page_no] += 1
         self.number_sample.setdefault(key, token)
+        if token_attrs(token)[0] < 0:
+            self.neg_counts[key] += 1
 
     def _remove_number(self, key: str, page_no: int) -> None:
         if self.number_counts.get(key, 0) <= 0:
@@ -211,6 +220,14 @@ def load_pdf(path: str | list[str]) -> PdfCorpus:
                 corpus.page_labels.append(
                     f"{stem} p.{doc_page_idx + 1}" if multi else f"p.{page_no}"
                 )
+
+                # A page that yields almost no text is probably scanned /
+                # image-based — its content cannot be read or checked, so it
+                # must be surfaced rather than silently skipped.
+                if len(raw.strip()) < 40:
+                    corpus.low_text_pages.append(
+                        corpus.page_labels[-1]
+                    )
 
                 # Numbers come from tightly-tokenised words so adjacent table
                 # columns can never merge into one figure.  Pure-numeric

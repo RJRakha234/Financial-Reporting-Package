@@ -202,6 +202,52 @@ class Annotator:
                     }
                 )
 
+    def _sign_census(self) -> None:
+        """Document-wide sign check, independent of row-label length.
+
+        A figure's sign is stripped by text canonicalisation and only
+        verified inside the (gated) row check, so a negative shown as
+        positive on a short-label row — e.g. ``Total equity 84,643`` →
+        ``(84,643)`` — passes every other check.  Here the number of
+        NEGATIVE occurrences of each significant magnitude is compared
+        between the PDF and the HTML: any difference means a sign was added
+        or dropped somewhere, whatever the row.
+        """
+        keys = set(self.corpus.neg_counts) | set(self.html_corpus.neg_counts)
+        for key in sorted(keys):
+            token = self.corpus.number_sample.get(key, key)
+            if not is_significant(key, token):
+                continue
+            pdf_neg = self.corpus.neg_counts.get(key, 0)
+            html_neg = self.html_corpus.neg_counts.get(key, 0)
+            if html_neg == pdf_neg:
+                continue
+            if key not in self.html_corpus.number_keys:
+                continue  # absent entirely — reported by the presence check
+            pages = ", ".join(
+                self.corpus.page_label(p)
+                for p in self.corpus.pages_for_number(key)[:5]
+            )
+            if html_neg < pdf_neg:
+                what = (
+                    f"is negative {pdf_neg}× in the PDF but only {html_neg}× in "
+                    "the HTML — a negative (parentheses/minus) appears to have "
+                    "been dropped, turning a deduction into an addition"
+                )
+            else:
+                what = (
+                    f"is negative {pdf_neg}× in the PDF but {html_neg}× in the "
+                    "HTML — a negative has been added that the PDF does not show"
+                )
+            self._new_issue(
+                "sign",
+                "error",
+                token,
+                f"Sign — the figure {token.strip()} {what}. In the PDF it "
+                f"appears on {pages}. Locate every {token.strip()} in the HTML "
+                "and confirm its sign matches the PDF.",
+            )
+
     # -- text ------------------------------------------------------------
     def _check_sentence(self, sentence: str) -> tuple[str, str, str]:
         """Return ``(status, remark, category)``.
@@ -445,9 +491,11 @@ class Annotator:
             self.corpus.letters.canon,
             self.corpus.page_labels,
         )
+        self.result.coverage.low_text_pages = list(self.corpus.low_text_pages)
         self._block_index = _collect_block_index(root)
         self._annotate_blocks(soup, root)
         self._annotate_numbers(soup, root)
+        self._sign_census()
         cov_anchors = self._register_coverage_issues()
         unplaced = self._insert_inline_omissions(soup, cov_anchors)
         _inject_banner(soup, root, self.result, pdf_name, html_name, unplaced)
@@ -482,6 +530,7 @@ class Annotator:
                 "percent": "PERCENT MISMATCH",
                 "row-value": "WRONG FIGURE IN ROW",
                 "duplicate": "DUPLICATED IN HTML",
+                "unit-scale": "UNIT OF SCALE",
             }.get(
                 line.issue_kind,
                 "MISSING FROM HTML"
@@ -658,6 +707,12 @@ _CSS = """
 #secv-summary .sev-error { color: #c00000; font-weight: bold; }
 #secv-summary .sev-review { color: #b8860b; font-weight: bold; }
 .secv-legend span { padding: 1px 6px; margin-right: 10px; }
+#secv-assurance { border: 2px solid #1e8a26; background: #f0fbef; padding: 8px 12px;
+                  margin: 8px 0; border-radius: 3px; }
+#secv-assurance h3 { font-size: 11pt; color: #1e6b24; }
+#secv-assurance ul { font-size: 9pt; }
+#secv-assurance .secv-assure-warn { color: #a00000; font-weight: bold; background: #ffecec;
+                                    padding: 4px 8px; border-radius: 3px; }
 .secv-callout { font: bold 9pt Arial, Helvetica, sans-serif !important;
                 padding: 6px 10px !important; margin: 4px 0; border-radius: 3px; }
 .secv-callout-bad { background: #ff9d9d !important; border: 2px solid #a00000 !important; }
@@ -744,6 +799,55 @@ def _inject_banner(
         else ""
     )
 
+    # Assurance & scope — the tool states its OWN coverage so a reviewer can
+    # see exactly what was and was not machine-verified.
+    cov = result.coverage
+    figs_pct = (
+        round(100 * result.figures_ok / result.figures_total)
+        if result.figures_total
+        else 100
+    )
+    rows_pct = (
+        round(100 * cov.rows_value_checked / cov.rows_with_figures)
+        if cov.rows_with_figures
+        else 100
+    )
+    skip_bits = "".join(
+        f"<li>{n} — {html_mod.escape(reason)}: verified for presence, count "
+        "and sign, but not for column order (a human should eyeball these)</li>"
+        for reason, n in cov.rows_value_skipped.most_common()
+    )
+    warn_pages = (
+        f'<p class="secv-assure-warn">⚠ {len(cov.low_text_pages)} PDF page(s) '
+        f"({', '.join(cov.low_text_pages[:10])}) yielded almost no text — they "
+        "may be scanned/image content that <b>cannot be read or checked</b>. "
+        "Review those pages manually.</p>"
+        if cov.low_text_pages
+        else ""
+    )
+    assurance = f"""
+<div id="secv-assurance">
+<h3 style="margin:0 0 4px 0">Assurance &amp; scope — what was machine-verified</h3>
+<ul style="margin:2px 0">
+<li><b>Text:</b> {cov.ok}/{cov.total} PDF lines reflected in the HTML; every
+HTML sentence checked back against the PDF.</li>
+<li><b>Figures — presence &amp; sign:</b> {result.figures_ok}/{result.figures_total}
+({figs_pct}%) HTML figures found in the PDF; the sign (positive/negative) of
+every significant figure reconciled document-wide.</li>
+<li><b>Figures — placement &amp; order:</b> full value/column-order integrity
+verified on {cov.rows_value_checked}/{cov.rows_with_figures} ({rows_pct}%) of
+figure-bearing rows.{" The remainder:" if skip_bits else ""}</li>
+</ul>
+{f'<ul style="margin:0 0 2px 18px">{skip_bits}</ul>' if skip_bits else ''}
+{warn_pages}
+<p style="font-size:8pt;color:#555;margin:4px 0 0">Not in scope (verify
+separately): totals/subtotals footing (use <code>fincheck</code>); figures
+below 100 and outline/reference numbers; purely visual formatting
+(bold, indentation, colour) and any CSS-driven reordering or hidden text in
+the HTML.</p>
+</div>
+"""
+
     missing_rows = "".join(
         f"<tr><td>{html_mod.escape(m['figure'])}</td>"
         f"<td>{', '.join(str(p) for p in m['pdf_pages'][:8])}</td>"
@@ -814,6 +918,7 @@ reflected in the HTML, {result.coverage.review} to review,
 Omitted PDF content is shown <b>inline</b> as a red callout box at the exact
 position in this document where it should have appeared; the content-order
 check verifies the HTML presents the PDF's content in the PDF's sequence.</p>
+{assurance}
 <h3 style="margin:8px 0 0 0">Items to correct ({len(result.issues)})</h3>
 {issue_table}
 {index_note}

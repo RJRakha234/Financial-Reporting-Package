@@ -286,7 +286,21 @@ def test_sign_flip_is_caught():
     result = Annotator(_row_corpus()).run(_row_html(a="691"), "ref.pdf", "doc.html")
     sign = [i for i in result.issues if i.kind == "sign"]
     assert len(sign) == 1 and sign[0].severity == "error"
-    assert "negative" in sign[0].remark and "positive" in sign[0].remark
+    assert "negative" in sign[0].remark
+    assert "691" in sign[0].excerpt
+
+
+def test_sign_flip_on_short_label_row_is_caught():
+    # The demonstrated audit miss: a short-label row's sign flip must be
+    # caught by the document-wide census, not the (skipped) row check.
+    corpus = make_corpus(["Total equity 84,643 87,332"])
+    html = (
+        "<html><body><table><tr><td>Total equity</td>"
+        "<td>(84,643)</td><td>87,332</td></tr></table></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    sign = [i for i in result.issues if i.kind == "sign"]
+    assert len(sign) == 1 and "84,643" in sign[0].excerpt
 
 
 def test_column_order_swap_is_caught():
@@ -359,6 +373,33 @@ def test_minus_sign_negative_matches_parenthesised_negative():
     )
     result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
     assert not [i for i in result.issues if i.kind == "sign"]
+
+
+def test_unit_scale_change_is_caught():
+    corpus = make_corpus(
+        ["(In ₹ crore)\nTotal assets 1,23,696 1,24,936"]
+    )
+    html = (
+        "<html><body><p>(In ₹ million)</p>"
+        "<p>Total assets 1,23,696 1,24,936</p></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    units = [i for i in result.issues if i.kind == "unit-scale"]
+    assert len(units) == 1 and "crore" in units[0].remark
+    assert "million" in units[0].remark
+
+
+def test_assurance_scope_is_reported():
+    corpus = make_corpus(["Total non current assets 48,443 47,768"])
+    html = (
+        "<html><body><table><tr><td>Total non current assets</td>"
+        "<td>48,443</td><td>47,768</td></tr></table></body></html>"
+    )
+    result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    assert result.coverage.rows_with_figures >= 1
+    assert result.coverage.rows_value_checked >= 1
+    assert "Assurance" in result.html_out
+    assert "machine-verified" in result.html_out
 
 
 def test_scrambled_row_wins_over_similar_sentence_elsewhere():

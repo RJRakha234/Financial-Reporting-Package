@@ -30,6 +30,12 @@ the PDF that the HTML dropped), every line of every PDF page is also checked
 against the HTML — and anything missing is rendered **inline as a red
 callout box at the exact position in the document where the content should
 have appeared** (as a table row when the omission belongs inside a table).
+Every report opens with an **Assurance & scope panel** that states what the
+tool actually machine-verified — the share of figure-rows fully value-checked,
+whether figure signs reconciled document-wide, and any PDF pages too sparse to
+read (possible scans) — alongside the honest out-of-scope caveats. It turns the
+tool's own coverage into a signable statement rather than an implied guarantee.
+
 Six structural detectors run:
 
 * PDF lines whose words are nowhere in the HTML;
@@ -48,6 +54,14 @@ Six structural detectors run:
   canonicalisation); a **₹↔$ currency swap**; and a **gained or lost %**.
   Section/note numbers (`2.15`), identifiers (membership/UDIN numbers),
   and figures-first movement lines are excluded so they cannot misfire;
+* **sign census** — the number of negative occurrences of every significant
+  magnitude is reconciled between PDF and HTML document-wide, so a negative
+  shown as positive (or vice versa) — e.g. `Total equity 84,643` → `(84,643)`
+  — is caught **regardless of the row's label**, closing the gap the row
+  check leaves on short-labelled rows;
+* **unit of scale** — every "in ₹ crore / million / lakh" declaration the
+  PDF makes must appear in the HTML; a silently rescaled table (digits
+  unchanged, unit word altered) is flagged;
 * **extra / duplicated content** — a distinctive line the PDF states once
   but the HTML repeats is flagged: "faithful" is bidirectional, the HTML
   must carry nothing more than the PDF, not merely nothing less;

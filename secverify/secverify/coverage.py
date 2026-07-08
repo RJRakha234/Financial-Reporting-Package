@@ -83,6 +83,14 @@ class CoverageResult:
     index_entries: int = 0
     #: runs of content that appear out of sequence in the HTML
     order_issues: list[OrderIssue] = field(default_factory=list)
+    #: value-integrity coverage — figure-bearing rows fully value-checked vs
+    #: skipped (with the reason), so the report can state its own scope
+    rows_with_figures: int = 0
+    rows_value_checked: int = 0
+    rows_value_skipped: "Counter" = field(default_factory=lambda: __import__(
+        "collections").Counter())
+    #: page labels whose PDF text was too sparse to read (possible scans)
+    low_text_pages: list[str] = field(default_factory=list)
 
     @property
     def missing(self) -> int:
@@ -102,9 +110,14 @@ class HtmlCorpus:
         self.letters, self._letters_map = canonicalize(
             visible_text, letters_only=True
         )
-        self.number_counts: Counter = Counter(
-            key for _s, _e, _t, key in iter_tokens(visible_text)
-        )
+        from .numbers import token_attrs
+
+        self.number_counts: Counter = Counter()
+        self.neg_counts: Counter = Counter()
+        for _s, _e, tok, key in iter_tokens(visible_text):
+            self.number_counts[key] += 1
+            if token_attrs(tok)[0] < 0:
+                self.neg_counts[key] += 1
         self.number_keys = set(self.number_counts)
 
     def letters_snippet(self, start: int, end: int, max_len: int = 200) -> str:
@@ -262,10 +275,8 @@ def _compare_row(
         return "column-order", ""
     for r, wi in zip(row_figs, idx):
         w = win_figs[wi]
-        if r[1] != w[1]:
-            r_txt = "negative" if r[1] < 0 else "positive"
-            w_txt = "negative" if w[1] < 0 else "positive"
-            return "sign", f"figure {r[0]}: PDF {r_txt}, HTML {w_txt}"
+        # Sign is verified document-wide by the sign census (independent of
+        # row-label length), so it is not re-checked here.
         if r[2] and w[2] and r[2] != w[2]:
             # Only a genuine symbol swap (₹↔$); a symbol present on one side
             # and absent on the other is normal (the unit sits in a header).
@@ -571,25 +582,32 @@ def check_pdf_coverage(
                 forms strip and would otherwise pass unseen."""
                 if is_index_entry:
                     return None  # section numbers are not monetary figures
-                if line[:1].isdigit() or line[:2] in ("(1", "(2", "(3", "(4",
-                                                       "(5", "(6", "(7", "(8",
-                                                       "(9", "(0"):
-                    # A line that starts with figures is a movement /
-                    # reconciliation line, not a "label … figures" row; its
-                    # values are covered by presence and count checks.
-                    return None
                 row_figs = [
                     f
                     for f in _rich_figs(line, significant_only=True)
                     if f[0] not in section_ref_keys
                 ]
+                if not row_figs:
+                    return None
+                result.rows_with_figures += 1
+                if line[:1].isdigit() or line[:2] in ("(1", "(2", "(3", "(4",
+                                                       "(5", "(6", "(7", "(8",
+                                                       "(9", "(0"):
+                    # A line that starts with figures is a movement /
+                    # reconciliation line, not a "label … figures" row; its
+                    # values are covered by presence, count and sign checks.
+                    result.rows_value_skipped["figures-first / movement line"] += 1
+                    return None
                 # Distinctive, unambiguously-placed label only: too-short or
                 # repeated-a-different-number-of-times labels risk mispairing,
                 # and other checks already cover those lines.
-                if not row_figs or len(letters) < 12:
+                if len(letters) < 12:
+                    result.rows_value_skipped["short label (<12 chars)"] += 1
                     return None
                 if pdf_letters.count(letters) != html.letters.count(letters):
+                    result.rows_value_skipped["label repeats unevenly"] += 1
                     return None
+                result.rows_value_checked += 1
                 next_letters = ""
                 for nl in page_lines[line_no + 1 :]:
                     nl_letters = canonical(nl, letters_only=True)
@@ -757,9 +775,9 @@ def check_pdf_coverage(
                     label=page_label,
                 )
             )
-    # Extra / duplicated content: a distinctive line the PDF states once but
-    # the HTML repeats.  "Faithful" is bidirectional — the HTML must contain
-    # nothing more than the PDF, not merely nothing less.
+    # Extra / duplicated content: a distinctive line the HTML repeats more
+    # often than the PDF states it.  "Faithful" is bidirectional — the HTML
+    # must contain nothing more than the PDF, not merely nothing less.
     seen_dup: set[str] = set()
     for cl in result.lines:
         if cl.status != "ok":
@@ -767,6 +785,9 @@ def check_pdf_coverage(
         letters_line = canonical(cl.text, letters_only=True)
         if len(letters_line) < ORDER_ANCHOR_MIN_LEN or letters_line in seen_dup:
             continue
+        # Require the PDF to state the line exactly once: repeated table
+        # labels have unstable counts across the two renderings, so only a
+        # single-source line the HTML repeats is an unambiguous duplication.
         if pdf_letters.count(letters_line) != 1:
             continue
         html_n = html.letters.count(letters_line)
@@ -784,5 +805,57 @@ def check_pdf_coverage(
             result.ok -= 1
             result.review += 1
 
+    _unit_scale_check(pages_raw, html, label_of, result)
     result.order_issues = _order_issues(anchors, label_of, result.lines)
     return result
+
+
+#: unit-of-scale declarations that MUST be reproduced faithfully — a table
+#: silently rescaled while the header is unchanged mis-states every figure
+_UNIT_RE = re.compile(
+    r"in\s+(?:₹|rs\.?|inr|us\$|\$|usd)\s*(crore|million|lakh|thousand|billion)",
+    re.I,
+)
+
+
+def _unit_scale_check(pages_raw, html, label_of, result: CoverageResult) -> None:
+    """Every unit-of-scale the PDF declares must appear in the HTML.
+
+    "(In ₹ crore)" vs "(In ₹ million)" changes every figure by orders of
+    magnitude, yet the digits still match — so the unit words themselves are
+    checked explicitly.
+    """
+    from collections import Counter
+
+    pdf_units: Counter = Counter()
+    for raw in pages_raw:
+        for m in _UNIT_RE.finditer(raw):
+            pdf_units[m.group(1).lower()] += 1
+    html_text = html.visible_text.lower()
+    html_units = {
+        u.lower(): len(re.findall(rf"\b{u}\b", html_text))
+        for u in ("crore", "million", "lakh", "thousand", "billion")
+    }
+    for unit, pdf_n in pdf_units.items():
+        if html_units.get(unit, 0) == 0:
+            other = [u for u in html_units if html_units[u] and u != unit]
+            result.review += 1
+            result.total += 1
+            result.lines.append(
+                CoverageLine(
+                    0,
+                    f"(In ₹ {unit})",
+                    "missing",
+                    f"Unit of scale — the PDF reports figures “in ₹ {unit}” "
+                    f"({pdf_n}× ) but the word “{unit}” never appears in the "
+                    "HTML"
+                    + (
+                        f"; the HTML instead uses “{', '.join(other)}”. Every "
+                        "figure would be mis-scaled"
+                        if other
+                        else ". Confirm the reporting unit is stated correctly"
+                    )
+                    + ".",
+                    issue_kind="unit-scale",
+                )
+            )
