@@ -226,13 +226,18 @@ class Annotator:
                 )
 
     def _run_phase1(self) -> None:
-        from .phase1 import check_identifier_association, check_period_dates
+        from .phase1 import check_period_dates
 
         pdf_text = "\n".join(self.corpus.pages_raw)
         html_text = self.html_corpus.visible_text
         add = lambda kind, sev, exc, rem: self._new_issue(kind, sev, exc, rem)  # noqa: E731
         check_period_dates(pdf_text, html_text, add)
-        check_identifier_association(pdf_text, html_text, add)
+        # NOTE: identifier↔name association (B10) is implemented in phase1 but
+        # NOT enabled — these filings' signature blocks are COLUMNAR (names and
+        # DINs on different lines), so text-proximity binding gives a different
+        # (wrong) name on the PDF side than the inline HTML and would false-
+        # flag correct DINs.  Reliable binding needs the geometry engine;
+        # deferred rather than ship a false-positive-prone check.
 
     def _run_phase2(self, soup) -> None:
         from .grid import grid_compare

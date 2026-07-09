@@ -79,21 +79,32 @@ def check_period_dates(pdf_text: str, html_text: str, add_issue) -> None:
         )
 
 
-def _name_words(window: str) -> set[str]:
-    """Personal-name words (title/role words removed) from a text window."""
-    return {
-        w.lower()
-        for w in _NAME_WORD_RE.findall(window)
-        if w.lower() not in _TITLES
-    }
+def _nearest_name(window: str) -> set[str]:
+    """The name-word run IMMEDIATELY before the identifier (its person).
+
+    Walking back from the identifier keyword, skip trailing title/role words
+    (DIN, Membership, …) then collect the contiguous run of name words, and
+    stop at the next title — so a *previous* signatory's name in the same
+    window does not leak in.
+    """
+    words = re.findall(r"[A-Za-z][A-Za-z.]*", window)
+    run: set[str] = set()
+    for w in reversed(words):
+        lw = w.lower().strip(".")
+        if len(lw) < 3 or lw in _TITLES:
+            if run:
+                break  # hit the boundary before the previous name
+            continue   # still skipping trailing title/keyword words
+        run.add(lw)
+    return run
 
 
 def _identifiers_with_names(text: str) -> dict[str, set[str]]:
-    """Map identifier value → the set of personal-name words bound to it."""
+    """Map identifier value → the personal-name words bound to it."""
     out: dict[str, set[str]] = {}
     for m in _IDENT_RE.finditer(text):
         val = re.sub(r"[^A-Za-z0-9]", "", m.group(2)).upper()
-        names = _name_words(text[max(0, m.start() - 80) : m.start()])
+        names = _nearest_name(text[max(0, m.start() - 80) : m.start()])
         out.setdefault(val, set()).update(names)
     return out
 
