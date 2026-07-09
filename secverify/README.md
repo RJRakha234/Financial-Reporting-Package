@@ -16,6 +16,13 @@ both directions** — offline, and writes a **highlighted HTML review copy**:
   surfaces classes the strict checks stay silent on, at the cost of the
   occasional false alarm — so the red list stays trustworthy and this is
   scanned when time allows;
+* **blue figure / blue phrase** *(only with `--review-zones`)* — a
+  **manual-review zone**, not an error: a financial figure sitting in prose, or
+  a note/schedule cross-reference. The engine validates these by presence but
+  cannot verify their *placement* or *target*, so a token-preserving error
+  (Class 2/3 — a prose figure moved to the wrong spot, or "refer Note 12"
+  changed to "Note 21") would pass silently. Blue says "check this by eye."
+  In-table figures are already position-checked and stay green;
 * **red figure / red block** — not found in the PDF. Every red/amber item
   carries a **remark** saying exactly what to correct: a tooltip on hover, a
   `[n]` marker linking to the summary panel at the top, and an HTML comment

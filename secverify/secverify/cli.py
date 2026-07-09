@@ -43,13 +43,23 @@ def main(argv: list[str] | None = None, level: str = "base") -> int:
         default=level,
         help="capability tier (base < alpha < beta < sigma)",
     )
+    parser.add_argument(
+        "--review-zones",
+        action="store_true",
+        help="paint a blue manual-review overlay over prose figures and "
+        "cross-references — the Class 2/3 spots the engine cannot verdict — so "
+        "they can be checked by eye (leaves no chance on token-preserving errors)",
+    )
     args = parser.parse_args(argv)
     for path, kind in [(p, "PDF") for p in args.pdf] + [(args.html, "HTML")]:
         if not Path(path).is_file():
             print(f"error: {kind} file not found: {path}", file=sys.stderr)
             return 2
 
-    result = verify(args.pdf, args.html, output_html=args.output, level=args.level)
+    result = verify(
+        args.pdf, args.html, output_html=args.output, level=args.level,
+        review_zones=args.review_zones,
+    )
 
     print(to_console(result))
     if getattr(result, "output_html", None):

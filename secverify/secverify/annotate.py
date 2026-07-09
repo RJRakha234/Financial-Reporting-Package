@@ -82,12 +82,15 @@ class Annotator:
         corpus: PdfCorpus,
         level: str = "base",
         pdf_paths: "list[str] | None" = None,
+        review_zones: bool = False,
     ):
         self.corpus = corpus
         self.result = Result()
         self._issue_seq = 0
         self.level = level
         self.pdf_paths = pdf_paths or []
+        self.review_zones = review_zones
+        self._zone_counts = (0, 0)
 
     def _at_least(self, name: str) -> bool:
         from . import LEVELS
@@ -634,7 +637,14 @@ class Annotator:
                 self._run_phase3(clean_soup)
         cov_anchors = self._register_coverage_issues()
         unplaced = self._insert_inline_omissions(soup, cov_anchors)
-        _inject_banner(soup, root, self.result, pdf_name, html_name, unplaced)
+        if self.review_zones:
+            from .reviewzones import mark_review_zones
+
+            self._zone_counts = mark_review_zones(soup, root)
+        _inject_banner(
+            soup, root, self.result, pdf_name, html_name, unplaced,
+            zone_counts=self._zone_counts if self.review_zones else None,
+        )
         self.result.html_out = str(soup)
         return self.result
 
@@ -828,6 +838,10 @@ _CSS = """
 .secv-num-ok { background: #52d05c; border-radius: 2px; padding: 0 1px; }
 .secv-num-bad { background: #ff6b6b; outline: 2px solid #a00000; border-radius: 2px;
                 font-weight: bold; padding: 0 1px; }
+.secv-num-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
+                   padding: 0 1px; }
+.secv-xref-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
+                    padding: 0 1px; }
 .secv-text-ok { background: #a4e8a0 !important; border-left: 5px solid #1e8a26 !important; }
 .secv-text-warn { background: #ffd24d !important; outline: 2px solid #9a6a00;
                   border-left: 5px solid #9a6a00 !important; }
@@ -865,6 +879,7 @@ def _inject_banner(
     pdf_name: str,
     html_name: str,
     unplaced: list[tuple[int, CoverageLine]] | None = None,
+    zone_counts: tuple[int, int] | None = None,
 ) -> None:
     style = soup.new_tag("style")
     style.string = _CSS
@@ -1056,6 +1071,26 @@ the HTML.</p>
             f"<ul>{items}</ul>"
         )
 
+    zone_legend = ""
+    zone_note = ""
+    if zone_counts is not None:
+        figs_z, xref_z = zone_counts
+        zone_legend = (
+            '<span class="secv-num-review">blue = manual-review zone '
+            "(verify by eye)</span>"
+        )
+        zone_note = (
+            f'<p style="background:#eaf3ff;border:1px solid #1560c0;padding:6px 10px">'
+            f"<b>🔵 Manual-review overlay ON.</b> The tool cannot machine-verify two "
+            f"error families that leave every token in place — a value/figure moved "
+            f"to the wrong spot in <i>prose</i> (Class 2) or a wrong "
+            f"note/schedule cross-reference (Class 3). To leave no chance on these, "
+            f"the {figs_z} prose figures and {xref_z} cross-references below are "
+            f"painted <span class='secv-num-review'>blue</span> — these are "
+            f"<i>locations to check by eye</i>, not errors. In-table figures are "
+            f"already position-checked and stay green.</p>"
+        )
+
     banner_html = f"""
 <div id="secv-summary">
 <h2>secverify — PDF ↔ HTML validation report</h2>
@@ -1067,7 +1102,9 @@ the HTML.</p>
 <span class="secv-text-ok">green block = text matches PDF</span>
 <span class="secv-text-warn">amber block = close match, review wording</span>
 <span class="secv-text-bad">red block = text not in PDF</span>
+{zone_legend}
 </p>
+{zone_note}
 <p><b>HTML → PDF &nbsp;·&nbsp; Figures:</b> {ok_pct} validated ({result.figures_bad} not found) &nbsp;·&nbsp;
 <b>Text blocks:</b> {result.text_blocks_ok}/{result.text_blocks_total} matched,
 {result.text_blocks_review} need review, {result.text_blocks_bad} not found</p>

@@ -92,3 +92,33 @@ def test_superset_pdf_binding_not_flagged(monkeypatch):
         ["x.pdf"], html, lambda k, s, e, r: issues.append(k)
     )
     assert not issues
+
+
+# ---- blue manual-review overlay (Class 2/3 zones) -----------------------
+
+def test_review_zones_marks_prose_figures_and_xrefs():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    pages = ["Revenue was 500 crore refer note 12 for details"]
+    html = (
+        "<html><body><p>Revenue was 500 crore refer note 12 for details</p>"
+        "<table><tr><td>Revenue</td><td>500</td></tr></table></body></html>"
+    )
+    r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                  review_zones=True).run(html, "ref.pdf", "doc.html")
+    out = r.html_out
+    assert 'class="secv-num-review"' in out    # a prose figure painted blue
+    assert 'class="secv-xref-review"' in out   # the cross-reference painted blue
+    # in-table figure stays green, not blue
+    assert 'class="secv-num-ok"' in out
+
+    # overlay is OFF by default (the class name still appears in the CSS block,
+    # so assert on the actual span attribute, which must be absent)
+    r2 = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"]).run(
+        html, "ref.pdf", "doc.html"
+    )
+    assert 'class="secv-num-review"' not in r2.html_out
+    assert 'class="secv-xref-review"' not in r2.html_out
