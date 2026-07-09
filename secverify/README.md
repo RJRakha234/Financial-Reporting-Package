@@ -88,12 +88,39 @@ python -m secverify statement.pdf exv99w09.html -o reviewed.html --json report.j
 Exits `1` when inconsistencies are found, `0` when everything validates —
 handy in CI or a release checklist.
 
+## Capability levels (base · alpha · beta · sigma)
+
+Every check above runs at the default **base** level. Three cumulative tiers
+add further checks on the *same* engine — each is a superset of the one before,
+so a higher tier finds everything a lower one does, plus more. Select a tier
+with `--level`, or run the named entry point:
+
+| Tier | Adds | Command |
+| --- | --- | --- |
+| **base** | all core text / figure / row-value / sign / order checks | `python -m secverify …` |
+| **alpha** | + **reporting-period date header** (Phase 1) — a current or comparative period date in the HTML that appears nowhere in the PDF is flagged; historical narrative dates are ignored so they never misfire | `python -m secverify.toolalpha …` |
+| **beta** | + **table-grid cell comparison** (Phase 2) — the PDF grid is rebuilt from word geometry and compared cell-by-cell against `<table>` rows, catching a **wrong value that exists elsewhere** (so presence passes) and a **column transpose** on distinctive, once-only rows | `python -m secverify.toolbeta …` |
+| **sigma** | + **hidden text & scanned-page OCR** (Phase 3) — HTML text present in the DOM but rendered invisible (`display:none`, `visibility:hidden`, off-screen) is surfaced, and PDF pages too sparse to extract are OCR-read or reported as un-checkable | `python -m secverify.toolsigma …` |
+
+Each tier is held to the same **zero-false-positive** bar: on all reference
+filings tested, alpha, beta and sigma add **no** issues to a correct document —
+they only speak when they have a concrete discrepancy to report. Two checks are
+deliberately *not* enabled because they cannot be made both zero-FP and useful
+from text alone: **identifier↔name association** (columnar signature blocks put
+the DIN and the name on different lines, so proximity binds the wrong name) and
+a **pixel render-diff** (a paginated PDF and a single-flow HTML never align).
+Both are left to human review rather than shipped as false-positive sources.
+
+`--level` and the tool names are interchangeable — `toolbeta` is exactly
+`--level beta`.
+
 ## Use it (library)
 
 ```python
 from secverify import verify
 
-result = verify("statement.pdf", "exv99w09.html", output_html="reviewed.html")
+result = verify("statement.pdf", "exv99w09.html", output_html="reviewed.html",
+                level="beta")  # base | alpha | beta | sigma (default: base)
 print(result.figures_ok, "/", result.figures_total, "figures validated")
 for issue in result.issues:
     print(f"#{issue.num} [{issue.kind}/{issue.severity}]", issue.remark)
