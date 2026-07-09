@@ -10,6 +10,12 @@ both directions** — offline, and writes a **highlighted HTML review copy**:
 * **green block** — the text matches the PDF;
 * **amber block** — close match, review manually (e.g. a table header the PDF
   wraps across columns, or wording that differs slightly);
+* **brown — “possible issues (lower confidence)”** — a separate, opt-in summary
+  bucket for checks *not* held to the zero-false-alarm bar of the red list
+  (e.g. a wrong value or transposed column inside a wide movement matrix). It
+  surfaces classes the strict checks stay silent on, at the cost of the
+  occasional false alarm — so the red list stays trustworthy and this is
+  scanned when time allows;
 * **red figure / red block** — not found in the PDF. Every red/amber item
   carries a **remark** saying exactly what to correct: a tooltip on hover, a
   `[n]` marker linking to the summary panel at the top, and an HTML comment
@@ -99,7 +105,7 @@ with `--level`, or run the named entry point:
 | --- | --- | --- |
 | **base** | all core text / figure / row-value / sign / order checks | `python -m secverify …` |
 | **alpha** | + **reporting-period date header** (Phase 1) — a current or comparative period date in the HTML that appears nowhere in the PDF is flagged; historical narrative dates are ignored so they never misfire | `python -m secverify.toolalpha …` |
-| **beta** | + **table-grid cell comparison** (Phase 2) — the PDF grid is rebuilt from word geometry and compared cell-by-cell against `<table>` rows, catching a **wrong value that exists elsewhere** (so presence passes), a **column transpose**, and a **wrong value on a repeated-label row** (a line item's current/non-current portions, a "total" in several schedules) — each flagged only when the figures appear against that label nowhere in the PDF | `python -m secverify.toolbeta …` |
+| **beta** | + **table-grid cell comparison** (Phase 2) — the PDF grid is rebuilt from word geometry and compared cell-by-cell against `<table>` rows, catching a **wrong value that exists elsewhere** (so presence passes), a **column transpose**, and a **wrong value on a repeated-label row** (a line item's current/non-current portions, a "total" in several schedules) — each flagged only when the figures appear against that label nowhere in the PDF. Primary-statement rows (2 periods) are hard **red**; **wide movement matrices** (changes in equity, PP&E, 4+ columns) surface in the **brown lower-confidence bucket** | `python -m secverify.toolbeta …` |
 | **sigma** | + **hidden text & scanned-page OCR** (Phase 3), and **geometry-bound identifier↔name association** — HTML text present in the DOM but rendered invisible (`display:none`, `visibility:hidden`, off-screen) is surfaced; PDF pages too sparse to extract are OCR-read or reported as un-checkable; and a statutory identifier (a director's DIN, a partner's membership/UDIN) bound to the **wrong person** is caught | `python -m secverify.toolsigma …` |
 
 Each tier is held to the same **zero-false-positive** bar: on all reference

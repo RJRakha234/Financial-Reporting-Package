@@ -161,6 +161,47 @@ def test_beta_repeated_label_swapped_schedule_not_flagged():
     assert not [i for i in r.issues if i.kind == "grid-value"]
 
 
+# A wide movement matrix (5 value columns) — the "caution" (brown) tier.
+_WIDE = "\n".join(
+    [
+        "Statement of changes in equity",
+        "Balance at April 1 2024 100 200 300 400 1000",
+        "Profit for the period 11 22 33 44 110",
+        "Other comprehensive income 1 2 3 4 10",
+        "Dividends paid 5 6 7 8 26",
+        "Balance at June 30 2024 117 230 343 456 1146",
+    ]
+)
+
+
+def _wide_html(p1="11", p2="22"):
+    return (
+        "<html><body><table>"
+        "<tr><th>Particulars</th><th>a</th><th>b</th><th>c</th><th>d</th><th>e</th></tr>"
+        "<tr><td>Balance at April 1 2024</td><td>100</td><td>200</td><td>300</td><td>400</td><td>1000</td></tr>"
+        f"<tr><td>Profit for the period</td><td>{p1}</td><td>{p2}</td><td>33</td><td>44</td><td>110</td></tr>"
+        "<tr><td>Other comprehensive income</td><td>1</td><td>2</td><td>3</td><td>4</td><td>10</td></tr>"
+        "<tr><td>Dividends paid</td><td>5</td><td>6</td><td>7</td><td>8</td><td>26</td></tr>"
+        "<tr><td>Balance at June 30 2024</td><td>117</td><td>230</td><td>343</td><td>456</td><td>1146</td></tr>"
+        "</table></body></html>"
+    )
+
+
+def test_wide_matrix_clean_no_issue():
+    r = run([_WIDE], _wide_html(), "beta")
+    assert not [i for i in r.issues if i.kind.startswith("grid")]
+
+
+def test_wide_matrix_flagged_as_caution_not_error():
+    # columns 1 and 2 of the profit row transposed inside a 5-column matrix
+    r = run([_WIDE], _wide_html(p1="22", p2="11"), "beta")
+    grid = [i for i in r.issues if i.kind.startswith("grid")]
+    assert grid, "wide-matrix mismatch should be surfaced"
+    assert all(i.severity == "caution" and i.tier == "caution" for i in grid)
+    # and it must NOT contaminate the red/act tier
+    assert not [i for i in r.issues if i.kind.startswith("grid") and i.severity == "error"]
+
+
 def test_grid_off_below_beta():
     r = run([_STMT], _stmt_html(pp="47768"), "alpha")
     assert not [i for i in r.issues if i.kind.startswith("grid")]

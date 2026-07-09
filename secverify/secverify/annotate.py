@@ -40,13 +40,15 @@ FUZZY_REVIEW_RATIO = 0.80  # ≥ this but not exact → amber "review"
 class Issue:
     num: int
     kind: str      # "figure" | "text" | "omission" | "figure-count"
-    severity: str  # "error" | "review"
+    severity: str  # "error" | "review" | "caution"
     excerpt: str
     remark: str
     anchor: str
     #: triage tier: "act" = concrete discrepancy to fix; "absent" = content
     #: with no counterpart in this PDF (verify against its own source);
-    #: "layout" = words verified on the cited page, print order differs
+    #: "layout" = words verified on the cited page, print order differs;
+    #: "caution" = lower-confidence possible issue (wide matrices etc.) that may
+    #: include the occasional false alarm — kept out of the zero-FP "act" tier
     tier: str = "act"
 
 
@@ -245,7 +247,8 @@ class Annotator:
         for kind, sev, exc, rem in grid_compare(
             self.corpus, clean_soup, self.pdf_paths
         ):
-            self._new_issue(kind, sev, exc, rem)
+            tier = "caution" if sev == "caution" else "act"
+            self._new_issue(kind, sev, exc, rem, tier=tier)
 
     def _run_phase3(self, clean_soup) -> None:
         from .render import render_and_hidden_checks
@@ -840,6 +843,7 @@ _CSS = """
                                      text-align: left; font-size: 9pt; vertical-align: top; }
 #secv-summary .sev-error { color: #c00000; font-weight: bold; }
 #secv-summary .sev-review { color: #b8860b; font-weight: bold; }
+#secv-summary .sev-caution { color: #8a5a2b; font-weight: bold; }
 .secv-legend span { padding: 1px 6px; margin-right: 10px; }
 #secv-assurance { border: 2px solid #1e8a26; background: #f0fbef; padding: 8px 12px;
                   margin: 8px 0; border-radius: 3px; }
@@ -904,6 +908,7 @@ def _inject_banner(
     act_n = sum(1 for i in result.issues if i.tier == "act")
     absent_n = sum(1 for i in result.issues if i.tier == "absent")
     layout_n = sum(1 for i in result.issues if i.tier == "layout")
+    caution_n = sum(1 for i in result.issues if i.tier == "caution")
 
     issue_table = ""
     if act_n:
@@ -920,6 +925,17 @@ def _inject_banner(
             f"({absent_n})</b> — e.g. the auditor's report or SEC-only labels; "
             "verify against their own source document (click to expand)"
             f"</summary>{tier_rows('absent')}</details>"
+        )
+    if caution_n:
+        issue_table += (
+            f"<details><summary><b>🟤 Possible issues — lower confidence "
+            f"({caution_n})</b> — checks that are not held to the zero-false-"
+            "alarm bar of the red list, so this bucket <i>may</i> include the "
+            "occasional false alarm. It surfaces classes the strict checks stay "
+            "silent on (e.g. a value or column order inside a wide movement "
+            "matrix). Scan it when you have time; a red list item always takes "
+            f"priority (click to expand)</summary>{tier_rows('caution')}"
+            "</details>"
         )
     if layout_n:
         issue_table += (

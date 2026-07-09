@@ -29,11 +29,15 @@ MIN_STATEMENT_ROWS = 5
 MIN_ALIGN_RATIO = 0.85
 #: a row pair is only compared when the labels match at least this well
 MIN_ROW_LABEL_RATIO = 0.95
-#: only rows with this many period figures are compared — the primary
-#: statements (2 periods, optionally a note-ref column already stripped).
-#: Wider movement/roll-forward matrices (changes in equity, PP&E) are the
-#: cross-tabulated tables that mis-align, so they are excluded.
+#: primary-statement rows — 2 periods (optionally a note-ref column already
+#: stripped).  A mismatch here is reported as a hard "error" (red).
 ALLOWED_FIG_COUNTS = (2, 3)
+#: wider movement/roll-forward matrices (changes in equity, PP&E, tax
+#: reconciliations).  The same "no counterpart anywhere" rule is zero-false-
+#: positive on these too, but wide cross-tabulated tables are harder to parse,
+#: so a mismatch is reported at the lower-confidence "caution" tier (brown)
+#: rather than as a hard error.
+WIDE_FIG_COUNTS = (4, 5, 6, 7)
 
 _DATE_RE = re.compile(
     r"[A-Za-z]{3,9}\s+\d{1,2},?\s+(?:19|20)\d{2}|\b(?:19|20)\d{2}\b"
@@ -170,13 +174,16 @@ def grid_compare(corpus, soup, pdf_paths):
     emitted: set[tuple] = set()
     for html_rows in html_tables:
         for hlbl, hfigs in html_rows:
-            if (
-                len(hlbl) < 12
-                or len(hfigs) not in ALLOWED_FIG_COUNTS
-                or "refertonote" in hlbl          # note cross-reference row
-            ):
+            n = len(hfigs)
+            if len(hlbl) < 12 or "refertonote" in hlbl:
                 continue
-            cands = [c for c in candidates(hlbl) if len(c) == len(hfigs)]
+            if n in ALLOWED_FIG_COUNTS:
+                severity, wide = "error", False
+            elif n in WIDE_FIG_COUNTS:
+                severity, wide = "caution", True
+            else:
+                continue
+            cands = [c for c in candidates(hlbl) if len(c) == n]
             if not cands:
                 continue  # label not locatable in the PDF → base checks apply
             if any(c == hfigs for c in cands):
@@ -186,22 +193,28 @@ def grid_compare(corpus, soup, pdf_paths):
                 continue
             emitted.add(sig)
             pfigs = cands[0]
+            wide_note = (
+                " This is a wide movement matrix (harder to parse), so it is "
+                "flagged as a lower-confidence check — verify rather than assume."
+                if wide else ""
+            )
             if any(sorted(c) == sorted(hfigs) for c in cands):
                 yield (
                     "grid-column-order",
-                    "error",
+                    severity,
                     f"{hlbl}: HTML {' '.join(hfigs)} / PDF {' '.join(pfigs)}",
                     f"Table column order — row “{hlbl}” has the same figures "
                     f"in a different order: HTML {', '.join(hfigs)} vs PDF "
                     f"{', '.join(pfigs)}. The comparative columns may be "
-                    "transposed.",
+                    f"transposed.{wide_note}",
                 )
             else:
                 yield (
                     "grid-value",
-                    "error",
+                    severity,
                     f"{hlbl}: HTML {' '.join(hfigs)} / PDF {' '.join(pfigs)}",
                     f"Table cell value — row “{hlbl}” shows {', '.join(hfigs)} "
                     f"in the HTML but no PDF row carrying that label has those "
-                    f"figures (closest: {', '.join(pfigs)}). Verify this row.",
+                    f"figures (closest: {', '.join(pfigs)}). Verify this "
+                    f"row.{wide_note}",
                 )
