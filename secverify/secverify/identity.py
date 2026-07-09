@@ -149,11 +149,11 @@ def check_identifier_geometry(pdf_paths, html_text, add_issue) -> None:
         if pdf_names and html_names and not (pdf_names & html_names):
             add_issue(
                 "identifier-name",
-                "review",
+                "error",
                 f"{val} ↔ {', '.join(sorted(html_names))}",
                 f"Identifier association — in the HTML {val} sits against "
                 f"“{', '.join(sorted(html_names))}”, but in the PDF the same "
                 f"number belongs to “{', '.join(sorted(pdf_names))}” (matched by "
-                "its position in the signature block). The number may have been "
-                "placed against the wrong person; verify.",
+                "its position in the signature block). The number appears to be "
+                "placed against the wrong person; correct it.",
             )
