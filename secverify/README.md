@@ -99,7 +99,7 @@ with `--level`, or run the named entry point:
 | --- | --- | --- |
 | **base** | all core text / figure / row-value / sign / order checks | `python -m secverify …` |
 | **alpha** | + **reporting-period date header** (Phase 1) — a current or comparative period date in the HTML that appears nowhere in the PDF is flagged; historical narrative dates are ignored so they never misfire | `python -m secverify.toolalpha …` |
-| **beta** | + **table-grid cell comparison** (Phase 2) — the PDF grid is rebuilt from word geometry and compared cell-by-cell against `<table>` rows, catching a **wrong value that exists elsewhere** (so presence passes) and a **column transpose** on distinctive, once-only rows | `python -m secverify.toolbeta …` |
+| **beta** | + **table-grid cell comparison** (Phase 2) — the PDF grid is rebuilt from word geometry and compared cell-by-cell against `<table>` rows, catching a **wrong value that exists elsewhere** (so presence passes), a **column transpose**, and a **wrong value on a repeated-label row** (a line item's current/non-current portions, a "total" in several schedules) — each flagged only when the figures appear against that label nowhere in the PDF | `python -m secverify.toolbeta …` |
 | **sigma** | + **hidden text & scanned-page OCR** (Phase 3), and **geometry-bound identifier↔name association** — HTML text present in the DOM but rendered invisible (`display:none`, `visibility:hidden`, off-screen) is surfaced; PDF pages too sparse to extract are OCR-read or reported as un-checkable; and a statutory identifier (a director's DIN, a partner's membership/UDIN) bound to the **wrong person** is caught | `python -m secverify.toolsigma …` |
 
 Each tier is held to the same **zero-false-positive** bar: on all reference

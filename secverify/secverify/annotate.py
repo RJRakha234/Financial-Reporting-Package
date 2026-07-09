@@ -239,20 +239,20 @@ class Annotator:
         # flag correct DINs.  Reliable binding needs the geometry engine;
         # deferred rather than ship a false-positive-prone check.
 
-    def _run_phase2(self, soup) -> None:
+    def _run_phase2(self, clean_soup) -> None:
         from .grid import grid_compare
 
         for kind, sev, exc, rem in grid_compare(
-            self.corpus, soup, self.pdf_paths
+            self.corpus, clean_soup, self.pdf_paths
         ):
             self._new_issue(kind, sev, exc, rem)
 
-    def _run_phase3(self, soup) -> None:
+    def _run_phase3(self, clean_soup) -> None:
         from .render import render_and_hidden_checks
         from .identity import check_identifier_geometry
 
         for kind, sev, exc, rem in render_and_hidden_checks(
-            self.corpus, soup, self.pdf_paths
+            self.corpus, clean_soup, self.pdf_paths
         ):
             self._new_issue(kind, sev, exc, rem)
         # geometry-bound identifier↔name association (B10) — see identity.py
@@ -620,10 +620,15 @@ class Annotator:
         self._identifier_census()
         if self._at_least("alpha"):
             self._run_phase1()
-        if self._at_least("beta"):
-            self._run_phase2(soup)
-        if self._at_least("sigma"):
-            self._run_phase3(soup)
+        # Phases 2/3 parse a pristine copy of the HTML: the number/block
+        # annotation above injects "[n]" summary markers into cells, which
+        # would otherwise pollute table-cell figure extraction.
+        if self._at_least("beta") or self._at_least("sigma"):
+            clean_soup = BeautifulSoup(html_text, "html.parser")
+            if self._at_least("beta"):
+                self._run_phase2(clean_soup)
+            if self._at_least("sigma"):
+                self._run_phase3(clean_soup)
         cov_anchors = self._register_coverage_issues()
         unplaced = self._insert_inline_omissions(soup, cov_anchors)
         _inject_banner(soup, root, self.result, pdf_name, html_name, unplaced)

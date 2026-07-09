@@ -94,6 +94,73 @@ def test_beta_catches_column_transpose():
     assert [i for i in r.issues if i.kind == "grid-column-order"]
 
 
+# A doc where "Government securities" recurs (current + non-current schedules)
+# with different correct values — the repeated-label case positional alignment
+# could not handle without false positives.
+_REPEAT = "\n".join(
+    [
+        "Schedule of current investments",
+        "Government securities 100 200",
+        "Certificates of deposit 111 222",
+        "Commercial papers 333 444",
+        "Treasury bills 555 666",
+        "Total current investments 1099 1532",
+        "Schedule of non current investments",
+        "Government securities 300 400",
+        "Tax free bonds 121 131",
+        "Equity shares 141 151",
+        "Preference shares 161 171",
+        "Total non current investments 723 853",
+    ]
+)
+
+
+def _repeat_html(cur="100", cur2="200"):
+    def tbl(gov1, gov2, rows):
+        body = f"<tr><td>Government securities</td><td>{gov1}</td><td>{gov2}</td></tr>"
+        body += "".join(
+            f"<tr><td>{l}</td><td>{a}</td><td>{b}</td></tr>" for l, a, b in rows
+        )
+        return "<table>" + body + "</table>"
+
+    cur_rows = [("Certificates of deposit", 111, 222),
+                ("Commercial papers", 333, 444),
+                ("Treasury bills", 555, 666),
+                ("Total current investments", 1099, 1532)]
+    non_rows = [("Tax free bonds", 121, 131),
+                ("Equity shares", 141, 151),
+                ("Preference shares", 161, 171),
+                ("Total non current investments", 723, 853)]
+    return (
+        "<html><body>"
+        + tbl(cur, cur2, cur_rows)
+        + tbl("300", "400", non_rows)
+        + "</body></html>"
+    )
+
+
+def test_beta_clean_repeated_label_no_issue():
+    r = run([_REPEAT], _repeat_html(), "beta")
+    assert not [i for i in r.issues if i.kind.startswith("grid")]
+
+
+def test_beta_catches_wrong_value_on_repeated_label():
+    # "Government securities" in the current schedule is 700/800 — a value that
+    # appears against that label nowhere in the PDF (300/400 is the other
+    # schedule's correct figure), so it must be flagged.
+    r = run([_REPEAT], _repeat_html(cur="700", cur2="800"), "beta")
+    gv = [i for i in r.issues if i.kind == "grid-value"]
+    assert gv and "governmentsecurities" in gv[0].excerpt
+
+
+def test_beta_repeated_label_swapped_schedule_not_flagged():
+    # current-schedule row carries the NON-current schedule's correct figures;
+    # that pair exists against the label in the PDF, so it is (correctly) not
+    # flagged — the conservative, zero-false-positive trade-off.
+    r = run([_REPEAT], _repeat_html(cur="300", cur2="400"), "beta")
+    assert not [i for i in r.issues if i.kind == "grid-value"]
+
+
 def test_grid_off_below_beta():
     r = run([_STMT], _stmt_html(pp="47768"), "alpha")
     assert not [i for i in r.issues if i.kind.startswith("grid")]

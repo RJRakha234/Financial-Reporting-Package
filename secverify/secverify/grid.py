@@ -113,15 +113,14 @@ def grid_compare(corpus, soup, pdf_paths):
     """Yield ``(kind, severity, excerpt, remark)`` for grid cell mismatches.
 
     A HTML statement row is flagged only when its exact ``(label, ordered
-    figures)`` has **no counterpart anywhere in the PDF's geometry rows** —
-    which is immune to row/page mis-alignment (a value that is merely
-    mis-paired in the comparison still exists correctly elsewhere and is not
-    flagged).  It also requires the label to be distinctive and to occur
-    exactly once per side, so repeated movement-matrix labels ("additions",
-    "total") cannot trigger it.
+    figures)`` has **no counterpart anywhere in the PDF's rows** — which is
+    immune to row/page mis-alignment (a value that is merely mis-paired in the
+    comparison still exists correctly elsewhere and is not flagged).  Because
+    the counterpart is sought against *every* PDF row carrying the label, this
+    holds for repeated labels too ("total", "government securities", a line
+    item's current and non-current portions), so those rows are checked
+    without the false positives that positional table alignment produced.
     """
-    from collections import Counter
-
     html_tables = [
         r
         for r in (_parse_html_rows(t) for t in soup.find_all("table"))
@@ -159,12 +158,15 @@ def grid_compare(corpus, soup, pdf_paths):
                     cands.append(pf)
         return cands
 
-    # Labels that recur anywhere in the HTML are sub-table rows (fair-value
-    # hierarchy levels, valuation columns) — inherently ambiguous, skip them.
-    all_html_label_counts = Counter(
-        hlbl for rows in html_tables for hlbl, f in rows if hlbl and f
-    )
-
+    # A row is flagged only when its (label, figures) has NO counterpart
+    # anywhere in the PDF.  That immunity holds for a REPEATED label too: a
+    # line item that recurs (its current and non-current portions, a "total"
+    # in several schedules) is checked against *all* PDF rows carrying that
+    # label, so the correct value — which always appears against the label
+    # somewhere — is never flagged, while a value that appears against the
+    # label nowhere is.  This is what lets repeated rows be checked without the
+    # false positives that per-table positional alignment produced (a coarse
+    # region merges sub-tables whose same-named rows hold different figures).
     emitted: set[tuple] = set()
     for html_rows in html_tables:
         for hlbl, hfigs in html_rows:
@@ -172,7 +174,6 @@ def grid_compare(corpus, soup, pdf_paths):
                 len(hlbl) < 12
                 or len(hfigs) not in ALLOWED_FIG_COUNTS
                 or "refertonote" in hlbl          # note cross-reference row
-                or all_html_label_counts[hlbl] != 1  # recurs across sub-tables
             ):
                 continue
             cands = [c for c in candidates(hlbl) if len(c) == len(hfigs)]
@@ -201,6 +202,6 @@ def grid_compare(corpus, soup, pdf_paths):
                     "error",
                     f"{hlbl}: HTML {' '.join(hfigs)} / PDF {' '.join(pfigs)}",
                     f"Table cell value — row “{hlbl}” shows {', '.join(hfigs)} "
-                    f"in the HTML but {', '.join(pfigs)} in the PDF (matched by "
-                    "unique row label). Verify this row's figures.",
+                    f"in the HTML but no PDF row carrying that label has those "
+                    f"figures (closest: {', '.join(pfigs)}). Verify this row.",
                 )
