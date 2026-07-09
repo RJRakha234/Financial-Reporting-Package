@@ -237,7 +237,9 @@ class Annotator:
     def _run_phase2(self, soup) -> None:
         from .grid import grid_compare
 
-        for kind, sev, exc, rem in grid_compare(self.corpus, soup):
+        for kind, sev, exc, rem in grid_compare(
+            self.corpus, soup, self.pdf_paths
+        ):
             self._new_issue(kind, sev, exc, rem)
 
     def _run_phase3(self, soup) -> None:
