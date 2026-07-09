@@ -100,16 +100,27 @@ with `--level`, or run the named entry point:
 | **base** | all core text / figure / row-value / sign / order checks | `python -m secverify …` |
 | **alpha** | + **reporting-period date header** (Phase 1) — a current or comparative period date in the HTML that appears nowhere in the PDF is flagged; historical narrative dates are ignored so they never misfire | `python -m secverify.toolalpha …` |
 | **beta** | + **table-grid cell comparison** (Phase 2) — the PDF grid is rebuilt from word geometry and compared cell-by-cell against `<table>` rows, catching a **wrong value that exists elsewhere** (so presence passes) and a **column transpose** on distinctive, once-only rows | `python -m secverify.toolbeta …` |
-| **sigma** | + **hidden text & scanned-page OCR** (Phase 3) — HTML text present in the DOM but rendered invisible (`display:none`, `visibility:hidden`, off-screen) is surfaced, and PDF pages too sparse to extract are OCR-read or reported as un-checkable | `python -m secverify.toolsigma …` |
+| **sigma** | + **hidden text & scanned-page OCR** (Phase 3), and **geometry-bound identifier↔name association** — HTML text present in the DOM but rendered invisible (`display:none`, `visibility:hidden`, off-screen) is surfaced; PDF pages too sparse to extract are OCR-read or reported as un-checkable; and a statutory identifier (a director's DIN, a partner's membership/UDIN) bound to the **wrong person** is caught | `python -m secverify.toolsigma …` |
 
 Each tier is held to the same **zero-false-positive** bar: on all reference
 filings tested, alpha, beta and sigma add **no** issues to a correct document —
-they only speak when they have a concrete discrepancy to report. Two checks are
-deliberately *not* enabled because they cannot be made both zero-FP and useful
-from text alone: **identifier↔name association** (columnar signature blocks put
-the DIN and the name on different lines, so proximity binds the wrong name) and
-a **pixel render-diff** (a paginated PDF and a single-flow HTML never align).
-Both are left to human review rather than shipped as false-positive sources.
+they only speak when they have a concrete discrepancy to report.
+
+**Identifier↔name association** (B10) is done in sigma by **word geometry**, not
+text. Signature blocks are columnar — each signatory is a vertical column of
+name / title / DIN, and the columns sit side by side — so flattening the PDF to
+reading order collapses them and binds a DIN to the wrong nearest name. Sigma
+instead ties each identifier to the name whose *column* (x-position) it sits
+under, reconstructing the true pairing; the HTML side keeps preceding-name
+proximity (a single linear flow, so the name before a DIN is the right one). A
+mismatch is reported only when both sides bind the number to a real name and
+those names share no word — so column bleed can only make the check more
+conservative, never raise a false positive.
+
+One class is still left to human review: a **pixel render-diff** of visual
+formatting (indentation, bold, ruling lines). A paginated PDF and a single-flow
+HTML never align page-to-page, so a pixel diff would be dominated by false
+positives — that is honestly deferred rather than shipped as a noise source.
 
 `--level` and the tool names are interchangeable — `toolbeta` is exactly
 `--level beta`.

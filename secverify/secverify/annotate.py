@@ -249,11 +249,17 @@ class Annotator:
 
     def _run_phase3(self, soup) -> None:
         from .render import render_and_hidden_checks
+        from .identity import check_identifier_geometry
 
         for kind, sev, exc, rem in render_and_hidden_checks(
             self.corpus, soup, self.pdf_paths
         ):
             self._new_issue(kind, sev, exc, rem)
+        # geometry-bound identifier↔name association (B10) — see identity.py
+        add = lambda kind, sev, exc, rem: self._new_issue(kind, sev, exc, rem)  # noqa: E731
+        check_identifier_geometry(
+            self.pdf_paths, self.html_corpus.visible_text, add
+        )
 
     def _sign_census(self) -> None:
         """Document-wide sign check, independent of row-label length.

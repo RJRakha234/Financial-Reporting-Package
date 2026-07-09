@@ -91,10 +91,12 @@ def _nearest_name(window: str) -> set[str]:
     run: set[str] = set()
     for w in reversed(words):
         lw = w.lower().strip(".")
-        if len(lw) < 3 or lw in _TITLES:
+        if lw in _TITLES:
             if run:
-                break  # hit the boundary before the previous name
+                break  # a title word is the boundary before the previous name
             continue   # still skipping trailing title/keyword words
+        if len(lw) < 3:
+            continue   # a middle initial ("M.") — part of the name, not a break
         run.add(lw)
     return run
 
