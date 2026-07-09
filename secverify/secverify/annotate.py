@@ -75,10 +75,22 @@ class Result:
 
 
 class Annotator:
-    def __init__(self, corpus: PdfCorpus):
+    def __init__(
+        self,
+        corpus: PdfCorpus,
+        level: str = "base",
+        pdf_paths: "list[str] | None" = None,
+    ):
         self.corpus = corpus
         self.result = Result()
         self._issue_seq = 0
+        self.level = level
+        self.pdf_paths = pdf_paths or []
+
+    def _at_least(self, name: str) -> bool:
+        from . import LEVELS
+
+        return LEVELS.get(self.level, 0) >= LEVELS[name]
 
     # -- issues ----------------------------------------------------------
     def _new_issue(
@@ -212,6 +224,29 @@ class Annotator:
                         ],
                     }
                 )
+
+    def _run_phase1(self) -> None:
+        from .phase1 import check_identifier_association, check_period_dates
+
+        pdf_text = "\n".join(self.corpus.pages_raw)
+        html_text = self.html_corpus.visible_text
+        add = lambda kind, sev, exc, rem: self._new_issue(kind, sev, exc, rem)  # noqa: E731
+        check_period_dates(pdf_text, html_text, add)
+        check_identifier_association(pdf_text, html_text, add)
+
+    def _run_phase2(self, soup) -> None:
+        from .grid import grid_compare
+
+        for kind, sev, exc, rem in grid_compare(self.corpus, soup):
+            self._new_issue(kind, sev, exc, rem)
+
+    def _run_phase3(self, soup) -> None:
+        from .render import render_and_hidden_checks
+
+        for kind, sev, exc, rem in render_and_hidden_checks(
+            self.corpus, soup, self.pdf_paths
+        ):
+            self._new_issue(kind, sev, exc, rem)
 
     def _sign_census(self) -> None:
         """Document-wide sign check, independent of row-label length.
@@ -570,6 +605,12 @@ class Annotator:
         self._annotate_numbers(soup, root)
         self._sign_census()
         self._identifier_census()
+        if self._at_least("alpha"):
+            self._run_phase1()
+        if self._at_least("beta"):
+            self._run_phase2(soup)
+        if self._at_least("sigma"):
+            self._run_phase3(soup)
         cov_anchors = self._register_coverage_issues()
         unplaced = self._insert_inline_omissions(soup, cov_anchors)
         _inject_banner(soup, root, self.result, pdf_name, html_name, unplaced)

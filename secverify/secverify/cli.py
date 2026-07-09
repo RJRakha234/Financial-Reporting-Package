@@ -35,14 +35,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def main(argv: list[str] | None = None, level: str = "base") -> int:
+    parser = build_parser()
+    parser.add_argument(
+        "--level",
+        choices=["base", "alpha", "beta", "sigma"],
+        default=level,
+        help="capability tier (base < alpha < beta < sigma)",
+    )
+    args = parser.parse_args(argv)
     for path, kind in [(p, "PDF") for p in args.pdf] + [(args.html, "HTML")]:
         if not Path(path).is_file():
             print(f"error: {kind} file not found: {path}", file=sys.stderr)
             return 2
 
-    result = verify(args.pdf, args.html, output_html=args.output)
+    result = verify(args.pdf, args.html, output_html=args.output, level=args.level)
 
     print(to_console(result))
     if getattr(result, "output_html", None):
