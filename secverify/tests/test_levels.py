@@ -218,3 +218,21 @@ def test_sigma_flags_hidden_text():
     r = run(pages, html, "sigma")
     assert [i for i in r.issues if i.kind == "hidden-text"]
     assert not [i for i in run(pages, html, "beta").issues if i.kind == "hidden-text"]
+
+
+def test_grid_flagged_cells_recoloured_not_green():
+    # a wrong value that exists elsewhere (present-green by the base pass) but is
+    # grid-flagged must have its figures recoloured red, not left green.
+    from bs4 import BeautifulSoup
+    r = run([_STMT], _stmt_html(pp="47768"), "beta")
+    soup = BeautifulSoup(r.html_out, "html.parser")
+    soup.find(id="secv-summary").extract()
+    pp_row = next(tr for tr in soup.find_all("tr")
+                  if "Property plant and equipment" in tr.get_text())
+    classes = [" ".join(sp.get("class", [])) for sp in pp_row.find_all("span")]
+    assert any("secv-token-bad" in c for c in classes)   # flagged cell recoloured
+    # a correct row keeps green
+    rou_row = next(tr for tr in soup.find_all("tr")
+                   if "Right of use assets" in tr.get_text())
+    assert all("secv-num-ok" in " ".join(sp.get("class", []))
+               for sp in rou_row.find_all("span"))

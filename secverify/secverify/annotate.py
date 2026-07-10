@@ -426,6 +426,54 @@ class Annotator:
                     parts.append(soup.new_string(s[last:]))
                 node.replace_with(*parts)
 
+    def _recolor_grid_cells(self, soup, root) -> None:
+        """Paint the figures of a grid-flagged table row with the finding's
+        colour (red for a value/order error, brown for a wide-matrix caution),
+        so a row whose cells are each individually present-green no longer
+        looks validated despite being flagged."""
+        from .grid import _fig_keys
+        from .reviewzones import _clean_cell_text
+
+        findings: dict[tuple, tuple[str, int]] = {}
+        for issue in self.result.issues:
+            if not issue.kind.startswith("grid") or ": HTML " not in issue.excerpt:
+                continue
+            hlbl = issue.excerpt.split(": HTML ")[0]
+            hfigs = tuple(
+                issue.excerpt.split(": HTML ")[1].split(" / PDF ")[0].split()
+            )
+            findings[(hlbl, hfigs)] = (issue.severity, issue.num)
+        if not findings:
+            return
+
+        for tr in root.find_all("tr"):
+            cells = tr.find_all(["td", "th"], recursive=False)
+            if len(cells) < 2:
+                continue
+            label, figs, spans = "", [], []
+            for cell in cells:
+                ctext = _clean_cell_text(cell)
+                if not label and re.search(r"[A-Za-z]{3,}", ctext):
+                    label = ctext
+                figs.extend(_fig_keys(ctext))
+                spans.extend(cell.find_all("span", class_="secv-num-ok"))
+            key = (canonical(label, letters_only=True), tuple(figs))
+            if key not in findings:
+                continue
+            severity, num = findings[key]
+            cls = "secv-token-bad" if severity == "error" else "secv-token-caution"
+            for span in spans:
+                classes = span.get("class", [])
+                if isinstance(classes, str):
+                    classes = classes.split()
+                span["class"] = [c for c in classes if c != "secv-num-ok"] + [cls]
+                span["title"] = f"#{num}: table row flagged — verify this row"
+            if spans:
+                marker = soup.new_tag("a", href="#secv-summary")
+                marker["class"] = "secv-marker"
+                marker.string = f"[{num}]"
+                spans[-1].insert_after(marker)
+
     # -- text ------------------------------------------------------------
     def _check_sentence(self, sentence: str) -> tuple[str, str, str]:
         """Return ``(status, remark, category)``.
@@ -695,6 +743,7 @@ class Annotator:
         cov_anchors = self._register_coverage_issues()
         unplaced = self._insert_inline_omissions(soup, cov_anchors)
         self._recolor_located_tokens(soup, root)
+        self._recolor_grid_cells(soup, root)
         if self.review_zones:
             from .reviewzones import mark_review_zones
 
@@ -902,6 +951,8 @@ _CSS = """
                    padding: 0 1px; font-weight: bold; }
 .secv-token-bad { background: #ff9d9d; outline: 2px solid #a00000; border-radius: 2px;
                   padding: 0 1px; font-weight: bold; }
+.secv-token-caution { background: #e0b483; outline: 2px solid #8a5a2b; border-radius: 2px;
+                      padding: 0 1px; font-weight: bold; }
 .secv-xref-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
                     padding: 0 1px; }
 .secv-text-ok { background: #a4e8a0 !important; border-left: 5px solid #1e8a26 !important; }
