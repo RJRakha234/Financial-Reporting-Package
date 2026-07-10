@@ -97,14 +97,21 @@ def _followed_by_scale(span) -> bool:
     return bool(_UNIT_RE.match(text))
 
 
-def _mark_prose_figures(soup, root) -> int:
+def _mark_prose_figures(soup, root, strict: bool = False) -> int:
     """Re-flag every validated (green) figure that is NOT inside a table as a
-    blue manual-review figure.  Returns the count marked."""
+    blue manual-review figure.  Returns the count marked.
+
+    Default: only material figures (line-item amounts, ``8 crore``, percentages,
+    per-share) are marked.  ``strict``: *every* prose number is marked — a
+    financial-reporting reviewer who cannot let any number, however small, go
+    un-checked for placement."""
     n = 0
     for span in root.find_all("span", class_="secv-num-ok"):
         if span.find_parent("table") is not None:
             continue  # in-table figures are positionally checked already
-        if not (_is_review_figure(span.get_text()) or _followed_by_scale(span)):
+        if not strict and not (
+            _is_review_figure(span.get_text()) or _followed_by_scale(span)
+        ):
             continue  # a date/year/note-ref, not a line-item money figure
         _paint_blue(
             span,
@@ -201,10 +208,14 @@ def _parse_annotated_row(tr):
     return lbl, figs, spans, len(cells)
 
 
-def _mark_unconfirmed_table_rows(root, corpus) -> int:
+def _mark_unconfirmed_table_rows(root, corpus, strict: bool = False) -> int:
     """Paint blue the figures of any real comparative line-item row (2–3
     figures, line-item label) whose exact ``(label, figures)`` the PDF does not
-    confirm — the in-table hiding place for a value swapped between items."""
+    confirm — the in-table hiding place for a value swapped between items.
+
+    ``strict``: any figure-bearing row (any column count, shorter labels) whose
+    whole ``(label, figures)`` is unconfirmed is marked, so no in-table number
+    is left green unless its row matched the PDF outright."""
     if corpus is None or not getattr(corpus, "pages_raw", None):
         return 0
     confirmed = _pdf_confirmer(corpus)
@@ -213,9 +224,11 @@ def _mark_unconfirmed_table_rows(root, corpus) -> int:
         if tr.find_parent(class_="secv-callout") is not None:
             continue
         lbl, figs, fig_spans, ncells = _parse_annotated_row(tr)
-        if ncells < 2 or len(lbl) < 10 or _FURNITURE_RE.search(lbl):
+        min_label = 4 if strict else 10
+        allowed = bool(figs) if strict else len(figs) in (2, 3)
+        if ncells < 2 or len(lbl) < min_label or _FURNITURE_RE.search(lbl):
             continue
-        if len(figs) not in (2, 3) or confirmed(lbl, tuple(figs)):
+        if not allowed or confirmed(lbl, tuple(figs)):
             continue
         for span in fig_spans:
             _paint_blue(
@@ -338,14 +351,17 @@ def _mark_context_mismatched_rows(root, corpus) -> int:
     return n
 
 
-def mark_review_zones(soup, root, corpus=None) -> tuple[int, int, int, int]:
+def mark_review_zones(
+    soup, root, corpus=None, strict: bool = False
+) -> tuple[int, int, int, int]:
     """Apply the blue overlay.
 
     Returns ``(prose_figures, cross_references, unconfirmed_table_figures,
-    context_mismatched_figures)``.
+    context_mismatched_figures)``.  ``strict`` marks *every* prose number and
+    every unconfirmed in-table figure — leave no number un-reviewed.
     """
-    intable = _mark_unconfirmed_table_rows(root, corpus)
+    intable = _mark_unconfirmed_table_rows(root, corpus, strict=strict)
     context = _mark_context_mismatched_rows(root, corpus)
-    figs = _mark_prose_figures(soup, root)
+    figs = _mark_prose_figures(soup, root, strict=strict)
     xrefs = _mark_cross_references(soup, root)
     return figs, xrefs, intable, context

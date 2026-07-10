@@ -50,6 +50,13 @@ def main(argv: list[str] | None = None, level: str = "base") -> int:
         "cross-references — the Class 2/3 spots the engine cannot verdict — so "
         "they can be checked by eye (leaves no chance on token-preserving errors)",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="leave no number un-reviewed: blue-mark EVERY prose number and "
+        "every unconfirmed in-table figure (for a reviewer who cannot risk "
+        "missing any figure, however small). Implies --review-zones.",
+    )
     args = parser.parse_args(argv)
     for path, kind in [(p, "PDF") for p in args.pdf] + [(args.html, "HTML")]:
         if not Path(path).is_file():
@@ -58,7 +65,7 @@ def main(argv: list[str] | None = None, level: str = "base") -> int:
 
     result = verify(
         args.pdf, args.html, output_html=args.output, level=args.level,
-        review_zones=args.review_zones,
+        review_zones=args.review_zones, strict=args.strict,
     )
 
     print(to_console(result))

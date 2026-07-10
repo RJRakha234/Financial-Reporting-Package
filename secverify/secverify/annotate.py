@@ -83,13 +83,15 @@ class Annotator:
         level: str = "base",
         pdf_paths: "list[str] | None" = None,
         review_zones: bool = False,
+        strict: bool = False,
     ):
         self.corpus = corpus
         self.result = Result()
         self._issue_seq = 0
         self.level = level
         self.pdf_paths = pdf_paths or []
-        self.review_zones = review_zones
+        self.review_zones = review_zones or strict
+        self.strict = strict
         self._zone_counts = (0, 0, 0, 0)
 
     def _at_least(self, name: str) -> bool:
@@ -744,10 +746,13 @@ class Annotator:
         if self.review_zones:
             from .reviewzones import mark_review_zones
 
-            self._zone_counts = mark_review_zones(soup, root, self.corpus)
+            self._zone_counts = mark_review_zones(
+                soup, root, self.corpus, strict=self.strict
+            )
         _inject_banner(
             soup, root, self.result, pdf_name, html_name, unplaced,
             zone_counts=self._zone_counts if self.review_zones else None,
+            strict=self.strict,
         )
         self.result.html_out = str(soup)
         return self.result
@@ -992,6 +997,7 @@ def _inject_banner(
     html_name: str,
     unplaced: list[tuple[int, CoverageLine]] | None = None,
     zone_counts: tuple[int, int] | None = None,
+    strict: bool = False,
 ) -> None:
     style = soup.new_tag("style")
     style.string = _CSS
@@ -1191,19 +1197,26 @@ the HTML.</p>
             '<span class="secv-num-review">blue = manual-review zone '
             "(verify by eye)</span>"
         )
+        strict_lead = (
+            "<b>🔵 STRICT manual-review ON — no number left un-checked.</b> "
+            "Every prose number (however small) and every in-table figure whose "
+            "row did not match the PDF outright is painted "
+            if strict else
+            "<b>🔵 Manual-review overlay ON.</b> The tool cannot machine-verify "
+            "errors that leave every token in place — a value moved to the wrong "
+            "spot (Class 2) or a wrong note/schedule cross-reference (Class 3). To "
+            "leave no chance on these, the spots where they could hide are painted "
+        )
         zone_note = (
             f'<p style="background:#eaf3ff;border:1px solid #1560c0;padding:6px 10px">'
-            f"<b>🔵 Manual-review overlay ON.</b> The tool cannot machine-verify "
-            f"errors that leave every token in place — a value moved to the wrong "
-            f"spot (Class 2) or a wrong note/schedule cross-reference (Class 3). To "
-            f"leave no chance on these, the spots where they could hide are painted "
+            f"{strict_lead}"
             f"<span class='secv-num-review'>blue</span> — <i>locations to check by "
             f"eye</i>, not errors: <b>{figs_z}</b> prose figures, <b>{intable_z}</b> "
             f"in-table figures whose row could not be confirmed as a whole, "
             f"<b>{ctx_z}</b> repeated-label figures the tool could not pin to a "
             f"single context (a mismatch, or a mirrored segment/hierarchy table "
             f"with no distinctive anchor), and <b>{xref_z}</b> cross-references. "
-            f"Rows the tool confirmed exactly stay green.</p>"
+            f"Only figures the tool confirmed against the PDF outright stay green.</p>"
         )
 
     banner_html = f"""
