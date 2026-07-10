@@ -25,7 +25,9 @@ both directions** — offline, and writes a **highlighted HTML review copy**:
   rows unique on both sides, so "Government securities" under *current* vs
   *non-current* investments is disambiguated by its neighbours — catching an
   *exchange* swap that every whole-row check passes because both values still
-  exist against the label).
+  exist against the label; and where a table is a mirrored segment/hierarchy
+  schedule with no distinctive neighbour to anchor on, its repeated rows are
+  marked wholesale, since the tool cannot confirm which occurrence is which).
   The engine validates figures by presence but cannot always verify their
   *placement* or a reference's *target*, so a token-preserving error (Class 2/3
   — a value swapped between two items where the correct pairing also appears in

@@ -247,3 +247,41 @@ def test_context_check_catches_repeated_label_swap():
     assert not blue_in_gov_row(html("1470", "1500"))
     # exchange swap: current gov-sec shows the non-current figures → blue
     assert blue_in_gov_row(html("3504", "3600"))
+
+
+def test_context_marks_anchorless_repeated_rows():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from bs4 import BeautifulSoup
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    # Two mirrored fair-value tables: identical labels, different values, and
+    # NO row unique on both sides -> the tool cannot anchor them, so the
+    # repeated rows must be blue-marked for the eye.
+    pages = ["\n".join([
+        "Fair value hierarchy level 1",
+        "Government securities 100 200", "Mutual fund units 300 400",
+        "Debentures held now 500 600", "Equity instruments 700 800",
+        "Bonds at amortised cost 900 950",
+        "Fair value hierarchy level 2",
+        "Government securities 111 222", "Mutual fund units 333 444",
+        "Debentures held now 555 666", "Equity instruments 777 888",
+        "Bonds at amortised cost 999 951",
+    ])]
+    html = (
+        "<html><body><table>"
+        "<tr><td>Government securities</td><td>100</td><td>200</td></tr>"
+        "<tr><td>Mutual fund units</td><td>300</td><td>400</td></tr>"
+        "<tr><td>Debentures held now</td><td>500</td><td>600</td></tr>"
+        "<tr><td>Equity instruments</td><td>700</td><td>800</td></tr>"
+        "<tr><td>Bonds at amortised cost</td><td>900</td><td>950</td></tr></table></body></html>"
+    )
+    r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                  review_zones=True).run(html, "ref.pdf", "doc.html")
+    soup = BeautifulSoup(r.html_out, "html.parser")
+    soup.find(id="secv-summary").extract()
+    gov = next(tr for tr in soup.find_all("tr")
+               if "Government securities" in tr.get_text())
+    assert any("secv-num-review" in " ".join(sp.get("class", []))
+               for sp in gov.find_all("span"))

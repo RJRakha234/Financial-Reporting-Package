@@ -276,6 +276,16 @@ def _mark_context_mismatched_rows(root, corpus) -> int:
             tables.append(rows)
 
     hcount = Counter(l for rows in tables for l, f, s in rows if l and f)
+
+    def is_repeated_line_item(lbl, figs) -> bool:
+        return bool(
+            lbl and figs
+            and len(lbl) >= 10
+            and not _FURNITURE_RE.search(lbl)
+            and len(figs) in (2, 3)
+            and pdf_count.get(lbl, 0) >= 2      # a genuinely repeated label
+        )
+
     n = 0
     for rows in tables:
         anchors = [
@@ -283,17 +293,26 @@ def _mark_context_mismatched_rows(root, corpus) -> int:
             if l and hcount[l] == 1 and pdf_count.get(l, 0) == 1 and len(l) >= 10
         ]
         if not anchors:
+            # No neighbour is distinctive enough to pin this table to a PDF
+            # region, so a repeated label here cannot be disambiguated at all —
+            # mark those rows for the eye rather than leave them silent-green.
+            for lbl, figs, spans in rows:
+                if not is_repeated_line_item(lbl, figs):
+                    continue
+                for span in spans:
+                    _paint_blue(
+                        span,
+                        "Manual-review zone — repeated label with no distinctive "
+                        "neighbour to pin which occurrence this is (e.g. mirrored "
+                        "segment/hierarchy tables). The tool cannot confirm the "
+                        "value belongs here; verify against the PDF.",
+                    )
+                    n += 1
             continue
         apos = sorted(pdf_pos[l][0][0] for l in anchors)
         lo, hi = apos[0] - 8, apos[-1] + 8
         for lbl, figs, spans in rows:
-            if (
-                not (lbl and figs)
-                or len(lbl) < 10
-                or _FURNITURE_RE.search(lbl)
-                or len(figs) not in (2, 3)
-                or pdf_count.get(lbl, 0) < 2      # only genuinely repeated labels
-            ):
+            if not is_repeated_line_item(lbl, figs):
                 continue
             in_window = [pf for (idx, pf) in pdf_pos[lbl] if lo <= idx <= hi]
             if len(in_window) != 1:               # can't disambiguate → skip

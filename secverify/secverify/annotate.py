@@ -1201,9 +1201,10 @@ the HTML.</p>
             f"<span class='secv-num-review'>blue</span> — <i>locations to check by "
             f"eye</i>, not errors: <b>{figs_z}</b> prose figures, <b>{intable_z}</b> "
             f"in-table figures whose row could not be confirmed as a whole, "
-            f"<b>{ctx_z}</b> repeated-label figures that disagree with their "
-            f"context in the PDF, and <b>{xref_z}</b> cross-references. Rows the "
-            f"tool confirmed exactly stay green.</p>"
+            f"<b>{ctx_z}</b> repeated-label figures the tool could not pin to a "
+            f"single context (a mismatch, or a mirrored segment/hierarchy table "
+            f"with no distinctive anchor), and <b>{xref_z}</b> cross-references. "
+            f"Rows the tool confirmed exactly stay green.</p>"
         )
 
     banner_html = f"""
