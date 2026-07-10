@@ -102,9 +102,12 @@ def test_review_zones_marks_prose_figures_and_xrefs():
     from test_annotate import make_corpus
     from secverify.annotate import Annotator
 
+    # HTML wording differs slightly from the PDF, so the sentence cannot be
+    # verbatim-confirmed — the figure and reference must be blue-marked.
     pages = ["Revenue was 500 crore refer note 12 for details"]
     html = (
-        "<html><body><p>Revenue was 500 crore refer note 12 for details</p>"
+        "<html><body><p>Revenue was 500 crore refer note 12 for the details"
+        " thereof</p>"
         "<table><tr><td>Revenue</td><td>500</td></tr></table></body></html>"
     )
     r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
@@ -295,13 +298,51 @@ def test_scale_word_amount_marked_blue():
     from secverify.annotate import Annotator
 
     # "8 crore" is ₹80,000,000 — a small digit + scale word must be eyeballed,
-    # though it dodges the significance filter on its own.
+    # though it dodges the significance filter on its own. The HTML wording
+    # differs from the PDF so the sentence is not verbatim-confirmed.
     pages = ["The Company recognised a provision of 8 crore during the quarter"]
     html = ("<html><body><p>The Company recognised a provision of 8 crore "
-            "during the quarter</p></body></html>")
+            "in respect of the quarter</p></body></html>")
     r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
                   review_zones=True).run(html, "ref.pdf", "doc.html")
     soup = BeautifulSoup(r.html_out, "html.parser")
     soup.find(id="secv-summary").extract()
     eight = next(s for s in soup.find_all("span") if s.get_text(strip=True) == "8")
     assert "secv-num-review" in eight.get("class", [])
+
+
+def test_verbatim_sentence_auto_validates_figure():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from bs4 import BeautifulSoup
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    # The whole sentence (words AND figure, in order) matches the PDF verbatim
+    # -> the figure's placement is machine-proven; even strict mode keeps it
+    # green instead of blue.
+    pages = ["The Company recognised a provision of 8 crore during the quarter"]
+    html = ("<html><body><p>The Company recognised a provision of 8 crore "
+            "during the quarter</p></body></html>")
+    r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "ref.pdf", "doc.html")
+    soup = BeautifulSoup(r.html_out, "html.parser")
+    soup.find(id="secv-summary").extract()
+    eight = next(s for s in soup.find_all("span") if s.get_text(strip=True) == "8")
+    assert "secv-num-ok" in eight.get("class", [])       # validated, not blue
+    assert not soup.find_all("span", class_="secv-xref-review")
+
+    # a swapped figure (that exists elsewhere in the PDF, so presence passes)
+    # changes the sentence -> verbatim confirmation fails -> stays blue
+    pages2 = [
+        "The Company recognised a provision of 8 crore during the quarter. "
+        "Other income was 9 crore for the period."
+    ]
+    html2 = ("<html><body><p>The Company recognised a provision of 9 crore "
+             "during the quarter.</p>"
+             "<p>Other income was 8 crore for the period.</p></body></html>")
+    r2 = Annotator(make_corpus(pages2), level="sigma", pdf_paths=["d.pdf"],
+                   strict=True).run(html2, "ref.pdf", "doc.html")
+    s2 = BeautifulSoup(r2.html_out, "html.parser"); s2.find(id="secv-summary").extract()
+    nine = next(s for s in s2.find_all("span") if s.get_text(strip=True) == "9")
+    assert "secv-num-review" in nine.get("class", [])

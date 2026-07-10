@@ -1223,7 +1223,10 @@ the HTML.</p>
             f"<b>{ctx_z}</b> repeated-label figures the tool could not pin to a "
             f"single context (a mismatch, or a mirrored segment/hierarchy table "
             f"with no distinctive anchor), and <b>{xref_z}</b> cross-references. "
-            f"Only figures the tool confirmed against the PDF outright stay green.</p>"
+            f"Figures whose entire sentence or table row matched the PDF "
+            f"<b>verbatim</b> (words and numbers, in order) are machine-validated "
+            f"and stay green — blue remains only where that verbatim confirmation "
+            f"failed.</p>"
         )
 
     banner_html = f"""

@@ -97,14 +97,60 @@ def _followed_by_scale(span) -> bool:
     return bool(_UNIT_RE.match(text))
 
 
-def _mark_prose_figures(soup, root, strict: bool = False) -> int:
+#: block-level containers whose full text can be verbatim-checked
+_BLOCK_TAGS = ["p", "td", "th", "li", "h1", "h2", "h3", "h4", "blockquote", "div"]
+
+
+def _block_clean_text(el) -> str:
+    """Visible text of *el* with our injected markers/callouts removed."""
+    return "".join(
+        str(s)
+        for s in el.descendants
+        if isinstance(s, NavigableString)
+        and s.find_parent(class_=["secv-marker", "secv-callout"]) is None
+    )
+
+
+def _context_confirmer(pdf_alnum: str):
+    """Return ``confirmed(node)`` — True when the node's whole containing block
+    (words AND figures, in original order) appears **verbatim** in the PDF.
+
+    A verbatim match is genuine positional validation: the figure sits next to
+    exactly the words the PDF puts it next to, so it needs no eyeballing.  An
+    error that moves or changes a figure necessarily changes the sentence, so
+    it can never be wrongly cleared.  Requires a reasonably long block with
+    letters in it, so a bare number in its own cell cannot be "confirmed" by a
+    lucky digit substring."""
+    cache: dict[int, bool] = {}
+
+    def confirmed(node) -> bool:
+        if not pdf_alnum:
+            return False
+        block = node.find_parent(_BLOCK_TAGS)
+        if block is None:
+            return False
+        key = id(block)
+        if key not in cache:
+            canon = canonical(_block_clean_text(block))
+            cache[key] = (
+                len(canon) >= 16
+                and bool(re.search(r"[a-z].*[a-z].*[a-z]", canon))
+                and canon in pdf_alnum
+            )
+        return cache[key]
+
+    return confirmed
+
+
+def _mark_prose_figures(soup, root, strict: bool = False, ctx_ok=None) -> int:
     """Re-flag every validated (green) figure that is NOT inside a table as a
     blue manual-review figure.  Returns the count marked.
 
     Default: only material figures (line-item amounts, ``8 crore``, percentages,
     per-share) are marked.  ``strict``: *every* prose number is marked — a
     financial-reporting reviewer who cannot let any number, however small, go
-    un-checked for placement."""
+    un-checked for placement.  In both modes a figure whose whole sentence
+    matched the PDF verbatim (``ctx_ok``) is machine-validated and stays green."""
     n = 0
     for span in root.find_all("span", class_="secv-num-ok"):
         if span.find_parent("table") is not None:
@@ -113,18 +159,24 @@ def _mark_prose_figures(soup, root, strict: bool = False) -> int:
             _is_review_figure(span.get_text()) or _followed_by_scale(span)
         ):
             continue  # a date/year/note-ref, not a line-item money figure
+        if ctx_ok is not None and ctx_ok(span):
+            continue  # whole sentence matched the PDF verbatim → validated
         _paint_blue(
             span,
             "Manual-review zone — this figure is validated as present in the "
-            "PDF, but it sits in prose, so its placement is not position-checked. "
-            "Confirm by eye that it is against the right item.",
+            "PDF, but its full sentence could not be verbatim-matched, so its "
+            "placement is not machine-confirmed. Confirm by eye that it is "
+            "against the right item.",
         )
         n += 1
     return n
 
 
-def _mark_cross_references(soup, root) -> int:
-    """Wrap every cross-reference phrase in a blue manual-review span."""
+def _mark_cross_references(soup, root, ctx_ok=None) -> int:
+    """Wrap every cross-reference phrase in a blue manual-review span.
+
+    A reference whose whole sentence matched the PDF verbatim (including the
+    note number) is faithful to the PDF by definition and is not marked."""
     n = 0
     for text_node in list(root.find_all(string=True)):
         if not isinstance(text_node, NavigableString):
@@ -136,6 +188,8 @@ def _mark_cross_references(soup, root) -> int:
         s = str(text_node)
         if not _XREF_RE.search(s):
             continue
+        if ctx_ok is not None and ctx_ok(text_node):
+            continue  # sentence incl. the reference matched verbatim
         parts = []
         last = 0
         for m in _XREF_RE.finditer(s):
@@ -208,7 +262,9 @@ def _parse_annotated_row(tr):
     return lbl, figs, spans, len(cells)
 
 
-def _mark_unconfirmed_table_rows(root, corpus, strict: bool = False) -> int:
+def _mark_unconfirmed_table_rows(
+    root, corpus, strict: bool = False, pdf_alnum: str = ""
+) -> int:
     """Paint blue the figures of any real comparative line-item row (2–3
     figures, line-item label) whose exact ``(label, figures)`` the PDF does not
     confirm — the in-table hiding place for a value swapped between items.
@@ -230,6 +286,18 @@ def _mark_unconfirmed_table_rows(root, corpus, strict: bool = False) -> int:
             continue
         if not allowed or confirmed(lbl, tuple(figs)):
             continue
+        # Verbatim fallback: the whole row's text (words and digits in order,
+        # punctuation/whitespace stripped) found in the PDF confirms the row
+        # even when figure parsing differed — e.g. a PDF text layer that
+        # fractures digits ("2 95,168") canonicalises to the same string.
+        if pdf_alnum:
+            row_canon = canonical(_block_clean_text(tr))
+            if (
+                len(row_canon) >= 16
+                and re.search(r"[a-z].*[a-z].*[a-z]", row_canon)
+                and row_canon in pdf_alnum
+            ):
+                continue
         for span in fig_spans:
             _paint_blue(
                 span,
@@ -377,9 +445,18 @@ def mark_review_zones(
     context_mismatched_figures)``.  ``strict`` marks *every* prose number and
     every unconfirmed in-table figure — leave no number un-reviewed.
     """
-    intable = _mark_unconfirmed_table_rows(root, corpus, strict=strict)
+    pdf_alnum = ""
+    if corpus is not None:
+        try:
+            pdf_alnum = corpus.alnum.canon
+        except Exception:
+            pdf_alnum = ""
+    ctx_ok = _context_confirmer(pdf_alnum)
+    intable = _mark_unconfirmed_table_rows(
+        root, corpus, strict=strict, pdf_alnum=pdf_alnum
+    )
     context = _mark_context_mismatched_rows(root, corpus)
-    figs = _mark_prose_figures(soup, root, strict=strict)
-    xrefs = _mark_cross_references(soup, root)
+    figs = _mark_prose_figures(soup, root, strict=strict, ctx_ok=ctx_ok)
+    xrefs = _mark_cross_references(soup, root, ctx_ok=ctx_ok)
     _mark_images(root)
     return figs, xrefs, intable, context
