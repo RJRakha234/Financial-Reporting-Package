@@ -122,3 +122,51 @@ def test_review_zones_marks_prose_figures_and_xrefs():
     )
     assert 'class="secv-num-review"' not in r2.html_out
     assert 'class="secv-xref-review"' not in r2.html_out
+
+
+def test_review_zones_marks_unconfirmed_table_row():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from bs4 import BeautifulSoup
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    # face-value swap of two tax lines; the note repeats both correctly, so the
+    # strict checks stay silent — the in-table blue must flag the swapped row.
+    pages = [
+        "Tax expense recognised in profit or loss",
+        "Current tax 4423 4924", "Deferred tax 601 497",
+        "Note income tax Current tax 4423 4924 Deferred tax 601 497",
+    ]
+    html = (
+        "<html><body><p>Tax expense recognised in profit or loss</p><table>"
+        "<tr><td>Current tax</td><td>601</td><td>497</td></tr>"
+        "<tr><td>Deferred tax</td><td>4423</td><td>4924</td></tr></table>"
+        "<p>Note income tax Current tax 4423 4924 Deferred tax 601 497</p></body></html>"
+    )
+    r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                  review_zones=True).run(html, "ref.pdf", "doc.html")
+    soup = BeautifulSoup(r.html_out, "html.parser")
+    soup.find(id="secv-summary").extract()
+    span601 = next(s for s in soup.find_all("span") if s.get_text(strip=True) == "601")
+    assert "secv-num-review" in span601.get("class", [])   # swapped row → blue
+
+    # a fully-confirmed row stays green
+    ok_pages = [
+        "Property plant and equipment 9868 10070", "Right of use assets 3201 3078",
+        "Capital work in progress 891 778", "Deferred tax assets 601 497",
+        "Total non current assets 14561 14416",
+    ]
+    ok_html = (
+        "<html><body><table>"
+        "<tr><td>Property plant and equipment</td><td>9868</td><td>10070</td></tr>"
+        "<tr><td>Right of use assets</td><td>3201</td><td>3078</td></tr>"
+        "<tr><td>Capital work in progress</td><td>891</td><td>778</td></tr>"
+        "<tr><td>Deferred tax assets</td><td>601</td><td>497</td></tr>"
+        "<tr><td>Total non current assets</td><td>14561</td><td>14416</td></tr></table></body></html>"
+    )
+    r2 = Annotator(make_corpus(ok_pages), level="sigma", pdf_paths=["d.pdf"],
+                   review_zones=True).run(ok_html, "ref.pdf", "doc.html")
+    s2 = BeautifulSoup(r2.html_out, "html.parser"); s2.find(id="secv-summary").extract()
+    span = next(s for s in s2.find_all("span") if s.get_text(strip=True) == "9868")
+    assert "secv-num-ok" in span.get("class", [])          # confirmed row → green

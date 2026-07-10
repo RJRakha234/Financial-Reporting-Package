@@ -90,7 +90,7 @@ class Annotator:
         self.level = level
         self.pdf_paths = pdf_paths or []
         self.review_zones = review_zones
-        self._zone_counts = (0, 0)
+        self._zone_counts = (0, 0, 0)
 
     def _at_least(self, name: str) -> bool:
         from . import LEVELS
@@ -640,7 +640,7 @@ class Annotator:
         if self.review_zones:
             from .reviewzones import mark_review_zones
 
-            self._zone_counts = mark_review_zones(soup, root)
+            self._zone_counts = mark_review_zones(soup, root, self.corpus)
         _inject_banner(
             soup, root, self.result, pdf_name, html_name, unplaced,
             zone_counts=self._zone_counts if self.review_zones else None,
@@ -1074,21 +1074,22 @@ the HTML.</p>
     zone_legend = ""
     zone_note = ""
     if zone_counts is not None:
-        figs_z, xref_z = zone_counts
+        figs_z, xref_z, intable_z = zone_counts
         zone_legend = (
             '<span class="secv-num-review">blue = manual-review zone '
             "(verify by eye)</span>"
         )
         zone_note = (
             f'<p style="background:#eaf3ff;border:1px solid #1560c0;padding:6px 10px">'
-            f"<b>🔵 Manual-review overlay ON.</b> The tool cannot machine-verify two "
-            f"error families that leave every token in place — a value/figure moved "
-            f"to the wrong spot in <i>prose</i> (Class 2) or a wrong "
-            f"note/schedule cross-reference (Class 3). To leave no chance on these, "
-            f"the {figs_z} prose figures and {xref_z} cross-references below are "
-            f"painted <span class='secv-num-review'>blue</span> — these are "
-            f"<i>locations to check by eye</i>, not errors. In-table figures are "
-            f"already position-checked and stay green.</p>"
+            f"<b>🔵 Manual-review overlay ON.</b> The tool cannot machine-verify "
+            f"errors that leave every token in place — a value moved to the wrong "
+            f"spot (Class 2) or a wrong note/schedule cross-reference (Class 3). To "
+            f"leave no chance on these, the spots where they could hide are painted "
+            f"<span class='secv-num-review'>blue</span> — <i>locations to check by "
+            f"eye</i>, not errors: <b>{figs_z}</b> prose figures, <b>{intable_z}</b> "
+            f"in-table figures whose row could not be confirmed as a whole against "
+            f"the PDF, and <b>{xref_z}</b> cross-references. Rows the tool confirmed "
+            f"exactly stay green.</p>"
         )
 
     banner_html = f"""
