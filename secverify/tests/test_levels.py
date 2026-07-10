@@ -236,3 +236,47 @@ def test_grid_flagged_cells_recoloured_not_green():
                    if "Right of use assets" in tr.get_text())
     assert all("secv-num-ok" in " ".join(sp.get("class", []))
                for sp in rou_row.find_all("span"))
+
+
+def test_per_share_eps_value_checked():
+    # EPS/per-share values look like note refs (62.40 vs 2.15); on a per-share
+    # row they must be kept and checked. A wrong basic-EPS value that exists
+    # elsewhere (as face value) is silent-green without this.
+    pages = ["\n".join([
+        "Basic earnings per share 61.90 57.80",
+        "Diluted earnings per share 61.50 57.40",
+        "Weighted shares basic 100 100",
+        "Weighted shares diluted 101 101",
+        "Face value per share 62.40 62.40",
+    ])]
+    html = (
+        "<html><body><table>"
+        "<tr><td>Basic earnings per share</td><td>62.40</td><td>57.80</td></tr>"
+        "<tr><td>Diluted earnings per share</td><td>61.50</td><td>57.40</td></tr>"
+        "<tr><td>Weighted shares basic</td><td>100</td><td>100</td></tr>"
+        "<tr><td>Weighted shares diluted</td><td>101</td><td>101</td></tr>"
+        "<tr><td>Face value per share</td><td>62.40</td><td>62.40</td></tr></table></body></html>"
+    )
+    from bs4 import BeautifulSoup
+    r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                  review_zones=True).run(html, "ref.pdf", "doc.html")
+    soup = BeautifulSoup(r.html_out, "html.parser")
+    soup.find(id="secv-summary").extract()
+    basic = next(tr for tr in soup.find_all("tr")
+                 if "Basic earnings per share" in tr.get_text())
+    # the wrong 62.40 must be flagged (red grid or blue), not silent-green —
+    # without keeping per-share decimals it would be stripped as a note-ref
+    cls = next(" ".join(sp.get("class", [])) for sp in basic.find_all("span")
+               if sp.get_text(strip=True) == "62.40")
+    assert "secv-token-bad" in cls or "secv-num-review" in cls
+    assert "secv-num-ok" not in cls
+
+
+def test_duplicated_paragraph_flagged():
+    para = ("The Group has assessed the impact of the new standard on its "
+            "consolidated financial statements and does not expect a material effect")
+    r = run([para], f"<html><body><p>{para}</p><p>{para}</p></body></html>", "sigma")
+    assert [i for i in r.issues if i.kind == "duplicate"]
+    # a single copy does not flag
+    r2 = run([para], f"<html><body><p>{para}</p></body></html>", "sigma")
+    assert not [i for i in r2.issues if i.kind == "duplicate"]

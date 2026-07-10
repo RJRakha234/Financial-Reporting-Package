@@ -431,7 +431,7 @@ class Annotator:
         colour (red for a value/order error, brown for a wide-matrix caution),
         so a row whose cells are each individually present-green no longer
         looks validated despite being flagged."""
-        from .grid import _fig_keys
+        from .grid import cells_label_figs
         from .reviewzones import _clean_cell_text
 
         findings: dict[tuple, tuple[str, int]] = {}
@@ -450,14 +450,11 @@ class Annotator:
             cells = tr.find_all(["td", "th"], recursive=False)
             if len(cells) < 2:
                 continue
-            label, figs, spans = "", [], []
+            lbl, figs = cells_label_figs([_clean_cell_text(c) for c in cells])
+            spans = []
             for cell in cells:
-                ctext = _clean_cell_text(cell)
-                if not label and re.search(r"[A-Za-z]{3,}", ctext):
-                    label = ctext
-                figs.extend(_fig_keys(ctext))
                 spans.extend(cell.find_all("span", class_="secv-num-ok"))
-            key = (canonical(label, letters_only=True), tuple(figs))
+            key = (lbl, tuple(figs))
             if key not in findings:
                 continue
             severity, num = findings[key]
@@ -882,6 +879,8 @@ class Annotator:
             # (or a summary-panel entry when it cannot be positioned).
             issue.anchor = f"secv-cov-{idx}"
             anchors[idx] = issue.anchor
+        for dup in self.result.coverage.duplications:
+            self._new_issue("duplicate", "review", dup.text[:160], dup.remark)
         for oi in self.result.coverage.order_issues:
             span = (
                 f"“{_shorten(oi.first_text, 100)}”"

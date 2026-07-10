@@ -20,6 +20,12 @@ WORD_COVERAGE_RATIO = 0.85
 #: minimum canonical length before occurrence counts are compared — short
 #: strings ("total", "particulars") repeat too freely to count reliably
 COUNT_CHECK_MIN_LEN = 12
+#: a duplication is only flagged for a distinctive line this long (letters).
+#: Statement titles, the "for and on behalf of the Board" signature line and
+#: accounting-standard names legitimately recur across an exhibit and run up to
+#: ~80 chars; requiring more keeps the check false-positive-free (verified zero
+#: on the reference filings) while still catching a pasted note paragraph.
+DUP_CHECK_MIN_LEN = 80
 #: a line repeated within this many lines of the top of the following page is
 #: a table header reprinted after a page break, not a second occurrence
 CONTINUATION_TOP_LINES = 3
@@ -79,6 +85,9 @@ class CoverageResult:
     total: int = 0
     ok: int = 0
     review: int = 0
+    #: distinctive PDF lines reproduced MORE times in the HTML than the PDF
+    #: has them (content pasted twice during conversion)
+    duplications: list[CoverageLine] = field(default_factory=list)
     #: print-index entries whose page-number column was excluded from checks
     index_entries: int = 0
     #: runs of content that appear out of sequence in the HTML
@@ -127,6 +136,7 @@ class HtmlCorpus:
         # that merely starts with the phrase is not miscounted as a repeat.
         self.seg_alnum: Counter = Counter()
         self.seg_letters: Counter = Counter()
+        self.seg_sample: dict[str, str] = {}
         for bt in block_texts or []:
             ca = canonical(bt)
             if ca:
@@ -134,6 +144,7 @@ class HtmlCorpus:
             cl = canonical(bt, letters_only=True)
             if cl:
                 self.seg_letters[cl] += 1
+                self.seg_sample.setdefault(cl, bt.strip())
 
     def letters_snippet(self, start: int, end: int, max_len: int = 200) -> str:
         """Original HTML wording for a letters-canonical range."""
@@ -586,6 +597,28 @@ def check_pdf_coverage(
         if shortfall:
             flagged_shortfalls.add(needle)
         return shortfall
+
+    # Duplication — the reverse of the shortfall check: a distinctive line that
+    # occurs exactly once in the PDF but two or more times in the HTML (a note
+    # or row pasted twice during conversion). Gated hard (long line, PDF count
+    # exactly one) so legitimately repeated content never false-flags.
+    for cl, hcount in html.seg_letters.items():
+        if len(cl) < DUP_CHECK_MIN_LEN or hcount < 2:
+            continue
+        if pdf_seg_letters.get(cl, 0) == 1:
+            sample = html.seg_sample.get(cl, "")
+            result.duplications.append(
+                CoverageLine(
+                    0, sample, "review",
+                    remark=(
+                        f"Duplicated content — this line appears once in the "
+                        f"PDF but {hcount} times in the HTML. A note or row may "
+                        "have been pasted twice during conversion; remove the "
+                        "extra copy or confirm the repetition is intended."
+                    ),
+                    escalate=True, issue_kind="duplicate",
+                )
+            )
 
     # Detect table-of-contents pages so index furniture can be skipped.
     index_pages = {

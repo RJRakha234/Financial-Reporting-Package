@@ -44,19 +44,56 @@ _DATE_RE = re.compile(
 )
 
 
-def _fig_keys(text: str) -> list[str]:
-    """Significant figure keys in *text*, in order, minus note-refs, ids and
-    dates (a date's day/year would otherwise read as figures)."""
+#: labels whose values are per-share / ratio amounts — these look exactly like
+#: note references ("62.40" vs "2.15"), so on these rows the note-ref filter is
+#: turned OFF, otherwise EPS / DPS / face-value figures vanish from the checks.
+_PER_SHARE_RE = re.compile(
+    r"per\s+share|per\s+equity\s+share|earnings\s+per|dividend\s+per|"
+    r"book\s+value\s+per|per\s+unit|face\s+value|nominal\s+value|par\s+value",
+    re.I,
+)
+
+
+def _fig_keys(text: str, strip_note_refs: bool = True) -> list[str]:
+    """Significant figure keys in *text*, in order, minus ids and dates.
+
+    Two-decimal values like ``2.15`` are dropped as note references *unless*
+    ``strip_note_refs`` is False — on a per-share/ratio row they are real
+    figures (EPS ``62.40``) and must be kept."""
     text = _DATE_RE.sub(" ", text)
     out = []
     for _s, _e, tok, key in iter_tokens(text):
         t = tok.strip()
         if re.match(r"^\(?0\d", t):
             continue  # leading-zero identifier
-        if re.fullmatch(r"\d{1,2}\.\d{1,2}", key):
+        if strip_note_refs and re.fullmatch(r"\d{1,2}\.\d{1,2}", key):
             continue  # note reference like 2.15
         out.append(key)
     return out
+
+
+def line_label_figs(line: str) -> tuple[str, list[str]]:
+    """``(canonical label, figure keys)`` for a raw text line, keeping
+    per-share decimals that would otherwise read as note references."""
+    keep = bool(_PER_SHARE_RE.search(line))
+    lbl = canonical(
+        _DATE_RE.sub(" ", re.sub(r"[\d,()%₹$.\-]+", " ", line)), letters_only=True
+    )
+    return lbl, _fig_keys(line, strip_note_refs=not keep)
+
+
+def cells_label_figs(cell_texts) -> tuple[str, list[str]]:
+    """``(canonical label, figure keys)`` for a table row's cell texts, with the
+    same per-share awareness as :func:`line_label_figs`."""
+    label = ""
+    for t in cell_texts:
+        if not label and re.search(r"[A-Za-z]{3,}", t):
+            label = t
+    keep = bool(_PER_SHARE_RE.search(label))
+    figs: list[str] = []
+    for t in cell_texts:
+        figs.extend(_fig_keys(t, strip_note_refs=not keep))
+    return canonical(label, letters_only=True), figs
 
 
 def _parse_html_rows(table) -> list[tuple[str, list[str]]]:
@@ -66,14 +103,7 @@ def _parse_html_rows(table) -> list[tuple[str, list[str]]]:
         cells = tr.find_all(["td", "th"], recursive=False)
         if len(cells) < 2:
             continue
-        label = ""
-        figs: list[str] = []
-        for cell in cells:
-            ctext = cell.get_text(" ", strip=True)
-            if not label and re.search(r"[A-Za-z]{3,}", ctext):
-                label = ctext
-            figs.extend(_fig_keys(ctext))
-        rows.append((canonical(label, letters_only=True), figs))
+        rows.append(cells_label_figs([c.get_text(" ", strip=True) for c in cells]))
     return rows
 
 
@@ -140,9 +170,7 @@ def grid_compare(corpus, soup, pdf_paths):
         for line in raw.splitlines():
             if not re.search(r"[A-Za-z]{3,}", line) or not re.search(r"\d", line):
                 continue
-            figs = _fig_keys(line)
-            lbl = canonical(_DATE_RE.sub(" ", re.sub(r"[\d,()%₹$.\-]+", " ", line)),
-                            letters_only=True)
+            lbl, figs = line_label_figs(line)
             if lbl and figs:
                 pdf_rows.append((lbl, figs))
     pdf_by_label: dict[str, list[list[str]]] = {}

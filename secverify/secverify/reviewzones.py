@@ -33,7 +33,7 @@ from bs4 import NavigableString
 
 from .numbers import is_significant, iter_tokens
 from .textnorm import canonical
-from .grid import _fig_keys, _DATE_RE
+from .grid import _fig_keys, _DATE_RE, line_label_figs, cells_label_figs
 
 #: label tokens that mark signature / heading furniture, not a line item
 _FURNITURE_RE = re.compile(
@@ -153,13 +153,9 @@ def _pdf_confirmer(corpus):
         for line in raw.splitlines():
             if not re.search(r"[A-Za-z]{3,}", line) or not re.search(r"\d", line):
                 continue
-            figs = tuple(_fig_keys(line))
-            lbl = canonical(
-                _DATE_RE.sub(" ", re.sub(r"[\d,()%₹$.\-]+", " ", line)),
-                letters_only=True,
-            )
+            lbl, figs = line_label_figs(line)
             if lbl and figs:
-                by_label.setdefault(lbl, set()).add(figs)
+                by_label.setdefault(lbl, set()).add(tuple(figs))
 
     def confirmed(lbl: str, figs: tuple) -> bool:
         if figs in by_label.get(lbl, ()):
@@ -180,14 +176,12 @@ def _parse_annotated_row(tr):
     """``(canonical label, figure keys, [green figure spans], cell count)`` for
     a table row in the *annotated* soup, ignoring injected ``[n]`` markers."""
     cells = tr.find_all(["td", "th"], recursive=False)
-    label, figs, spans = "", [], []
+    cell_texts = [_clean_cell_text(cell) for cell in cells]
+    lbl, figs = cells_label_figs(cell_texts)
+    spans = []
     for cell in cells:
-        ctext = _clean_cell_text(cell)
-        if not label and re.search(r"[A-Za-z]{3,}", ctext):
-            label = ctext
-        figs.extend(_fig_keys(ctext))
         spans.extend(cell.find_all("span", class_="secv-num-ok"))
-    return canonical(label, letters_only=True), figs, spans, len(cells)
+    return lbl, figs, spans, len(cells)
 
 
 def _mark_unconfirmed_table_rows(root, corpus) -> int:
@@ -228,13 +222,9 @@ def _pdf_sequence(corpus):
         for line in raw.splitlines():
             if not re.search(r"[A-Za-z]{3,}", line) or not re.search(r"\d", line):
                 continue
-            figs = tuple(_fig_keys(line))
-            lbl = canonical(
-                _DATE_RE.sub(" ", re.sub(r"[\d,()%₹$.\-]+", " ", line)),
-                letters_only=True,
-            )
+            lbl, figs = line_label_figs(line)
             if lbl and figs:
-                seq.append((lbl, figs))
+                seq.append((lbl, tuple(figs)))
     positions: dict[str, list] = {}
     counts: Counter = Counter()
     for i, (l, f) in enumerate(seq):
