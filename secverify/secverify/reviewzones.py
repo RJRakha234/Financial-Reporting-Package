@@ -78,21 +78,23 @@ _XREF_RE = re.compile(
     r"as\s+per\s+note|schedule|annexure)\b[\s.]*\d{0,3}[A-Za-z.\d]*",
     re.I,
 )
-#: a scale word right after a number makes it money even when the digits are
-#: small ("8 crore" = ₹80,000,000), so it must be eyeballed like any amount
-_SCALE_RE = re.compile(
-    r"^[\s ]*(?:crore|crores|lakh|lakhs|million|billion|thousand|mn|bn)\b",
+#: a unit word right after a number makes it a material figure even when the
+#: digits are small — a scale word ("8 crore" = ₹80,000,000), a spelled-out
+#: percentage ("51 per cent"), a per-share amount ("5 per share") or basis
+#: points. Durations ("years"/"months") and counts ("times") are excluded.
+_UNIT_RE = re.compile(
+    r"^[\s ]*(?:crore|crores|lakh|lakhs|million|billion|thousand|mn|bn|per\s*cent|percent|percentage|basis\s+points|bps|per\s+share|per\s+equity\s+share)\b",
     re.I,
 )
 
 
 def _followed_by_scale(span) -> bool:
-    """True when the text immediately after *span* begins with a scale word."""
+    """True when the text after *span* begins with a money/ratio unit word."""
     text, node = "", span.next_sibling
     while node is not None and len(text) < 16:
         text += node.get_text() if hasattr(node, "get_text") else str(node)
         node = node.next_sibling
-    return bool(_SCALE_RE.match(text))
+    return bool(_UNIT_RE.match(text))
 
 
 def _mark_prose_figures(soup, root) -> int:
