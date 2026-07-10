@@ -258,8 +258,14 @@ class Annotator:
     def _run_phase3(self, clean_soup) -> None:
         from .render import render_and_hidden_checks
         from .identity import check_identifier_geometry
+        from .images import image_checks
 
         for kind, sev, exc, rem in render_and_hidden_checks(
+            self.corpus, clean_soup, self.pdf_paths
+        ):
+            self._new_issue(kind, sev, exc, rem)
+        # images: inventory + OCR of embedded ones — nothing image-borne silent
+        for kind, sev, exc, rem in image_checks(
             self.corpus, clean_soup, self.pdf_paths
         ):
             self._new_issue(kind, sev, exc, rem)
@@ -959,6 +965,7 @@ _CSS = """
                       padding: 0 1px; font-weight: bold; }
 .secv-xref-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
                     padding: 0 1px; }
+img.secv-img-review { outline: 2px dashed #1560c0; outline-offset: 1px; }
 .secv-text-ok { background: #a4e8a0 !important; border-left: 5px solid #1e8a26 !important; }
 .secv-text-warn { background: #ffd24d !important; outline: 2px solid #9a6a00;
                   border-left: 5px solid #9a6a00 !important; }

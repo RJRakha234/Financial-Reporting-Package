@@ -351,6 +351,23 @@ def _mark_context_mismatched_rows(root, corpus) -> int:
     return n
 
 
+def _mark_images(root) -> int:
+    """Give every ``<img>`` a blue dashed outline — image content cannot be
+    machine-checked, so each one is a verify-by-eye zone."""
+    n = 0
+    for img in root.find_all("img"):
+        classes = img.get("class", [])
+        if isinstance(classes, str):
+            classes = classes.split()
+        img["class"] = classes + ["secv-img-review"]
+        img["title"] = (
+            "Manual-review zone — image content is not machine-checkable; "
+            "verify it displays the intended symbol/graphic."
+        )
+        n += 1
+    return n
+
+
 def mark_review_zones(
     soup, root, corpus=None, strict: bool = False
 ) -> tuple[int, int, int, int]:
@@ -364,4 +381,5 @@ def mark_review_zones(
     context = _mark_context_mismatched_rows(root, corpus)
     figs = _mark_prose_figures(soup, root, strict=strict)
     xrefs = _mark_cross_references(soup, root)
+    _mark_images(root)
     return figs, xrefs, intable, context
