@@ -170,3 +170,27 @@ def test_review_zones_marks_unconfirmed_table_row():
     s2 = BeautifulSoup(r2.html_out, "html.parser"); s2.find(id="secv-summary").extract()
     span = next(s for s in s2.find_all("span") if s.get_text(strip=True) == "9868")
     assert "secv-num-ok" in span.get("class", [])          # confirmed row → green
+
+
+def test_flagged_identifier_recoloured_not_green():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from bs4 import BeautifulSoup
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    # DIN present in the HTML signature block but NOT in the PDF -> a review
+    # finding; its token must be painted amber, not left plain inside a green
+    # (text-matched) block.
+    pages = ["Independent Auditors Report", "We have audited the statements."]
+    html = (
+        "<html><body><p>We have audited the statements.</p>"
+        "<p>Nandan M. Nilekani Chairman DIN: 00041245</p></body></html>"
+    )
+    r = Annotator(make_corpus(pages), level="base", pdf_paths=["d.pdf"]).run(
+        html, "ref.pdf", "doc.html"
+    )
+    soup = BeautifulSoup(r.html_out, "html.parser")
+    soup.find(id="secv-summary").extract()
+    din = next(s for s in soup.find_all("span") if s.get_text(strip=True) == "00041245")
+    assert "secv-token-warn" in din.get("class", [])

@@ -369,6 +369,63 @@ class Annotator:
                     "stale number. Statutory identifiers must be exact.",
                 )
 
+    def _recolor_located_tokens(self, soup, root) -> None:
+        """Paint the specific token of a located census finding with its own
+        severity colour, so a flagged identifier no longer hides inside a
+        green (text-matched) block.
+
+        The base passes colour by *presence* — a statutory identifier is not a
+        monetary figure, so it is left uncoloured and its surrounding block is
+        painted green when the words match.  Here each ``identifier`` /
+        ``identifier-name`` finding's value is found in the body and wrapped in
+        an amber (review) or red (error) span with its ``[n]`` marker.
+        """
+        targets: list[tuple[str, str, int]] = []
+        for issue in self.result.issues:
+            if issue.kind == "identifier":
+                val = issue.excerpt.split()[-1]
+            elif issue.kind == "identifier-name":
+                val = issue.excerpt.split()[0]
+            else:
+                continue
+            if len(val) >= 4:
+                targets.append((val, issue.severity, issue.num))
+
+        for val, severity, num in targets:
+            cls = "secv-token-bad" if severity == "error" else "secv-token-warn"
+            pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(val)}(?![A-Za-z0-9])")
+            marked = False
+            for node in list(root.find_all(string=True)):
+                if not isinstance(node, NavigableString) or isinstance(node, Comment):
+                    continue
+                if node.find_parent(SKIP_PARENTS) is not None:
+                    continue
+                if node.find_parent(
+                    class_=["secv-marker", "secv-token-warn", "secv-token-bad"]
+                ) is not None:
+                    continue
+                s = str(node)
+                if not pattern.search(s):
+                    continue
+                parts, last = [], 0
+                for m in pattern.finditer(s):
+                    if m.start() > last:
+                        parts.append(soup.new_string(s[last:m.start()]))
+                    span = soup.new_tag("span", **{"class": cls})
+                    span.string = m.group(0)
+                    span["title"] = f"#{num}: {'identifier to verify'}"
+                    parts.append(span)
+                    if not marked:  # one navigable marker per finding is enough
+                        marker = soup.new_tag("a", href="#secv-summary")
+                        marker["class"] = "secv-marker"
+                        marker.string = f"[{num}]"
+                        parts.append(marker)
+                        marked = True
+                    last = m.end()
+                if last < len(s):
+                    parts.append(soup.new_string(s[last:]))
+                node.replace_with(*parts)
+
     # -- text ------------------------------------------------------------
     def _check_sentence(self, sentence: str) -> tuple[str, str, str]:
         """Return ``(status, remark, category)``.
@@ -637,6 +694,7 @@ class Annotator:
                 self._run_phase3(clean_soup)
         cov_anchors = self._register_coverage_issues()
         unplaced = self._insert_inline_omissions(soup, cov_anchors)
+        self._recolor_located_tokens(soup, root)
         if self.review_zones:
             from .reviewzones import mark_review_zones
 
@@ -840,6 +898,10 @@ _CSS = """
                 font-weight: bold; padding: 0 1px; }
 .secv-num-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
                    padding: 0 1px; }
+.secv-token-warn { background: #ffd24d; outline: 2px solid #9a6a00; border-radius: 2px;
+                   padding: 0 1px; font-weight: bold; }
+.secv-token-bad { background: #ff9d9d; outline: 2px solid #a00000; border-radius: 2px;
+                  padding: 0 1px; font-weight: bold; }
 .secv-xref-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
                     padding: 0 1px; }
 .secv-text-ok { background: #a4e8a0 !important; border-left: 5px solid #1e8a26 !important; }
