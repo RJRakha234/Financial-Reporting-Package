@@ -90,7 +90,7 @@ class Annotator:
         self.level = level
         self.pdf_paths = pdf_paths or []
         self.review_zones = review_zones
-        self._zone_counts = (0, 0, 0)
+        self._zone_counts = (0, 0, 0, 0)
 
     def _at_least(self, name: str) -> bool:
         from . import LEVELS
@@ -1187,7 +1187,7 @@ the HTML.</p>
     zone_legend = ""
     zone_note = ""
     if zone_counts is not None:
-        figs_z, xref_z, intable_z = zone_counts
+        figs_z, xref_z, intable_z, ctx_z = zone_counts
         zone_legend = (
             '<span class="secv-num-review">blue = manual-review zone '
             "(verify by eye)</span>"
@@ -1200,9 +1200,10 @@ the HTML.</p>
             f"leave no chance on these, the spots where they could hide are painted "
             f"<span class='secv-num-review'>blue</span> — <i>locations to check by "
             f"eye</i>, not errors: <b>{figs_z}</b> prose figures, <b>{intable_z}</b> "
-            f"in-table figures whose row could not be confirmed as a whole against "
-            f"the PDF, and <b>{xref_z}</b> cross-references. Rows the tool confirmed "
-            f"exactly stay green.</p>"
+            f"in-table figures whose row could not be confirmed as a whole, "
+            f"<b>{ctx_z}</b> repeated-label figures that disagree with their "
+            f"context in the PDF, and <b>{xref_z}</b> cross-references. Rows the "
+            f"tool confirmed exactly stay green.</p>"
         )
 
     banner_html = f"""

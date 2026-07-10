@@ -18,8 +18,14 @@ both directions** — offline, and writes a **highlighted HTML review copy**:
   scanned when time allows;
 * **blue figure / blue phrase** *(only with `--review-zones`)* — a
   **manual-review zone**, not an error: a financial figure sitting in prose, a
-  note/schedule cross-reference, or an **in-table comparative row whose exact
-  `(label, figures)` the tool could not confirm as a whole against the PDF**.
+  note/schedule cross-reference, an **in-table comparative row whose exact
+  `(label, figures)` the tool could not confirm as a whole against the PDF**, or
+  a **repeated-label row whose value disagrees with the PDF occurrence that
+  shares its surroundings** (each HTML table is pinned to a PDF region by the
+  rows unique on both sides, so "Government securities" under *current* vs
+  *non-current* investments is disambiguated by its neighbours — catching an
+  *exchange* swap that every whole-row check passes because both values still
+  exist against the label).
   The engine validates figures by presence but cannot always verify their
   *placement* or a reference's *target*, so a token-preserving error (Class 2/3
   — a value swapped between two items where the correct pairing also appears in

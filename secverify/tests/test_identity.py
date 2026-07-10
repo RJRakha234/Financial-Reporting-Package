@@ -194,3 +194,56 @@ def test_flagged_identifier_recoloured_not_green():
     soup.find(id="secv-summary").extract()
     din = next(s for s in soup.find_all("span") if s.get_text(strip=True) == "00041245")
     assert "secv-token-warn" in din.get("class", [])
+
+
+def test_context_check_catches_repeated_label_swap():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from bs4 import BeautifulSoup
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    # "Government securities" recurs: current 1470/1500, non-current 3504/3600.
+    # Anchors (Total current / Total non current) pin each table's context.
+    filler = [f"Unrelated note item {i} {i}0 {i}5" for i in range(1, 16)]
+    pages = ["\n".join([
+        "Current investments",
+        "Government securities 1470 1500", "Equity shares 97 57",
+        "Bonds carried at cost 213 196", "Mutual fund units 476 465",
+        "Total current investments 2256 2318",
+        *filler,   # real schedules sit pages apart; keep the two contexts distinct
+        "Non current investments",
+        "Government securities 3504 3600", "Equity instruments 25 20",
+        "Bonds measured at amortised 169 160", "Debentures held 3510 1957",
+        "Total non current investments 7233 5897",
+    ])]
+
+    def html(cur1, cur2):
+        return (
+            "<html><body><table>"
+            f"<tr><td>Government securities</td><td>{cur1}</td><td>{cur2}</td></tr>"
+            "<tr><td>Equity shares</td><td>97</td><td>57</td></tr>"
+            "<tr><td>Bonds carried at cost</td><td>213</td><td>196</td></tr>"
+            "<tr><td>Mutual fund units</td><td>476</td><td>465</td></tr>"
+            "<tr><td>Total current investments</td><td>2256</td><td>2318</td></tr></table>"
+            "<table><tr><td>Government securities</td><td>3504</td><td>3600</td></tr>"
+            "<tr><td>Equity instruments</td><td>25</td><td>20</td></tr>"
+            "<tr><td>Bonds measured at amortised</td><td>169</td><td>160</td></tr>"
+            "<tr><td>Debentures held</td><td>3510</td><td>1957</td></tr>"
+            "<tr><td>Total non current investments</td><td>7233</td><td>5897</td></tr></table></body></html>"
+        )
+
+    def blue_in_gov_row(h):
+        r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                      review_zones=True).run(h, "ref.pdf", "doc.html")
+        soup = BeautifulSoup(r.html_out, "html.parser")
+        soup.find(id="secv-summary").extract()
+        gov = next(tr for tr in soup.find_all("tr")
+                   if "Government securities" in tr.get_text())
+        return any("secv-num-review" in " ".join(sp.get("class", []))
+                   for sp in gov.find_all("span"))
+
+    # clean: the current gov-sec row matches its context → not blue
+    assert not blue_in_gov_row(html("1470", "1500"))
+    # exchange swap: current gov-sec shows the non-current figures → blue
+    assert blue_in_gov_row(html("3504", "3600"))

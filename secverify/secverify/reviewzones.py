@@ -176,6 +176,20 @@ def _pdf_confirmer(corpus):
     return confirmed
 
 
+def _parse_annotated_row(tr):
+    """``(canonical label, figure keys, [green figure spans], cell count)`` for
+    a table row in the *annotated* soup, ignoring injected ``[n]`` markers."""
+    cells = tr.find_all(["td", "th"], recursive=False)
+    label, figs, spans = "", [], []
+    for cell in cells:
+        ctext = _clean_cell_text(cell)
+        if not label and re.search(r"[A-Za-z]{3,}", ctext):
+            label = ctext
+        figs.extend(_fig_keys(ctext))
+        spans.extend(cell.find_all("span", class_="secv-num-ok"))
+    return canonical(label, letters_only=True), figs, spans, len(cells)
+
+
 def _mark_unconfirmed_table_rows(root, corpus) -> int:
     """Paint blue the figures of any real comparative line-item row (2–3
     figures, line-item label) whose exact ``(label, figures)`` the PDF does not
@@ -187,22 +201,10 @@ def _mark_unconfirmed_table_rows(root, corpus) -> int:
     for tr in root.find_all("tr"):
         if tr.find_parent(class_="secv-callout") is not None:
             continue
-        cells = tr.find_all(["td", "th"], recursive=False)
-        if len(cells) < 2:
+        lbl, figs, fig_spans, ncells = _parse_annotated_row(tr)
+        if ncells < 2 or len(lbl) < 10 or _FURNITURE_RE.search(lbl):
             continue
-        label = ""
-        figs: list[str] = []
-        fig_spans = []
-        for cell in cells:
-            ctext = _clean_cell_text(cell)
-            if not label and re.search(r"[A-Za-z]{3,}", ctext):
-                label = ctext
-            figs.extend(_fig_keys(ctext))
-            fig_spans.extend(cell.find_all("span", class_="secv-num-ok"))
-        lbl = canonical(label, letters_only=True)
-        if len(lbl) < 10 or _FURNITURE_RE.search(lbl) or len(figs) not in (2, 3):
-            continue
-        if confirmed(lbl, tuple(figs)):
+        if len(figs) not in (2, 3) or confirmed(lbl, tuple(figs)):
             continue
         for span in fig_spans:
             _paint_blue(
@@ -215,12 +217,109 @@ def _mark_unconfirmed_table_rows(root, corpus) -> int:
     return n
 
 
-def mark_review_zones(soup, root, corpus=None) -> tuple[int, int, int]:
+def _pdf_sequence(corpus):
+    """``(positions, counts)`` for PDF rows in document order — ``positions``
+    maps a label to ``[(seq_index, figure_tuple)]``; ``counts`` is a label
+    frequency map used to find unique anchors and ambiguous repeats."""
+    from collections import Counter
+
+    seq = []
+    for raw in corpus.pages_raw:
+        for line in raw.splitlines():
+            if not re.search(r"[A-Za-z]{3,}", line) or not re.search(r"\d", line):
+                continue
+            figs = tuple(_fig_keys(line))
+            lbl = canonical(
+                _DATE_RE.sub(" ", re.sub(r"[\d,()%₹$.\-]+", " ", line)),
+                letters_only=True,
+            )
+            if lbl and figs:
+                seq.append((lbl, figs))
+    positions: dict[str, list] = {}
+    counts: Counter = Counter()
+    for i, (l, f) in enumerate(seq):
+        positions.setdefault(l, []).append((i, f))
+        counts[l] += 1
+    return positions, counts
+
+
+def _mark_context_mismatched_rows(root, corpus) -> int:
+    """Blue-mark a *repeated*-label row whose value disagrees with the PDF
+    occurrence that shares its surroundings.
+
+    A label that recurs (a line item's current and non-current portions, a
+    "total" in several schedules) is disambiguated by its neighbours: each HTML
+    statement table is pinned to a PDF region by the rows whose labels are
+    unique on both sides, and a repeated-label row is then compared to the
+    single PDF occurrence of that label inside that region.  This catches an
+    *exchange* swap — two occurrences trading values — which every whole-row
+    check passes because both values still exist against the label.  It is
+    surfaced as blue (verify), never red: the region is inferred, so on an
+    unusual layout an occasional mark is only a prompt to look.
+    """
+    if corpus is None or not getattr(corpus, "pages_raw", None):
+        return 0
+    from collections import Counter
+
+    pdf_pos, pdf_count = _pdf_sequence(corpus)
+
+    tables = []
+    for table in root.find_all("table"):
+        rows = []
+        for tr in table.find_all("tr"):
+            if tr.find_parent(class_="secv-callout") is not None:
+                continue
+            lbl, figs, spans, ncells = _parse_annotated_row(tr)
+            if ncells >= 2:
+                rows.append((lbl, figs, spans))
+        if sum(1 for l, f, s in rows if f and len(l) >= 4) >= 5:
+            tables.append(rows)
+
+    hcount = Counter(l for rows in tables for l, f, s in rows if l and f)
+    n = 0
+    for rows in tables:
+        anchors = [
+            l for l, f, s in rows
+            if l and hcount[l] == 1 and pdf_count.get(l, 0) == 1 and len(l) >= 10
+        ]
+        if not anchors:
+            continue
+        apos = sorted(pdf_pos[l][0][0] for l in anchors)
+        lo, hi = apos[0] - 8, apos[-1] + 8
+        for lbl, figs, spans in rows:
+            if (
+                not (lbl and figs)
+                or len(lbl) < 10
+                or _FURNITURE_RE.search(lbl)
+                or len(figs) not in (2, 3)
+                or pdf_count.get(lbl, 0) < 2      # only genuinely repeated labels
+            ):
+                continue
+            in_window = [pf for (idx, pf) in pdf_pos[lbl] if lo <= idx <= hi]
+            if len(in_window) != 1:               # can't disambiguate → skip
+                continue
+            if in_window[0] == tuple(figs):        # matches its context → correct
+                continue
+            for span in spans:
+                _paint_blue(
+                    span,
+                    "Manual-review zone — repeated label. In this table's "
+                    f"context the PDF shows “{' '.join(in_window[0])}” here, but "
+                    f"the HTML shows “{' '.join(figs)}”. Two same-named rows may "
+                    "have had their values swapped; verify which is correct.",
+                )
+                n += 1
+    return n
+
+
+def mark_review_zones(soup, root, corpus=None) -> tuple[int, int, int, int]:
     """Apply the blue overlay.
 
-    Returns ``(prose_figures, cross_references, unconfirmed_table_figures)``.
+    Returns ``(prose_figures, cross_references, unconfirmed_table_figures,
+    context_mismatched_figures)``.
     """
     intable = _mark_unconfirmed_table_rows(root, corpus)
+    context = _mark_context_mismatched_rows(root, corpus)
     figs = _mark_prose_figures(soup, root)
     xrefs = _mark_cross_references(soup, root)
-    return figs, xrefs, intable
+    return figs, xrefs, intable, context
