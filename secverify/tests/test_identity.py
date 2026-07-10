@@ -285,3 +285,23 @@ def test_context_marks_anchorless_repeated_rows():
                if "Government securities" in tr.get_text())
     assert any("secv-num-review" in " ".join(sp.get("class", []))
                for sp in gov.find_all("span"))
+
+
+def test_scale_word_amount_marked_blue():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from bs4 import BeautifulSoup
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    # "8 crore" is ₹80,000,000 — a small digit + scale word must be eyeballed,
+    # though it dodges the significance filter on its own.
+    pages = ["The Company recognised a provision of 8 crore during the quarter"]
+    html = ("<html><body><p>The Company recognised a provision of 8 crore "
+            "during the quarter</p></body></html>")
+    r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                  review_zones=True).run(html, "ref.pdf", "doc.html")
+    soup = BeautifulSoup(r.html_out, "html.parser")
+    soup.find(id="secv-summary").extract()
+    eight = next(s for s in soup.find_all("span") if s.get_text(strip=True) == "8")
+    assert "secv-num-review" in eight.get("class", [])

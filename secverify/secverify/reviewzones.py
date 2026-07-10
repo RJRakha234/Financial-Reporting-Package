@@ -78,6 +78,21 @@ _XREF_RE = re.compile(
     r"as\s+per\s+note|schedule|annexure)\b[\s.]*\d{0,3}[A-Za-z.\d]*",
     re.I,
 )
+#: a scale word right after a number makes it money even when the digits are
+#: small ("8 crore" = ₹80,000,000), so it must be eyeballed like any amount
+_SCALE_RE = re.compile(
+    r"^[\s ]*(?:crore|crores|lakh|lakhs|million|billion|thousand|mn|bn)\b",
+    re.I,
+)
+
+
+def _followed_by_scale(span) -> bool:
+    """True when the text immediately after *span* begins with a scale word."""
+    text, node = "", span.next_sibling
+    while node is not None and len(text) < 16:
+        text += node.get_text() if hasattr(node, "get_text") else str(node)
+        node = node.next_sibling
+    return bool(_SCALE_RE.match(text))
 
 
 def _mark_prose_figures(soup, root) -> int:
@@ -87,8 +102,8 @@ def _mark_prose_figures(soup, root) -> int:
     for span in root.find_all("span", class_="secv-num-ok"):
         if span.find_parent("table") is not None:
             continue  # in-table figures are positionally checked already
-        if not _is_review_figure(span.get_text()):
-            continue  # a date/year/note-ref, not a line-item figure
+        if not (_is_review_figure(span.get_text()) or _followed_by_scale(span)):
+            continue  # a date/year/note-ref, not a line-item money figure
         _paint_blue(
             span,
             "Manual-review zone — this figure is validated as present in the "
