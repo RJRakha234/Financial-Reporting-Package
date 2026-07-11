@@ -246,3 +246,52 @@ def grid_compare(corpus, soup, pdf_paths):
                     f"figures (closest: {', '.join(pfigs)}). Verify this "
                     f"row.{wide_note}",
                 )
+
+    # Row ORDER within a table.  Rows reordered inside a statement keep every
+    # value correct — presence, row-value and even footing all pass (same rows,
+    # same total) — so sequence is the only signal.  Each table is pinned to a
+    # PDF region by its unique-label rows; every row whose label occurs exactly
+    # once in that region must then appear in the PDF's order.  Rows outside
+    # the longest increasing subsequence are reported for review.
+    from collections import Counter
+    from .coverage import _lis_indices
+
+    hcount = Counter(l for rows in html_tables for l, f in rows if l and f)
+    pdf_pos: dict[str, list[int]] = {}
+    for i, (l, f) in enumerate(pdf_rows):
+        pdf_pos.setdefault(l, []).append(i)
+    order_emitted: set[tuple] = set()
+    for html_rows in html_tables:
+        anchors = [
+            l for l, f in html_rows
+            if l and f and hcount[l] == 1
+            and len(pdf_pos.get(l, [])) == 1 and len(l) >= 10
+        ]
+        if len(anchors) < 2:
+            continue
+        apos = sorted(pdf_pos[l][0] for l in anchors)
+        lo, hi = apos[0] - 8, apos[-1] + 8
+        seq: list[tuple[str, int, list[str]]] = []
+        for l, f in html_rows:
+            if not (l and f) or len(l) < 10 or "refertonote" in l:
+                continue
+            in_win = [p for p in pdf_pos.get(l, []) if lo <= p <= hi]
+            if len(in_win) != 1:
+                continue  # not unambiguously locatable in this region
+            seq.append((l, in_win[0], f))
+        if len(seq) < 3:
+            continue
+        keep = _lis_indices([p for _l, p, _f in seq])
+        for idx, (l, p, f) in enumerate(seq):
+            if idx in keep or (l, tuple(f)) in order_emitted:
+                continue
+            order_emitted.add((l, tuple(f)))
+            yield (
+                "grid-row-order",
+                "review",
+                f"{l}: HTML {' '.join(f)} / PDF row order differs",
+                f"Row order — “{l}” (values {', '.join(f)}, all correct) sits "
+                "in a different position within this table than in the PDF. "
+                "Rows reordered inside a statement pass every value check, so "
+                "verify the row sequence against the PDF.",
+            )

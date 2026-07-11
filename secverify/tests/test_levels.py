@@ -280,3 +280,24 @@ def test_duplicated_paragraph_flagged():
     # a single copy does not flag
     r2 = run([para], f"<html><body><p>{para}</p></body></html>", "sigma")
     assert not [i for i in r2.issues if i.kind == "duplicate"]
+
+
+def test_grid_row_order_within_table():
+    # rows reordered inside a table keep every value correct — presence,
+    # row-value and footing all pass; the sequence check must flag it (review)
+    heading = "<p>Condensed Balance Sheet as at June 30, 2025 March 31, 2025</p>"
+    rows = [
+        "<tr><td>Property plant and equipment</td><td>9868</td><td>10070</td></tr>",
+        "<tr><td>Right of use assets</td><td>3201</td><td>3078</td></tr>",
+        "<tr><td>Capital work in progress</td><td>891</td><td>778</td></tr>",
+        "<tr><td>Deferred tax assets net</td><td>601</td><td>497</td></tr>",
+        "<tr><td>Total non current assets</td><td>48443</td><td>47768</td></tr>",
+    ]
+    def html(r):
+        return f"<html><body>{heading}<table>{''.join(r)}</table></body></html>"
+    ok = run([_STMT], html(rows), "beta")
+    assert not [i for i in ok.issues if i.kind == "grid-row-order"]
+    swapped = [rows[0], rows[2], rows[1], rows[3], rows[4]]
+    r = run([_STMT], html(swapped), "beta")
+    flags = [i for i in r.issues if i.kind == "grid-row-order"]
+    assert flags and all(i.severity == "review" for i in flags)
