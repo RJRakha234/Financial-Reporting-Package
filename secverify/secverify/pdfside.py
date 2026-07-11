@@ -283,3 +283,82 @@ def load_pdf(path: str | list[str]) -> PdfCorpus:
     corpus.letters.canon = "".join(letters_parts)
     corpus.page_letters = letters_parts
     return corpus
+
+
+#: document-order anchors: minimum canonical (alnum) length for a line to
+#: locate its document inside the HTML, and how many to sample per document
+_DOCORDER_MIN_LEN = 40
+_DOCORDER_MAX_ANCHORS = 80
+_DOCORDER_MAX_PAGES = 8
+#: a document needs at least this many distinctive, HTML-locatable anchors
+#: before the tool will trust a position for it
+_DOCORDER_MIN_FOUND = 3
+
+
+def _order_docs_by_html(
+    anchor_sets: list[list[str]], html_alnum: str
+) -> list[int] | None:
+    """Order of document indices by where their content sits in the HTML.
+
+    Combined exhibits (e.g. interim condensed + annual statements, each with
+    its auditor's report, in one HTML) must be checked in the HTML's own
+    document order: the occurrence-pairing checks align the k-th PDF repeat
+    of a label with the k-th HTML repeat, so a corpus concatenated in a
+    different order would pair rows across the two financials.
+
+    Anchors shared by two or more documents (identical rows repeated in both
+    an annual and an interim statement) cannot place a document and are
+    dropped.  Returns ``None`` when any document lacks enough distinctive,
+    HTML-locatable anchors to be placed confidently — the caller keeps the
+    given order in that case (the tool never guesses).
+    """
+    shared: Counter = Counter()
+    for anchors in anchor_sets:
+        shared.update(set(anchors))
+    medians: list[int] = []
+    for anchors in anchor_sets:
+        found = sorted(
+            pos
+            for a in set(anchors)
+            if shared[a] == 1 and (pos := html_alnum.find(a)) != -1
+        )
+        if len(found) < _DOCORDER_MIN_FOUND:
+            return None
+        medians.append(found[len(found) // 2])
+    return sorted(range(len(anchor_sets)), key=lambda i: (medians[i], i))
+
+
+def order_pdfs_to_html(
+    paths: list[str], html_text: str
+) -> tuple[list[str], bool]:
+    """Reorder reference *paths* to match the HTML's document order.
+
+    Samples distinctive lines (figures included, so an annual row and its
+    interim twin stay distinguishable) from each PDF's first pages, locates
+    them in the HTML, and sorts the PDFs by the median position.  Returns
+    ``(ordered_paths, changed)``; on any doubt the given order is kept.
+    """
+    if len(paths) < 2:
+        return list(paths), False
+    import pdfplumber
+    from bs4 import BeautifulSoup
+
+    html_alnum, _ = canonicalize(
+        BeautifulSoup(html_text, "html.parser").get_text(" ")
+    )
+    anchor_sets: list[list[str]] = []
+    for p in paths:
+        anchors: list[str] = []
+        with pdfplumber.open(p) as pdf:
+            for page in pdf.pages[:_DOCORDER_MAX_PAGES]:
+                for line in (page.extract_text() or "").splitlines():
+                    canon, _ = canonicalize(line)
+                    if len(canon) >= _DOCORDER_MIN_LEN:
+                        anchors.append(canon)
+                if len(anchors) >= _DOCORDER_MAX_ANCHORS:
+                    break
+        anchor_sets.append(anchors)
+    order = _order_docs_by_html(anchor_sets, html_alnum)
+    if order is None or order == list(range(len(paths))):
+        return list(paths), False
+    return [paths[i] for i in order], True

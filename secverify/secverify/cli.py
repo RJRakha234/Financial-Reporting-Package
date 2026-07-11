@@ -84,6 +84,11 @@ def main(argv: list[str] | None = None, level: str = "base",
         review_zones=args.review_zones, strict=args.strict, footed=args.footed,
     )
 
+    if getattr(result, "pdf_reordered", False):
+        print(
+            "note: reference PDFs reordered to match the HTML's document "
+            "order: " + " → ".join(result.pdf_order)
+        )
     print(to_console(result))
     if getattr(result, "output_html", None):
         print(f"\nHighlighted HTML written to: {result.output_html}")

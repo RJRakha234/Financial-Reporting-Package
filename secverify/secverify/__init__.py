@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .annotate import Annotator, Issue, Result
-from .pdfside import load_pdf
+from .pdfside import load_pdf, order_pdfs_to_html
 
 __all__ = ["verify", "Annotator", "Issue", "Result", "LEVELS"]
 __version__ = "1.0.0"
@@ -43,9 +43,15 @@ def verify(
     """
     if level not in LEVELS:
         raise ValueError(f"unknown level {level!r}; choose from {list(LEVELS)}")
-    corpus = load_pdf(pdf_path)
     pdf_paths = [pdf_path] if isinstance(pdf_path, str) else list(pdf_path)
     html_text = Path(html_path).read_text(encoding="utf-8", errors="replace")
+    # Combined exhibits (two financials, each with its auditor's report, in
+    # one HTML) must be checked in the HTML's own document order so the
+    # occurrence-pairing checks never pair a row from one financial with the
+    # other's section.  Reorder the reference PDFs to match; on any doubt the
+    # given order is kept.
+    pdf_paths, pdf_reordered = order_pdfs_to_html(pdf_paths, html_text)
+    corpus = load_pdf(pdf_paths)
     result = Annotator(
         corpus, level=level, pdf_paths=pdf_paths,
         review_zones=review_zones, strict=strict, footed=footed,
@@ -54,6 +60,8 @@ def verify(
         " + ".join(Path(p).name for p in pdf_paths),
         Path(html_path).name,
     )
+    result.pdf_order = [Path(p).name for p in pdf_paths]  # type: ignore[attr-defined]
+    result.pdf_reordered = pdf_reordered  # type: ignore[attr-defined]
     if output_html is None:
         output_html = str(Path(html_path).with_suffix("")) + ".checked.html"
     if output_html.lower() != "none":
