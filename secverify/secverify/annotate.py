@@ -271,6 +271,14 @@ class Annotator:
             self.corpus, clean_soup, self.pdf_paths
         ):
             self._new_issue(kind, sev, exc, rem)
+        from .style import style_checks
+        for kind, sev, exc, rem in style_checks(self.corpus, clean_soup, self.pdf_paths):
+            issue = self._new_issue(kind, sev, exc, rem)
+            el = self._match_block(canonical(exc, letters_only=True), 0.5)
+            if el is not None:
+                cls = el.get("class", []); cls = cls.split() if isinstance(cls, str) else cls
+                el["class"] = cls + ["secv-case-warn" if kind == "case" else "secv-bold-warn"]
+                el["title"] = f"#{issue.num}: {rem}"[:500]
         # geometry-bound identifier↔name association (B10) — see identity.py
         add = lambda kind, sev, exc, rem: self._new_issue(kind, sev, exc, rem)  # noqa: E731
         check_identifier_geometry(
@@ -975,6 +983,8 @@ _CSS = """
                    padding: 0 1px; font-weight: bold; }
 .secv-token-bad { background: #ff9d9d; outline: 2px solid #a00000; border-radius: 2px;
                   padding: 0 1px; font-weight: bold; }
+.secv-case-warn { outline: 3px solid #8a2be2 !important; }  /* violet = case differs */
+.secv-bold-warn { outline: 3px solid #e83e8c !important; }  /* magenta = bold lost */
 .secv-token-caution { background: #e0b483; outline: 2px solid #8a5a2b; border-radius: 2px;
                       padding: 0 1px; font-weight: bold; }
 .secv-xref-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
