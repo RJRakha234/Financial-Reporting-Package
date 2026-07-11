@@ -55,11 +55,26 @@ _UPLOAD_DIR = "/root/.claude/uploads/2527513b-fd2d-5b8f-9457-d0835a71e71e"
 
 # Order here is the left-to-right column order in the report.
 DEFAULT_DOCS: list[tuple[str, str]] = [
-    ("IFRS · USD Earnings Release", os.path.join(_UPLOAD_DIR, "8b1385f0-ifrsusdearningsrelease_q1.pdf")),
+    ("Ind AS · Consolidated",       os.path.join(_UPLOAD_DIR, "0d0a84c3-consolfy26q1finstatement.pdf")),
+    ("Ind AS · Standalone",         os.path.join(_UPLOAD_DIR, "81f78afd-safy26q1finstatement.pdf")),
     ("IFRS · INR Consolidated",     os.path.join(_UPLOAD_DIR, "ef6fc40d-consolifrsinrfy26q1finstatement.pdf")),
-    ("IGAAP · Consolidated",        os.path.join(_UPLOAD_DIR, "0d0a84c3-consolfy26q1finstatement.pdf")),
-    ("IGAAP · Standalone",          os.path.join(_UPLOAD_DIR, "81f78afd-safy26q1finstatement.pdf")),
+    ("IFRS · USD Earnings Release", os.path.join(_UPLOAD_DIR, "8b1385f0-ifrsusdearningsrelease_q1.pdf")),
 ]
+
+# The statement every other financial is benchmarked against. If None, the tool
+# auto-picks the label matching both "Ind AS"/"Ind" and "Consol", else the first doc.
+DEFAULT_BENCHMARK = "Ind AS · Consolidated"
+
+
+def resolve_benchmark(doc_labels: list[str], requested: Optional[str]) -> str:
+    """Pick the benchmark document label from the set."""
+    if requested and requested in doc_labels:
+        return requested
+    for lbl in doc_labels:  # auto-detect a consolidated Ind AS statement
+        low = lbl.lower()
+        if "consol" in low and ("ind as" in low or "indas" in low or "ind-as" in low):
+            return lbl
+    return doc_labels[0]
 
 # Highlight annotation subtypes we treat as a "mark".
 _MARK_TYPES = {"Highlight", "Underline", "Squiggly", "StrikeOut"}
@@ -458,18 +473,26 @@ _APP_CSS = """
 .seg button[aria-pressed="true"] .pop{transform:scale(1)}
 .dcell[data-state="accepted"]{background:var(--good-soft)}
 .dcell[data-state="rejected"]{background:var(--bad-soft)}
-.dcell[data-state="rejected"] .dtext{background:none;text-decoration:line-through;
-  text-decoration-color:var(--bad);opacity:.7}
-.difflink{font:inherit;font-size:11px;font-weight:650;color:var(--accent);background:none;border:none;
-  cursor:pointer;padding:0;align-self:flex-start}
-.diffbox{font-size:11.5px;line-height:1.6;background:var(--paper);border:1px dashed var(--line-strong);
-  border-radius:9px;padding:9px 10px;display:none}
-.diffbox.open{display:block}
-.diffbox .add{background:var(--good-soft);color:var(--good);border-radius:3px;padding:0 2px;font-weight:600}
-.diffbox .del{background:var(--bad-soft);color:var(--bad);border-radius:3px;padding:0 2px;
-  text-decoration:line-through}
-.diffbox .dh{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
-  font-weight:700;margin-bottom:5px}
+/* word-level diff: highlight ONLY the differing words, never the whole line */
+.add{background:var(--accent-soft);color:var(--accent)}   /* extra (in this statement) */
+.del{background:var(--warn-soft);color:var(--warn)}       /* missing (present in benchmark) */
+.dtext.diffed{background:none}                         /* drop the full-line highlighter */
+.dtext .add{background:var(--accent-soft);color:var(--accent);border-radius:3px;
+  padding:0 2px;font-weight:700}                        /* extra words in this statement */
+.dtext .del{background:var(--warn-soft);color:var(--warn);border-radius:3px;
+  padding:0 2px;font-weight:600;border-bottom:1.5px dashed var(--warn)}  /* words present in benchmark, missing here */
+.difflegend{font-size:11px;color:var(--muted);line-height:1.5}
+.difflegend .dh{margin-bottom:4px}
+.difflegend .add,.difflegend .del{border-radius:3px;padding:0 5px;font-weight:700}
+.difflegend .add{background:var(--accent-soft);color:var(--accent)}
+.difflegend .del{background:var(--warn-soft);color:var(--warn)}
+.benchtag{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  color:#fff;background:var(--ink);padding:2px 8px;border-radius:999px}
+.dcell.isbench{background:color-mix(in srgb,var(--accent) 7%,var(--card));
+  box-shadow:inset 3px 0 0 var(--accent)}
+.tag-bench{margin-top:auto;font-size:11px;font-weight:650;color:var(--accent);line-height:1.4}
+.dcell[data-state="rejected"]{box-shadow:inset 3px 0 0 var(--bad)}
+.dcell[data-state="accepted"]{box-shadow:inset 3px 0 0 var(--good)}
 .reasons{display:flex;gap:6px;flex-wrap:wrap}
 
 /* confetti + celebrate banner */
@@ -554,9 +577,11 @@ _APP_JS = r"""
       '<header class="masthead">'+
       '<div class="eyebrow">Financial Reporting Package · Interactive Note Review</div>'+
       '<h1>Common Notes — Accept / Reject Console</h1>'+
-      '<p class="intro">For every common note, each statement is compared against the reference version. '+
-      'Where a financial <strong>differs</strong>, accept it (an acceptable variation) or reject it (needs correction). '+
-      'Matching statements are marked automatically. Your decisions are saved in this browser and can be exported.</p>'+
+      '<p class="intro">Every common note is benchmarked against <strong>'+esc(benchShort())+'</strong>. '+
+      'Where another statement <strong>differs</strong>, the note shows only the differing words — '+
+      '<span class="del" style="padding:0 4px;border-radius:3px">missing</span> words are present in the benchmark but absent here; '+
+      '<span class="add" style="padding:0 4px;border-radius:3px">extra</span> words appear here but not in the benchmark. '+
+      'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported.</p>'+
       '</header>'+
       '<section class="kpis">'+
         kpi('accent', k.total, 'Statements') +
@@ -602,8 +627,12 @@ _APP_JS = r"""
     '</article>';
   }
 
+  var BENCH = DATA.benchmark;
+  function benchShort(){ var m=docMeta(BENCH); return m.main + (m.sub?(' '+m.sub):''); }
+
   function cell(n,c){
     var meta = docMeta(c.doc);
+    var badge = c.isBenchmark ? '<span class="benchtag">Benchmark</span>' : '';
     var name = '<div class="dname">'+esc(meta.main)+(meta.sub?'<small>'+esc(meta.sub)+'</small>':'')+'</div>';
     var body, chips='', decision='';
     if(!c.present){
@@ -614,28 +643,35 @@ _APP_JS = r"""
       chips = '<span class="'+scls+'">serial '+esc(c.serial||'—')+'</span>'+
               '<span class="mini">p.'+c.page+'</span>'+
               (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
-      body = '<div class="dclip"><span class="dtext">'+esc(c.text)+'</span></div>'+
+      // Benchmark shows its own text as the reference; others highlight only the
+      // words that are extra (in this statement) vs missing (present in benchmark).
+      var inner = c.isBenchmark ? esc(c.text) : (c.differs ? diffHTML(n.refText, c.text) : esc(c.text));
+      body = '<div class="dclip"><span class="dtext'+(c.differs&&!c.isBenchmark?' diffed':'')+'">'+inner+'</span></div>'+
              '<button class="expand" data-exp>Show full text ▾</button>';
     }
-    if(c.differs){
-      var diff = (c.present && n.refText) ?
-        '<button class="difflink" data-diff>Compare to reference ▾</button>'+
-        '<div class="diffbox"><div class="dh">Reference vs this statement — '+
-        '<span class="add">added</span> / <span class="del">missing</span></div>'+diffHTML(n.refText, c.text)+'</div>' : '';
-      decision = '<div class="decision">'+diff+
+    if(c.isBenchmark){
+      decision = '<div class="tag-bench">Reference statement · all others compared to this</div>';
+    } else if(c.differs){
+      var counts = c.present ? diffCounts(n.refText, c.text) : {add:0, del:0};
+      var legend = '<div class="dh"><span class="del">missing from this statement ('+counts.del+')</span>'+
+                   ' · <span class="add">extra here ('+counts.add+')</span></div>';
+      decision = '<div class="decision">'+
+        '<div class="difflegend">'+legend+'Highlighted above vs <strong>'+esc(benchShort())+'</strong>.</div>'+
         '<div class="seg" role="group" aria-label="decision">'+
           '<button class="acc" data-dec="accepted" aria-pressed="false"><span class="pop">✓</span> Accept</button>'+
           '<button class="rej" data-dec="rejected" aria-pressed="false"><span class="pop">✕</span> Reject</button>'+
         '</div></div>';
     } else {
-      decision = '<div class="tag-match">Matches reference</div>';
+      decision = '<div class="tag-match">Matches benchmark</div>';
     }
-    return '<div class="dcell" data-serial="'+esc(n.serial)+'" data-doc="'+esc(c.doc)+'" data-differs="'+(c.differs?1:0)+'">'+
-      '<div class="dtop">'+name+'</div>'+
+    return '<div class="dcell'+(c.isBenchmark?' isbench':'')+'" data-serial="'+esc(n.serial)+'" data-doc="'+esc(c.doc)+'" data-differs="'+(c.differs?1:0)+'">'+
+      '<div class="dtop">'+name+badge+'</div>'+
       '<div class="chiprow">'+chips+'</div>'+
       body + decision +
     '</div>';
   }
+  function diffCounts(ref,cur){ var d=wordDiff(ref,cur), a=0, x=0;
+    d.forEach(function(p){ if(p.t.trim()==='') return; if(p.op==='+')x++; else if(p.op==='-')a++; }); return {add:x, del:a}; }
 
   // ---- interaction -------------------------------------------------------
   function setDecision(serial, doc, val){
@@ -734,8 +770,6 @@ _APP_JS = r"""
         persist(); refresh(); return; }
       if(t.closest('[data-exp]')){ var b=t.closest('[data-exp]'); var clip=b.previousElementSibling;
         clip.classList.toggle('open'); b.textContent = clip.classList.contains('open')?'Show less ▴':'Show full text ▾'; return; }
-      if(t.closest('[data-diff]')){ var d=t.closest('[data-diff]'); d.nextElementSibling.classList.toggle('open');
-        d.textContent = d.nextElementSibling.classList.contains('open')?'Hide comparison ▴':'Compare to reference ▾'; return; }
       if(t.id==='expCsv'){ exportCsv(); return; }
       if(t.id==='expJson'){ exportJson(); return; }
       if(t.id==='reset'){ if(confirm('Clear all accept/reject decisions?')){ store={}; persist();
@@ -753,6 +787,7 @@ _APP_JS = r"""
 
   // ---- export ------------------------------------------------------------
   function decisionOf(n,c){
+    if(c.isBenchmark) return 'benchmark';
     if(!c.differs) return 'auto-match';
     return store[key(n.serial,c.doc)] || 'pending';
   }
@@ -796,56 +831,79 @@ def _note_status(row: NoteRow, total_docs: int) -> tuple[str, str, bool]:
 
 
 def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
-                  notes: list[NoteRow]) -> dict:
-    """Assemble the JSON model the interactive front-end renders from."""
+                  notes: list[NoteRow], benchmark: Optional[str] = None) -> dict:
+    """Assemble the JSON model the interactive front-end renders from.
+
+    Every note is compared against the *benchmark* statement (default: the
+    Consolidated Ind AS financial). The benchmark cell is the reference and is
+    never flagged; other statements differ when their serial or highlighted text
+    departs from the benchmark's.
+    """
     from collections import Counter
 
     total = len(doc_labels)
+    bench = resolve_benchmark(doc_labels, benchmark)
     common = [n for n in notes if n.present_count == total]
     partial = [n for n in notes if n.present_count < total]
 
     docs_meta = []
     for lbl in doc_labels:
         main, _, tail = lbl.partition("·")
-        docs_meta.append({"label": lbl, "main": main.strip(), "sub": tail.strip()})
+        docs_meta.append({"label": lbl, "main": main.strip(), "sub": tail.strip(),
+                          "benchmark": lbl == bench})
 
     note_objs = []
     for n in common + partial:
-        present_marks = [m for m in n.cells.values() if m]
-        serials_raw = [m.serial_raw for m in present_marks if m.serial_raw]
-        texts = [m.text for m in present_marks if m.text]
-        ref_serial = Counter(serials_raw).most_common(1)[0][0] if serials_raw else ""
-        ref_text = Counter(texts).most_common(1)[0][0] if texts else ""
+        bmark = n.cells.get(bench)
+        # Reference = benchmark statement's version; fall back to majority if the
+        # benchmark itself does not highlight this note.
+        if bmark:
+            ref_serial, ref_text, ref_source = bmark.serial_raw, bmark.text, bench
+        else:
+            present_marks = [m for m in n.cells.values() if m]
+            serials_raw = [m.serial_raw for m in present_marks if m.serial_raw]
+            texts = [m.text for m in present_marks if m.text]
+            ref_serial = Counter(serials_raw).most_common(1)[0][0] if serials_raw else ""
+            ref_text = Counter(texts).most_common(1)[0][0] if texts else ""
+            ref_source = None
 
         cells = []
         for lbl in doc_labels:
+            is_bench = (lbl == bench)
             m = n.cells[lbl]
             if m is None:
                 cells.append({
                     "doc": lbl, "present": False, "page": None, "serial": "",
-                    "text": "", "differs": True, "reasons": ["not highlighted"], "sim": 0.0,
+                    "text": "", "differs": not is_bench, "reasons": ["not highlighted"],
+                    "sim": 0.0, "isBenchmark": is_bench,
                 })
                 continue
             reasons = []
-            serial_diff = (m.serial_raw or "").strip() != (ref_serial or "").strip()
             sim = SequenceMatcher(None, m.text, ref_text).ratio() if ref_text else 1.0
-            text_diff = sim < 0.985
-            if serial_diff:
-                reasons.append("serial format")
-            if text_diff:
-                reasons.append("text differs")
+            if not is_bench:
+                if (m.serial_raw or "").strip() != (ref_serial or "").strip():
+                    reasons.append("serial format")
+                if sim < 0.985:
+                    reasons.append("text differs")
             cells.append({
                 "doc": lbl, "present": True, "page": m.page, "serial": m.serial_raw,
-                "text": m.text, "differs": bool(reasons), "reasons": reasons, "sim": round(sim, 3),
+                "text": m.text, "differs": bool(reasons), "reasons": reasons,
+                "sim": round(sim, 3), "isBenchmark": is_bench,
             })
 
-        label, severity, has_diff = _note_status(n, total)
+        diff_cells = [c for c in cells if c["differs"]]
+        if not diff_cells:
+            label, severity, has_diff = "Consistent", "good", False
+        elif all(c["present"] for c in cells):
+            label, severity, has_diff = "Needs review", "warn", True
+        else:
+            present_n = sum(1 for c in cells if c["present"])
+            label, severity, has_diff = f"In {present_n}/{total} only", "bad", True
         note_objs.append({
             "serial": n.serial_key, "label": n.label, "section": n.section,
-            "refSerial": ref_serial, "refText": ref_text,
+            "refSerial": ref_serial, "refText": ref_text, "refSource": ref_source,
             "status": label, "severity": severity, "hasDiff": has_diff,
-            "diffCount": sum(1 for c in cells if c["differs"]),
-            "cells": cells,
+            "diffCount": len(diff_cells), "cells": cells,
         })
 
     unnumbered = []
@@ -857,6 +915,7 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                            all(c["present"] for c in n["cells"]))
     return {
         "generated": date.today().isoformat(),
+        "benchmark": bench,
         "docs": docs_meta,
         "notes": note_objs,
         "unnumbered": unnumbered,
@@ -871,8 +930,8 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 
 
 def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
-                notes: list[NoteRow]) -> str:
-    payload = build_payload(doc_labels, marks_by_doc, notes)
+                notes: list[NoteRow], benchmark: Optional[str] = None) -> str:
+    payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark)
     import json
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     return (
@@ -902,7 +961,8 @@ def load_decisions(path: str) -> dict[tuple[str, str], str]:
 
 def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 notes: list[NoteRow], out_path: str,
-                decisions_path: Optional[str] = None) -> None:
+                decisions_path: Optional[str] = None,
+                benchmark: Optional[str] = None) -> None:
     """Write a formatted workbook: common-notes matrix + unnumbered highlights.
 
     If decisions_path is given (a JSON exported from the interactive console),
@@ -920,7 +980,8 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     # Decisions + per-cell diff model (reuse the same logic the front-end uses).
     decisions = load_decisions(decisions_path) if decisions_path else {}
     have_dec = bool(decisions_path)
-    payload = build_payload(doc_labels, marks_by_doc, notes)
+    payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark)
+    bench = payload["benchmark"]
     pnote_by_serial = {n["serial"]: n for n in payload["notes"]}
 
     def cell_differs(serial: str, doc: str) -> bool:
@@ -973,34 +1034,29 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     ws.row_dimensions[1].height = 30
 
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
-    s = ws.cell(2, 1, f"{total} statements · {len(common)} common notes · matched by comment-box serial number "
+    s = ws.cell(2, 1, f"{total} statements · {len(common)} common notes · benchmarked against {bench} "
                       f"· generated {date.today().isoformat()}")
     s.font = Font(size=9, italic=True, color="5B6472")
     s.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[2].height = 16
 
-    # Header row
+    # Header row (mark the benchmark statement)
     hr = 3
     for c, name in enumerate(headers, start=1):
-        cell = ws.cell(hr, c, name)
-        cell.font = Font(bold=True, color=ACCENT, size=10)
-        cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
+        is_bench_col = name == bench
+        cell = ws.cell(hr, c, (name + "  ★ benchmark") if is_bench_col else name)
+        cell.font = Font(bold=True, color="FFFFFF" if is_bench_col else ACCENT, size=10)
+        cell.fill = PatternFill("solid", fgColor=INK if is_bench_col else ACC_SOFT)
         cell.alignment = center
         cell.border = border
     ws.row_dimensions[hr].height = 34
 
+    SEV_COL = {"good": (GOOD, GOOD_SOFT), "warn": (WARN, WARN_SOFT), "bad": (BAD, BAD_SOFT)}
+
     def status_text(n: NoteRow) -> tuple[str, str, str]:
-        present = n.present_count
-        txt_ok = text_consistency(n) >= 0.90
-        fmt_ok = serial_format_consistent(n)
-        if present == total and txt_ok and fmt_ok:
-            return "Consistent", GOOD, GOOD_SOFT
-        if present == total:
-            issues = []
-            if not fmt_ok: issues.append("serial format")
-            if not txt_ok: issues.append("text differs")
-            return "Check " + " & ".join(issues), WARN, WARN_SOFT
-        return f"In {present}/{total} only", BAD, BAD_SOFT
+        pn = pnote_by_serial.get(n.serial_key, {})
+        col, fill = SEV_COL.get(pn.get("severity", "good"), (GOOD, GOOD_SOFT))
+        return pn.get("status", "Consistent"), col, fill
 
     DEC_TAG = {"accepted": "✔ ACCEPTED", "rejected": "✘ REJECTED",
                "pending": "◻ PENDING", "auto-match": ""}
@@ -1029,9 +1085,14 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         ws.cell(r, 2, n.section).alignment = wrap_top
         for c, lbl in enumerate(doc_labels, start=3):
             m = n.cells[lbl]
+            is_bench_col = lbl == bench
             if m is None:
                 cell = ws.cell(r, c, "— not highlighted —")
                 cell.font = Font(italic=True, color="8A929E", size=9)
+            elif is_bench_col:
+                cell = ws.cell(r, c, f"★ BENCHMARK — [serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+                cell.font = Font(size=9, color=ACCENT, bold=True)
+                cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
             else:
                 dec = decision_for(n.serial_key, lbl) if have_dec else "auto-match"
                 tag = DEC_TAG.get(dec, "")
@@ -1118,15 +1179,16 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
             cell.border = border
         ws3.row_dimensions[1].height = 26
         rr = 2
+        DEC_TAG_LOG = dict(DEC_TAG, benchmark="★ BENCHMARK")
         for pn in payload["notes"]:
             for c in pn["cells"]:
-                dec = decision_for(pn["serial"], c["doc"])
+                dec = "benchmark" if c.get("isBenchmark") else decision_for(pn["serial"], c["doc"])
                 vals = [pn["serial"], pn["label"], c["doc"],
                         "" if c["page"] is None else c["page"],
                         "yes" if c["differs"] else "no",
                         "; ".join(c["reasons"]),
                         f"{round(c['sim'] * 100)}%" if c["present"] else "",
-                        DEC_TAG.get(dec, dec) or "—"]
+                        DEC_TAG_LOG.get(dec, dec) or "—"]
                 for c2, v in enumerate(vals, start=1):
                     cell = ws3.cell(rr, c2, v)
                     cell.border = border
@@ -1171,6 +1233,9 @@ def main(argv=None):
     ap.add_argument("--decisions", default=None,
                     help="Path to a decisions JSON exported from the HTML console. Folds each "
                          "Accept/Reject into the Excel (cell tags, Sign-off column, Decision Log).")
+    ap.add_argument("--benchmark", default=DEFAULT_BENCHMARK,
+                    help="Label of the statement to benchmark all others against "
+                         f"(default: {DEFAULT_BENCHMARK!r}; auto-detects a consolidated Ind AS statement).")
     args = ap.parse_args(argv)
 
     docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
@@ -1185,9 +1250,11 @@ def main(argv=None):
 
     notes = build_notes(labels, marks_by_doc)
     common = [n for n in notes if n.present_count == len(labels)]
+    bench = resolve_benchmark(labels, args.benchmark)
     print(f"\n  {len(notes)} distinct serials · {len(common)} common across all {len(labels)} statements")
+    print(f"  Benchmark statement: {bench}")
 
-    body = render_html(labels, marks_by_doc, notes)
+    body = render_html(labels, marks_by_doc, notes, benchmark=args.benchmark)
     page = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -1199,7 +1266,8 @@ def main(argv=None):
     print(f"\n  HTML report written to: {os.path.abspath(args.out)}")
 
     if args.xlsx:
-        render_xlsx(labels, marks_by_doc, notes, args.xlsx, decisions_path=args.decisions)
+        render_xlsx(labels, marks_by_doc, notes, args.xlsx,
+                    decisions_path=args.decisions, benchmark=args.benchmark)
         note = " (with Accept/Reject sign-off)" if args.decisions else ""
         print(f"  Excel report written to: {os.path.abspath(args.xlsx)}{note}")
     elif args.decisions:
