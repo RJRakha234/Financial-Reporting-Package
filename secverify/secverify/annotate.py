@@ -1253,19 +1253,45 @@ figure-bearing rows.{" The remainder:" if skip_bits else ""}</li>
             f"failed.</p>"
         )
 
+    n_act = sum(1 for i in result.issues if i.severity == "error")
+    n_check = sum(1 for i in result.issues if i.severity in ("review", "caution"))
+    figs_pct_hdr = (
+        round(100.0 * result.figures_ok / result.figures_total, 1)
+        if result.figures_total else 100.0
+    )
+    _chip = ("display:inline-block;padding:8px 18px;margin:4px 8px 4px 0;"
+             "border-radius:6px;font-size:13pt;font-weight:bold")
+    headline = (
+        f'<div style="margin:6px 0 10px 0">'
+        f'<span style="{_chip};background:#e2f7e1;border:2px solid #1e8a26;color:#1e6b24">'
+        f'✓ {result.figures_ok:,} of {result.figures_total:,} figures verified '
+        f'({figs_pct_hdr}%)</span>'
+        + (f'<span style="{_chip};background:#ffecec;border:2px solid #a00000;color:#a00000">'
+           f'✗ {n_act} item(s) to act on</span>' if n_act else
+           f'<span style="{_chip};background:#e2f7e1;border:2px solid #1e8a26;color:#1e6b24">'
+           f'no discrepancies</span>')
+        + (f'<span style="{_chip};background:#fff7e0;border:2px solid #9a6a00;color:#9a6a00">'
+           f'{n_check} quick check(s)</span>' if n_check else "")
+        + '</div>'
+        '<p style="margin:2px 0 8px 0;font-size:10pt">How to read this copy: '
+        '<span class="secv-num-ok">green = verified</span> · '
+        '<span class="secv-text-bad">red = fix / verify against source</span> · '
+        '<span class="secv-text-warn">amber = check wording</span> · '
+        + ('<span class="secv-num-review">blue = check by eye</span> · '
+           if zone_counts is not None else '')
+        + 'hover anything coloured for the exact reason.</p>'
+    )
+
     banner_html = f"""
 <div id="secv-summary">
-<h2>secverify — PDF ↔ HTML validation report</h2>
-<p><b>Reference PDF:</b> {html_mod.escape(pdf_name)} &nbsp;·&nbsp;
-<b>Checked HTML:</b> {html_mod.escape(html_name)}</p>
-<p class="secv-legend">
-<span class="secv-num-ok">green figure = validated against PDF</span>
-<span class="secv-num-bad">red figure = not in PDF</span>
-<span class="secv-text-ok">green block = text matches PDF</span>
-<span class="secv-text-warn">amber block = close match, review wording</span>
-<span class="secv-text-bad">red block = text not in PDF</span>
-{zone_legend}
-</p>
+<h2 style="margin:0 0 2px 0">secverify — review copy</h2>
+<p style="margin:0 0 4px 0;font-size:9pt;color:#555"><b>PDF:</b> {html_mod.escape(pdf_name)}
+&nbsp;·&nbsp; <b>HTML:</b> {html_mod.escape(html_name)}</p>
+{headline}
+<h3 style="margin:8px 0 0 0">Items to correct ({len(result.issues)})</h3>
+{issue_table}
+<details style="margin-top:10px"><summary style="font-weight:bold;cursor:pointer">
+Scope, method &amp; detailed statistics (what was machine-checked — click to expand)</summary>
 {zone_note}
 <p><b>HTML → PDF &nbsp;·&nbsp; Figures:</b> {ok_pct} validated ({result.figures_bad} not found) &nbsp;·&nbsp;
 <b>Text blocks:</b> {result.text_blocks_ok}/{result.text_blocks_total} matched,
@@ -1276,12 +1302,10 @@ reflected in the HTML, {result.coverage.review} to review,
 <span class="{'sev-error' if any(not o.review for o in result.coverage.order_issues) else ''}">{sum(1 for o in result.coverage.order_issues if not o.review)} content-order violation(s)</span>,
 <span class="{'sev-review' if any(o.review for o in result.coverage.order_issues) else ''}">{sum(1 for o in result.coverage.order_issues if o.review)} relocated paragraph(s) to review</span>.
 Omitted PDF content is shown <b>inline</b> as a red callout box at the exact
-position in this document where it should have appeared; the content-order
-check verifies the HTML presents the PDF's content in the PDF's sequence.</p>
+position in this document where it should have appeared.</p>
 {assurance}
-<h3 style="margin:8px 0 0 0">Items to correct ({len(result.issues)})</h3>
-{issue_table}
 {index_note}
+</details>
 {missing_section}
 {review_section}
 {unplaced_section}
