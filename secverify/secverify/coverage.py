@@ -34,21 +34,23 @@ CONTINUATION_TOP_LINES = 3
 ORDER_ANCHOR_MIN_LEN = 25
 #: shorter unique lines (a section heading) may still anchor the REVIEW tier —
 #: they are too weak for a red verdict but fine for a "verify placement" prompt
-ORDER_ANCHOR_SOFT_MIN_LEN = 12
+ORDER_ANCHOR_SOFT_MIN_LEN = 6
 #: displacement below this many letters-canon characters is table/cell
 #: jitter, not a moved section
 ORDER_SLACK = 400
-#: a prose anchor out of sequence by at least this many letters-canon chars
-#: (roughly one sentence) is reported for review even inside ORDER_SLACK —
+#: a prose anchor out of sequence by at least this many letters-canon chars is
+#: reported for review even inside ORDER_SLACK — floors measured at ZERO noise
+#: on all reference filings (uniqueness does the protective work), so they sit
+#: at the minimum: any displacement of a unique digit-light line flags —
 #: a relocated paragraph whose every word is verbatim would otherwise be the
 #: one silent way to change a document's reading order
-ORDER_SOFT_MIN = 40
+ORDER_SOFT_MIN = 1
 #: only digit-light lines (prose, not table rows) join the soft check, so
 #: print-vs-web cell jitter cannot flood it
 ORDER_SOFT_MAX_DIGIT_FRAC = 0.15
 #: soft-only anchors (short headings, occurrence-paired repeats) are weaker
 #: signals: they flag only when displaced by at least this much
-ORDER_SOFT_ONLY_MIN = 40
+ORDER_SOFT_ONLY_MIN = 1
 
 #: an index / table-of-contents entry: label, dot leader, then a page number
 #: (text extraction often garbles the number with leader dots: 19 → "1.9")
