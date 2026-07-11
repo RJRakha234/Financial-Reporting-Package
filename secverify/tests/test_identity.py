@@ -397,7 +397,10 @@ def test_occurrence_paired_and_short_heading_anchors():
     ok = f"<html><body><p>{boiler}</p><p>{pA}</p><p>{pB}</p><p>{pC}</p><p>{boiler}</p></body></html>"
     moved = f"<html><body><p>{boiler}</p><p>{pA}</p><p>{boiler}</p><p>{pB}</p><p>{pC}</p></body></html>"
     assert not soft([pdf], ok)          # clean repeated boilerplate: silent
-    assert soft([pdf], moved)           # relocated 2nd copy: review flag
+    # occurrence pairing was gate-rejected (real exhibits repeat boilerplate
+    # across source PDFs in a different macro-order → 36 false flags on a
+    # clean filing), so a relocated repeated copy is a DECLARED limitation:
+    assert not soft([pdf], moved)
 
     pdf2 = "\n".join(["Fair value hierarchy", pA, pB, "Capital management", pC])
     ok2 = (f"<html><body><p>Fair value hierarchy</p><p>{pA}</p><p>{pB}</p>"

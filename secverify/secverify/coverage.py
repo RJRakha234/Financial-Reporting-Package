@@ -46,6 +46,9 @@ ORDER_SOFT_MIN = 40
 #: only digit-light lines (prose, not table rows) join the soft check, so
 #: print-vs-web cell jitter cannot flood it
 ORDER_SOFT_MAX_DIGIT_FRAC = 0.15
+#: soft-only anchors (short headings, occurrence-paired repeats) are weaker
+#: signals: they flag only when displaced by at least this much
+ORDER_SOFT_ONLY_MIN = 40
 
 #: an index / table-of-contents entry: label, dot leader, then a page number
 #: (text extraction often garbles the number with leader dots: 19 → "1.9")
@@ -463,7 +466,12 @@ def _order_issues(
             return 1.0
         return sum(c.isdigit() for c in chars) / len(chars)
 
-    for doc_anchors in by_doc.values():
+    for all_doc_anchors in by_doc.values():
+        # The red tier and the paragraph-relocation tier run over the LONG
+        # unique anchors only — the gate-proven configuration. Soft-only
+        # anchors (short headings, occurrence-paired repeats) get their own
+        # LIS afterwards, so they can never distort the proven judgments.
+        doc_anchors = [a for a in all_doc_anchors if not a[3]]
         positions = [pos for _i, _l, pos, _s in doc_anchors]
         keep = _lis_indices(positions)
         violators: list[int] = []
@@ -536,6 +544,39 @@ def _order_issues(
 
         emit_runs(violators, review=False)
         emit_runs(soft, review=True)
+
+        # Soft-only anchors: their own LIS over the FULL per-doc sequence, so
+        # a moved heading / relocated boilerplate copy is judged against the
+        # real document order — flagged for review only, never red.
+        if any(a[3] for a in all_doc_anchors):
+            hard_keep_pos = {doc_anchors[k][2] for k in keep}
+            full = all_doc_anchors
+            fpos = [pos for _i, _l, pos, _s in full]
+            fkeep = _lis_indices(fpos)
+            soft2: list[int] = []
+            for a_idx in range(len(full)):
+                if a_idx in fkeep or not full[a_idx][3]:
+                    continue
+                pos = fpos[a_idx]
+                lo = max((fpos[k] for k in fkeep if k < a_idx), default=None)
+                hi = min((fpos[k] for k in fkeep if k > a_idx), default=None)
+                displaced = 0
+                if lo is not None and pos < lo:
+                    displaced = lo - pos
+                if hi is not None and pos > hi:
+                    displaced = max(displaced, pos - hi)
+                line_idx = full[a_idx][0]
+                if (
+                    displaced >= ORDER_SOFT_ONLY_MIN
+                    and _digit_frac(lines[line_idx].text)
+                    <= ORDER_SOFT_MAX_DIGIT_FRAC
+                ):
+                    soft2.append(a_idx)
+            if soft2:
+                doc_anchors = full
+                positions = fpos
+                keep = fkeep
+                emit_runs(soft2, review=True)
     return issues
 
 
@@ -584,21 +625,12 @@ def check_pdf_coverage(
                 (len(result.lines) - 1, doc, page_label, positions[0], soft_only)
             )
             return
-        # Occurrence pairing: a line repeated the SAME number of times in both
-        # documents (boilerplate, a signature line) pairs k-th PDF occurrence
-        # to k-th HTML occurrence — a relocated copy then breaks monotonicity.
-        # Review-only: pairing is an inference, never a hard verdict.
-        if (
-            2 <= pdf_count <= 6
-            and len(positions) == pdf_count
-            and len(letters_line) >= ORDER_ANCHOR_MIN_LEN
-        ):
-            k = _occ_seen[letters_line]
-            _occ_seen[letters_line] += 1
-            if k < len(positions):
-                anchors.append(
-                    (len(result.lines) - 1, doc, page_label, positions[k], True)
-                )
+        # NOTE: occurrence pairing (k-th PDF repeat ↔ k-th HTML repeat) was
+        # built and GATE-REJECTED: real exhibits repeat boilerplate across the
+        # two source PDFs and across standalone/consolidated sections in a
+        # different macro-order, so the pairing assumption false-flags clean
+        # filings (36 flags on IFRS-INR-Q1). A relocated repeated-boilerplate
+        # copy therefore remains a declared limitation rather than a check.
 
     # Section / note reference numbers ("1.1", "2.15", "2.11.1") are outline
     # identifiers, not monetary figures — collect them so the row value check
