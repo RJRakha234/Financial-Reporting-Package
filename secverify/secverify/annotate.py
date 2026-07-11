@@ -1139,6 +1139,20 @@ def _inject_banner(
         if cov.low_text_pages
         else ""
     )
+    scope_note = (
+        "Strict review ON: every figure — including those below 100 and "
+        "reference numbers — is machine-verified in place or blue-marked for "
+        "review; no number is out of scope. Verify separately: totals/subtotals "
+        "footing (run before this tool, then pass --footed); purely visual "
+        "formatting (bold, indentation, colour) and CSS-driven visual "
+        "reordering."
+        if strict else
+        "Not in scope (verify separately): totals/subtotals footing (use "
+        "<code>fincheck</code>); figures below 100 and outline/reference "
+        "numbers are presence-checked only — run with --strict to have every "
+        "number reviewed; purely visual formatting (bold, indentation, colour) "
+        "and CSS-driven visual reordering."
+    )
     assurance = f"""
 <div id="secv-assurance">
 <h3 style="margin:0 0 4px 0">Assurance &amp; scope — what was machine-verified</h3>
@@ -1154,11 +1168,7 @@ figure-bearing rows.{" The remainder:" if skip_bits else ""}</li>
 </ul>
 {f'<ul style="margin:0 0 2px 18px">{skip_bits}</ul>' if skip_bits else ''}
 {warn_pages}
-<p style="font-size:8pt;color:#555;margin:4px 0 0">Not in scope (verify
-separately): totals/subtotals footing (use <code>fincheck</code>); figures
-below 100 and outline/reference numbers; purely visual formatting
-(bold, indentation, colour) and any CSS-driven reordering or hidden text in
-the HTML.</p>
+<p style="font-size:8pt;color:#555;margin:4px 0 0">{scope_note}</p>
 </div>
 """
 
