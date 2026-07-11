@@ -358,122 +358,529 @@ td.pg{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
 """
 
 
-def _status_chip(row: NoteRow, total_docs: int) -> str:
+_APP_CSS = """
+.app-loading{color:var(--muted);padding:48px 0;font-size:14px}
+.intro{color:var(--muted);font-size:14.5px;max-width:74ch;margin:.4em 0 0}
+
+/* sticky command bar */
+.toolbar{position:sticky;top:0;z-index:30;margin:22px 0 26px;padding:14px 16px;border-radius:14px;
+  background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);
+  display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.progress{flex:1;min-width:240px}
+.progress .ptop{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px}
+.progress .plabel{font-size:12.5px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.progress .ppct{font-size:14px;font-weight:750;font-variant-numeric:tabular-nums;color:var(--accent)}
+.track{height:9px;border-radius:999px;background:var(--line);overflow:hidden;position:relative}
+.bar{height:100%;width:0;border-radius:999px;
+  background:linear-gradient(90deg,var(--accent),var(--good));
+  transition:width .6s cubic-bezier(.22,1,.36,1)}
+.bar.done{background:linear-gradient(90deg,var(--good),var(--good))}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;border-radius:9px;
+  padding:8px 13px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);
+  transition:transform .12s ease,border-color .15s,background .15s,color .15s}
+.btn:hover{transform:translateY(-1px);border-color:var(--accent)}
+.btn:active{transform:translateY(0)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.ghost{background:transparent}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* note cards */
+.notecard{background:var(--card);border:1px solid var(--line);border-radius:16px;
+  box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden;
+  border-left:4px solid var(--line-strong);transition:border-color .3s,opacity .3s,transform .3s}
+.notecard[data-sev="good"]{border-left-color:var(--good)}
+.notecard[data-sev="warn"]{border-left-color:var(--warn)}
+.notecard[data-sev="bad"]{border-left-color:var(--bad)}
+.notecard.resolved{border-left-color:var(--good)}
+.notecard.hide{display:none}
+.note-head{display:flex;align-items:flex-start;gap:14px;padding:16px 18px;flex-wrap:wrap;
+  border-bottom:1px solid var(--line)}
+.badge-serial{flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:44px;height:44px;border-radius:12px;background:var(--accent);color:#fff;
+  font-weight:800;font-size:18px;font-variant-numeric:tabular-nums;
+  box-shadow:0 4px 12px color-mix(in srgb,var(--accent) 40%,transparent)}
+.note-head .htext{flex:1;min-width:200px}
+.note-head .hlabel{font-weight:750;font-size:15.5px;letter-spacing:-.01em}
+.note-head .hsec{color:var(--muted);font-size:12.5px;margin-top:2px;line-height:1.4}
+.note-head .hstat{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.statpill{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;
+  padding:5px 12px;border-radius:999px;white-space:nowrap;transition:background .3s,color .3s}
+.statpill::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.statpill.good{background:var(--good-soft);color:var(--good)}
+.statpill.warn{background:var(--warn-soft);color:var(--warn)}
+.statpill.bad{background:var(--bad-soft);color:var(--bad)}
+.statpill.resolved{background:var(--good-soft);color:var(--good)}
+.bulk{display:flex;gap:6px}
+.bulk button{font:inherit;font-size:11.5px;font-weight:650;cursor:pointer;border-radius:7px;
+  padding:5px 10px;border:1px solid var(--line-strong);background:transparent;color:var(--muted);
+  transition:all .13s}
+.bulk button:hover{color:var(--ink);border-color:var(--accent)}
+
+/* the four-financial grid */
+.doc-grid{display:grid;grid-template-columns:repeat(var(--cols),minmax(0,1fr));gap:0}
+.dcell{padding:15px 16px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:10px;
+  min-width:0;transition:background .35s ease}
+.dcell:last-child{border-right:none}
+.dcell .dtop{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dcell .dname{font-weight:700;font-size:12px;letter-spacing:.02em;color:var(--ink)}
+.dcell .dname small{display:block;color:var(--muted);font-weight:500;font-size:11px}
+.chiprow{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
+.mini{font-size:10.5px;font-weight:650;padding:2px 8px;border-radius:999px;
+  font-variant-numeric:tabular-nums;white-space:nowrap;border:1px solid var(--line-strong);color:var(--muted)}
+.mini.ser{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.mini.warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.mini.bad{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.dtext{font-size:12px;line-height:1.55;color:var(--ink);
+  background:linear-gradient(transparent 60%,var(--hi) 60%);display:inline}
+.dclip{max-height:7.2em;overflow:hidden;position:relative;transition:max-height .3s ease}
+.dclip.open{max-height:2000px}
+.expand{align-self:flex-start;font:inherit;font-size:11px;font-weight:650;color:var(--accent);
+  background:none;border:none;cursor:pointer;padding:0}
+.tag-match{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;
+  color:var(--good);margin-top:auto}
+.tag-match::before{content:"✓";font-weight:800}
+
+/* decision control */
+.decision{margin-top:auto;display:flex;flex-direction:column;gap:8px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.seg button{font:inherit;font-size:12px;font-weight:700;cursor:pointer;border-radius:9px;padding:9px 8px;
+  border:1.5px solid var(--line-strong);background:var(--card);color:var(--muted);
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  transition:all .16s cubic-bezier(.22,1,.36,1)}
+.seg button:hover{border-color:var(--accent);color:var(--ink);transform:translateY(-1px)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.seg .acc[aria-pressed="true"]{background:var(--good);border-color:var(--good);color:#fff;
+  box-shadow:0 4px 14px color-mix(in srgb,var(--good) 35%,transparent)}
+.seg .rej[aria-pressed="true"]{background:var(--bad);border-color:var(--bad);color:#fff;
+  box-shadow:0 4px 14px color-mix(in srgb,var(--bad) 35%,transparent)}
+.seg button .pop{display:inline-block;transform:scale(0);transition:transform .25s cubic-bezier(.34,1.56,.64,1)}
+.seg button[aria-pressed="true"] .pop{transform:scale(1)}
+.dcell[data-state="accepted"]{background:var(--good-soft)}
+.dcell[data-state="rejected"]{background:var(--bad-soft)}
+.dcell[data-state="rejected"] .dtext{background:none;text-decoration:line-through;
+  text-decoration-color:var(--bad);opacity:.7}
+.difflink{font:inherit;font-size:11px;font-weight:650;color:var(--accent);background:none;border:none;
+  cursor:pointer;padding:0;align-self:flex-start}
+.diffbox{font-size:11.5px;line-height:1.6;background:var(--paper);border:1px dashed var(--line-strong);
+  border-radius:9px;padding:9px 10px;display:none}
+.diffbox.open{display:block}
+.diffbox .add{background:var(--good-soft);color:var(--good);border-radius:3px;padding:0 2px;font-weight:600}
+.diffbox .del{background:var(--bad-soft);color:var(--bad);border-radius:3px;padding:0 2px;
+  text-decoration:line-through}
+.diffbox .dh{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+  font-weight:700;margin-bottom:5px}
+.reasons{display:flex;gap:6px;flex-wrap:wrap}
+
+/* confetti + celebrate banner */
+#confetti{position:fixed;inset:0;pointer-events:none;z-index:60}
+.celebrate{margin:0 0 18px;padding:14px 18px;border-radius:14px;display:none;align-items:center;gap:12px;
+  background:var(--good-soft);border:1px solid color-mix(in srgb,var(--good) 40%,var(--line));
+  color:var(--good);font-weight:650;font-size:14px}
+.celebrate.show{display:flex;animation:pop .4s cubic-bezier(.34,1.56,.64,1)}
+.celebrate .big{font-size:22px}
+@keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+.filterwrap{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);font-weight:600}
+.switch{position:relative;width:38px;height:22px;border-radius:999px;background:var(--line-strong);
+  cursor:pointer;transition:background .2s;flex:none}
+.switch.on{background:var(--accent)}
+.switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+  background:#fff;transition:transform .2s}
+.switch.on::after{transform:translateX(16px)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:820px){
+  .doc-grid{grid-template-columns:1fr}
+  .dcell{border-right:none;border-bottom:1px solid var(--line)}
+}
+"""
+
+_APP_JS = r"""
+(function(){
+  var DATA = JSON.parse(document.getElementById('cn-data').textContent);
+  var COLS = DATA.docs.length;
+  var app = document.getElementById('app');
+
+  // ---- persistence -------------------------------------------------------
+  var SIG = 'cnrev:' + DATA.notes.map(function(n){return n.serial;}).join(',') +
+            '|' + DATA.docs.map(function(d){return d.label;}).join(',');
+  var store = {};
+  try { store = JSON.parse(localStorage.getItem(SIG) || '{}') || {}; } catch(e){ store = {}; }
+  function persist(){ try { localStorage.setItem(SIG, JSON.stringify(store)); } catch(e){} }
+  function key(serial, doc){ return serial + '||' + doc; }
+  function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  // ---- required decisions bookkeeping -----------------------------------
+  function noteRequired(n){ return n.cells.filter(function(c){return c.differs;}); }
+  function noteDecided(n){ return noteRequired(n).filter(function(c){return store[key(n.serial,c.doc)];}).length; }
+  function totals(){
+    var req=0, dec=0;
+    DATA.notes.forEach(function(n){ var r=noteRequired(n); req+=r.length;
+      dec+=r.filter(function(c){return store[key(n.serial,c.doc)];}).length; });
+    return {req:req, dec:dec};
+  }
+
+  // ---- word-level diff (LCS) --------------------------------------------
+  function tok(s){ return (s||'').split(/(\s+)/).filter(function(w){return w.length;}); }
+  function wordDiff(ref, cur){
+    var a=tok(ref), b=tok(cur), m=a.length, n=b.length;
+    var dp=[]; for(var i=0;i<=m;i++){ dp.push(new Array(n+1).fill(0)); }
+    for(var i=m-1;i>=0;i--) for(var j=n-1;j>=0;j--)
+      dp[i][j] = a[i]===b[j] ? dp[i+1][j+1]+1 : Math.max(dp[i+1][j], dp[i][j+1]);
+    var out=[], i=0, j=0;
+    while(i<m && j<n){
+      if(a[i]===b[j]){ out.push({op:'=',t:b[j]}); i++; j++; }
+      else if(dp[i+1][j]>=dp[i][j+1]){ out.push({op:'-',t:a[i]}); i++; }
+      else { out.push({op:'+',t:b[j]}); j++; }
+    }
+    while(i<m){ out.push({op:'-',t:a[i++]}); }
+    while(j<n){ out.push({op:'+',t:b[j++]}); }
+    return out;
+  }
+  function diffHTML(ref, cur){
+    return wordDiff(ref,cur).map(function(p){
+      if(p.op==='=') return esc(p.t);
+      if(p.op==='+') return '<span class="add">'+esc(p.t)+'</span>';
+      return '<span class="del">'+esc(p.t)+'</span>';
+    }).join('');
+  }
+
+  // ---- rendering ---------------------------------------------------------
+  function docMeta(label){ for(var i=0;i<DATA.docs.length;i++) if(DATA.docs[i].label===label) return DATA.docs[i]; return {main:label,sub:''}; }
+
+  function render(){
+    var k = DATA.kpi;
+    var html = ''+
+      '<header class="masthead">'+
+      '<div class="eyebrow">Financial Reporting Package · Interactive Note Review</div>'+
+      '<h1>Common Notes — Accept / Reject Console</h1>'+
+      '<p class="intro">For every common note, each statement is compared against the reference version. '+
+      'Where a financial <strong>differs</strong>, accept it (an acceptable variation) or reject it (needs correction). '+
+      'Matching statements are marked automatically. Your decisions are saved in this browser and can be exported.</p>'+
+      '</header>'+
+      '<section class="kpis">'+
+        kpi('accent', k.total, 'Statements') +
+        kpi('accent', k.common, 'Common notes') +
+        kpi('warn', k.needsReview, 'Notes needing review') +
+        kpi('good', '<span id="kResolved">0</span>/'+k.needsReview, 'Notes resolved') +
+      '</section>'+
+      '<div class="celebrate" id="celebrate"><span class="big">🎉</span>'+
+        '<span>All differences reviewed — every note is reconciled. Export your decisions to lock it in.</span></div>'+
+      '<div class="toolbar">'+
+        '<div class="progress"><div class="ptop"><span class="plabel">Decisions completed</span>'+
+        '<span class="ppct" id="ppct">0%</span></div>'+
+        '<div class="track"><div class="bar" id="bar"></div></div></div>'+
+        '<div class="filterwrap"><span>Only unresolved</span><div class="switch" id="flt" role="switch" aria-checked="false" tabindex="0"></div></div>'+
+        '<div class="actions">'+
+          '<button class="btn ghost" id="expCsv">Export CSV</button>'+
+          '<button class="btn ghost" id="expJson">Export JSON</button>'+
+          '<button class="btn ghost" id="reset">Reset</button>'+
+        '</div>'+
+      '</div>'+
+      '<div id="notes">' + DATA.notes.map(noteCard).join('') + '</div>'+
+      '<canvas id="confetti"></canvas>';
+    app.className = '';
+    app.innerHTML = html;
+    wire();
+    refresh();
+  }
+  function kpi(cls,n,l){ return '<div class="kpi '+cls+'"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
+
+  function noteCard(n){
+    var cells = n.cells.map(function(c){ return cell(n,c); }).join('');
+    var bulk = n.hasDiff ? '<div class="bulk">'+
+        '<button data-bulk="accepted" data-serial="'+esc(n.serial)+'">Accept all</button>'+
+        '<button data-bulk="rejected" data-serial="'+esc(n.serial)+'">Reject all</button></div>' : '';
+    return '<article class="notecard" data-sev="'+n.severity+'" data-serial="'+esc(n.serial)+'" data-hasdiff="'+(n.hasDiff?1:0)+'">'+
+      '<div class="note-head">'+
+        '<span class="badge-serial">'+esc(n.serial)+'</span>'+
+        '<div class="htext"><div class="hlabel">'+esc(n.label)+'</div>'+
+          '<div class="hsec">'+esc(n.section)+'</div></div>'+
+        '<div class="hstat"><span class="statpill" data-stat></span>'+bulk+'</div>'+
+      '</div>'+
+      '<div class="doc-grid" style="--cols:'+COLS+'">'+cells+'</div>'+
+    '</article>';
+  }
+
+  function cell(n,c){
+    var meta = docMeta(c.doc);
+    var name = '<div class="dname">'+esc(meta.main)+(meta.sub?'<small>'+esc(meta.sub)+'</small>':'')+'</div>';
+    var body, chips='', decision='';
+    if(!c.present){
+      chips = '<span class="mini bad">not highlighted</span>';
+      body = '<div class="dtext" style="background:none;color:var(--faint);font-style:italic">This note is not highlighted in this statement.</div>';
+    } else {
+      var scls = c.reasons.indexOf('serial format')>=0 ? 'mini ser warn' : 'mini ser';
+      chips = '<span class="'+scls+'">serial '+esc(c.serial||'—')+'</span>'+
+              '<span class="mini">p.'+c.page+'</span>'+
+              (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
+      body = '<div class="dclip"><span class="dtext">'+esc(c.text)+'</span></div>'+
+             '<button class="expand" data-exp>Show full text ▾</button>';
+    }
+    if(c.differs){
+      var diff = (c.present && n.refText) ?
+        '<button class="difflink" data-diff>Compare to reference ▾</button>'+
+        '<div class="diffbox"><div class="dh">Reference vs this statement — '+
+        '<span class="add">added</span> / <span class="del">missing</span></div>'+diffHTML(n.refText, c.text)+'</div>' : '';
+      decision = '<div class="decision">'+diff+
+        '<div class="seg" role="group" aria-label="decision">'+
+          '<button class="acc" data-dec="accepted" aria-pressed="false"><span class="pop">✓</span> Accept</button>'+
+          '<button class="rej" data-dec="rejected" aria-pressed="false"><span class="pop">✕</span> Reject</button>'+
+        '</div></div>';
+    } else {
+      decision = '<div class="tag-match">Matches reference</div>';
+    }
+    return '<div class="dcell" data-serial="'+esc(n.serial)+'" data-doc="'+esc(c.doc)+'" data-differs="'+(c.differs?1:0)+'">'+
+      '<div class="dtop">'+name+'</div>'+
+      '<div class="chiprow">'+chips+'</div>'+
+      body + decision +
+    '</div>';
+  }
+
+  // ---- interaction -------------------------------------------------------
+  function setDecision(serial, doc, val){
+    var k = key(serial,doc);
+    if(store[k]===val){ delete store[k]; } else { store[k]=val; }
+    persist();
+    syncCell(serial,doc);
+    refresh();
+  }
+  function syncCell(serial,doc){
+    var cell = app.querySelector('.dcell[data-serial="'+cssesc(serial)+'"][data-doc="'+cssesc(doc)+'"]');
+    if(!cell) return;
+    var st = store[key(serial,doc)] || '';
+    cell.setAttribute('data-state', st);
+    var accB = cell.querySelector('.acc'), rejB = cell.querySelector('.rej');
+    if(accB) accB.setAttribute('aria-pressed', st==='accepted');
+    if(rejB) rejB.setAttribute('aria-pressed', st==='rejected');
+  }
+  function cssesc(s){ return String(s).replace(/["\\]/g,'\\$&'); }
+
+  function refresh(){
+    var doneNotes=0;
+    DATA.notes.forEach(function(n){
+      var card = app.querySelector('.notecard[data-serial="'+cssesc(n.serial)+'"]');
+      var pill = card.querySelector('[data-stat]');
+      if(!n.hasDiff){ pill.className='statpill good'; pill.textContent='Consistent'; return; }
+      var req = noteRequired(n).length, dec = noteDecided(n);
+      var rejd = noteRequired(n).filter(function(c){return store[key(n.serial,c.doc)]==='rejected';}).length;
+      if(dec>=req){
+        doneNotes++;
+        card.classList.add('resolved');
+        pill.className='statpill resolved';
+        pill.textContent = rejd ? ('Resolved · '+rejd+' rejected') : 'Resolved · all accepted';
+      } else {
+        card.classList.remove('resolved');
+        pill.className='statpill warn';
+        pill.textContent = (req-dec)+' of '+req+' pending';
+      }
+    });
+    var t=totals(), pct = t.req? Math.round(t.dec/t.req*100) : 100;
+    var bar=document.getElementById('bar'); bar.style.width=pct+'%'; bar.classList.toggle('done',pct===100);
+    document.getElementById('ppct').textContent = pct+'%';
+    var kr=document.getElementById('kResolved'); if(kr) kr.textContent=doneNotes;
+    applyFilter();
+    celebrate(t.req>0 && t.dec>=t.req);
+  }
+
+  var filterOn=false;
+  function applyFilter(){
+    DATA.notes.forEach(function(n){
+      var card=app.querySelector('.notecard[data-serial="'+cssesc(n.serial)+'"]');
+      var resolved = !n.hasDiff || noteDecided(n)>=noteRequired(n).length;
+      card.classList.toggle('hide', filterOn && resolved);
+    });
+  }
+
+  var celebrated=false;
+  function celebrate(done){
+    var el=document.getElementById('celebrate');
+    el.classList.toggle('show', done);
+    if(done && !celebrated){ celebrated=true; burst(); }
+    if(!done) celebrated=false;
+  }
+
+  // ---- confetti ----------------------------------------------------------
+  function burst(){
+    if(window.matchMedia && matchMedia('(prefers-reduced-motion:reduce)').matches) return;
+    var cv=document.getElementById('confetti'), ctx=cv.getContext('2d');
+    cv.width=innerWidth; cv.height=innerHeight;
+    var cols=['#0f6e78','#1f7a4d','#4fc3cf','#e0b154','#a63232'], P=[];
+    for(var i=0;i<140;i++) P.push({x:innerWidth/2,y:innerHeight*0.28,
+      vx:(Math.random()-0.5)*11, vy:Math.random()*-13-4, g:0.32+Math.random()*0.12,
+      s:5+Math.random()*6, c:cols[i%cols.length], r:Math.random()*6, vr:(Math.random()-.5)*.4});
+    var t0=performance.now();
+    (function frame(now){
+      var e=now-t0; ctx.clearRect(0,0,cv.width,cv.height);
+      P.forEach(function(p){ p.vy+=p.g; p.x+=p.vx; p.y+=p.vy; p.r+=p.vr;
+        ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.r);
+        ctx.fillStyle=p.c; ctx.globalAlpha=Math.max(0,1-e/1600);
+        ctx.fillRect(-p.s/2,-p.s/2,p.s,p.s*0.6); ctx.restore(); });
+      if(e<1600) requestAnimationFrame(frame); else ctx.clearRect(0,0,cv.width,cv.height);
+    })(t0);
+  }
+
+  // ---- events ------------------------------------------------------------
+  function wire(){
+    app.addEventListener('click', function(ev){
+      var t=ev.target;
+      var dec=t.closest('[data-dec]');
+      if(dec){ var cell=dec.closest('.dcell');
+        setDecision(cell.getAttribute('data-serial'), cell.getAttribute('data-doc'), dec.getAttribute('data-dec')); return; }
+      var bulk=t.closest('[data-bulk]');
+      if(bulk){ var s=bulk.getAttribute('data-serial'), v=bulk.getAttribute('data-bulk');
+        var n=DATA.notes.find(function(x){return x.serial===s;});
+        noteRequired(n).forEach(function(c){ store[key(s,c.doc)]=v; syncCell(s,c.doc); });
+        persist(); refresh(); return; }
+      if(t.closest('[data-exp]')){ var b=t.closest('[data-exp]'); var clip=b.previousElementSibling;
+        clip.classList.toggle('open'); b.textContent = clip.classList.contains('open')?'Show less ▴':'Show full text ▾'; return; }
+      if(t.closest('[data-diff]')){ var d=t.closest('[data-diff]'); d.nextElementSibling.classList.toggle('open');
+        d.textContent = d.nextElementSibling.classList.contains('open')?'Hide comparison ▴':'Compare to reference ▾'; return; }
+      if(t.id==='expCsv'){ exportCsv(); return; }
+      if(t.id==='expJson'){ exportJson(); return; }
+      if(t.id==='reset'){ if(confirm('Clear all accept/reject decisions?')){ store={}; persist();
+        app.querySelectorAll('.dcell').forEach(function(c){ c.removeAttribute('data-state');
+          var a=c.querySelector('.acc'),r=c.querySelector('.rej'); if(a)a.setAttribute('aria-pressed',false); if(r)r.setAttribute('aria-pressed',false); });
+        celebrated=false; refresh(); } return; }
+      if(t.id==='flt' || t.closest('#flt')){ filterOn=!filterOn;
+        var sw=document.getElementById('flt'); sw.classList.toggle('on',filterOn); sw.setAttribute('aria-checked',filterOn); applyFilter(); return; }
+    });
+    app.addEventListener('keydown', function(ev){
+      if((ev.target.id==='flt') && (ev.key==='Enter'||ev.key===' ')){ ev.preventDefault(); ev.target.click(); }
+    });
+    addEventListener('resize', function(){ var cv=document.getElementById('confetti'); if(cv){cv.width=innerWidth;cv.height=innerHeight;} });
+  }
+
+  // ---- export ------------------------------------------------------------
+  function decisionOf(n,c){
+    if(!c.differs) return 'auto-match';
+    return store[key(n.serial,c.doc)] || 'pending';
+  }
+  function download(name, mime, text){
+    var blob=new Blob([text],{type:mime}), url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 500);
+  }
+  function exportCsv(){
+    var rows=[['serial','note','section','document','page','serial_in_doc','differs','reasons','match_pct','decision','text']];
+    DATA.notes.forEach(function(n){ n.cells.forEach(function(c){
+      rows.push([n.serial,n.label,n.section,c.doc,c.page==null?'':c.page,c.serial,c.differs?'yes':'no',
+        c.reasons.join('; '), c.present?Math.round(c.sim*100)+'%':'', decisionOf(n,c), c.text]); }); });
+    var csv=rows.map(function(r){ return r.map(function(v){
+      v=(v==null?'':String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }).join(','); }).join('\r\n');
+    download('common_notes_decisions.csv','text/csv;charset=utf-8', '﻿'+csv);
+  }
+  function exportJson(){
+    var out={ generated:DATA.generated, exportedAt:new Date().toISOString(), documents:DATA.docs.map(function(d){return d.label;}), notes:[] };
+    DATA.notes.forEach(function(n){ out.notes.push({ serial:n.serial, label:n.label, section:n.section,
+      referenceSerial:n.refSerial, decisions:n.cells.map(function(c){ return {document:c.doc, page:c.page,
+        differs:c.differs, reasons:c.reasons, matchPct:c.present?Math.round(c.sim*100):null, decision:decisionOf(n,c)}; }) }); });
+    download('common_notes_decisions.json','application/json', JSON.stringify(out,null,2));
+  }
+
+  render();
+})();
+"""
+
+
+def _note_status(row: NoteRow, total_docs: int) -> tuple[str, str, bool]:
+    """Return (status_label, severity, has_differences) for a note."""
     present = row.present_count
-    txt_ok = text_consistency(row) >= 0.90
+    txt_ok = text_consistency(row) >= 0.985
     fmt_ok = serial_format_consistent(row)
     if present == total_docs and txt_ok and fmt_ok:
-        return '<span class="chip good">Consistent</span>'
-    if present == total_docs and (not txt_ok or not fmt_ok):
-        issues = []
-        if not fmt_ok:
-            issues.append("serial format")
-        if not txt_ok:
-            issues.append("text differs")
-        return f'<span class="chip warn">Check {" &amp; ".join(issues)}</span>'
-    return f'<span class="chip bad">In {present}/{total_docs} only</span>'
+        return "Consistent", "good", False
+    if present == total_docs:
+        return "Needs review", "warn", True
+    return f"In {present}/{total_docs} only", "bad", True
 
 
-def _cell_html(mark: Optional[Mark]) -> str:
-    if mark is None:
-        return '<div class="cell missing">not highlighted</div>'
-    body = html.escape(mark.text) if mark.text else "<em>highlight has no text layer</em>"
-    ser = html.escape(mark.serial_raw) if mark.serial_raw else "—"
-    return (
-        '<div class="cell">'
-        '<div class="meta">'
-        f'<span class="pill ser">serial {ser}</span>'
-        f'<span class="pill pg">p.{mark.page}</span>'
-        '</div>'
-        f'<div class="clip"><span class="body">{body}</span></div>'
-        '</div>'
-    )
+def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
+                  notes: list[NoteRow]) -> dict:
+    """Assemble the JSON model the interactive front-end renders from."""
+    from collections import Counter
+
+    total = len(doc_labels)
+    common = [n for n in notes if n.present_count == total]
+    partial = [n for n in notes if n.present_count < total]
+
+    docs_meta = []
+    for lbl in doc_labels:
+        main, _, tail = lbl.partition("·")
+        docs_meta.append({"label": lbl, "main": main.strip(), "sub": tail.strip()})
+
+    note_objs = []
+    for n in common + partial:
+        present_marks = [m for m in n.cells.values() if m]
+        serials_raw = [m.serial_raw for m in present_marks if m.serial_raw]
+        texts = [m.text for m in present_marks if m.text]
+        ref_serial = Counter(serials_raw).most_common(1)[0][0] if serials_raw else ""
+        ref_text = Counter(texts).most_common(1)[0][0] if texts else ""
+
+        cells = []
+        for lbl in doc_labels:
+            m = n.cells[lbl]
+            if m is None:
+                cells.append({
+                    "doc": lbl, "present": False, "page": None, "serial": "",
+                    "text": "", "differs": True, "reasons": ["not highlighted"], "sim": 0.0,
+                })
+                continue
+            reasons = []
+            serial_diff = (m.serial_raw or "").strip() != (ref_serial or "").strip()
+            sim = SequenceMatcher(None, m.text, ref_text).ratio() if ref_text else 1.0
+            text_diff = sim < 0.985
+            if serial_diff:
+                reasons.append("serial format")
+            if text_diff:
+                reasons.append("text differs")
+            cells.append({
+                "doc": lbl, "present": True, "page": m.page, "serial": m.serial_raw,
+                "text": m.text, "differs": bool(reasons), "reasons": reasons, "sim": round(sim, 3),
+            })
+
+        label, severity, has_diff = _note_status(n, total)
+        note_objs.append({
+            "serial": n.serial_key, "label": n.label, "section": n.section,
+            "refSerial": ref_serial, "refText": ref_text,
+            "status": label, "severity": severity, "hasDiff": has_diff,
+            "diffCount": sum(1 for c in cells if c["differs"]),
+            "cells": cells,
+        })
+
+    unnumbered = []
+    for lbl in doc_labels:
+        for m in sorted((x for x in marks_by_doc[lbl] if x.serial_key is None), key=lambda x: x.page):
+            unnumbered.append({"doc": lbl, "page": m.page, "text": (m.heading or m.text)[:160]})
+
+    fully_consistent = sum(1 for n in note_objs if not n["hasDiff"] and
+                           all(c["present"] for c in n["cells"]))
+    return {
+        "generated": date.today().isoformat(),
+        "docs": docs_meta,
+        "notes": note_objs,
+        "unnumbered": unnumbered,
+        "kpi": {
+            "total": total,
+            "common": len(common),
+            "consistent": fully_consistent,
+            "needsReview": sum(1 for n in note_objs if n["hasDiff"]),
+            "unnumbered": len(unnumbered),
+        },
+    }
 
 
 def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 notes: list[NoteRow]) -> str:
-    total = len(doc_labels)
-    common = [n for n in notes if n.present_count == total]
-    partial = [n for n in notes if n.present_count < total]
-    fully_consistent = sum(
-        1 for n in common
-        if text_consistency(n) >= 0.90 and serial_format_consistent(n)
+    payload = build_payload(doc_labels, marks_by_doc, notes)
+    import json
+    data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    return (
+        f"<style>{_APP_CSS}</style>\n"
+        '<div class="wrap"><div id="app" class="app-loading">Loading review board…</div></div>\n'
+        f'<script id="cn-data" type="application/json">{data_json}</script>\n'
+        f"<script>{_APP_JS}</script>"
     )
-    unnumbered = {lbl: [m for m in marks_by_doc[lbl] if m.serial_key is None] for lbl in doc_labels}
-    unnumbered_total = sum(len(v) for v in unnumbered.values())
-
-    # ---- column header
-    colhead = ['<div class="colhead"><div class="rail">Common note</div>']
-    for lbl in doc_labels:
-        main, _, tail = lbl.partition("·")
-        sub = f"<small>{html.escape(tail.strip())}</small>" if tail else ""
-        colhead.append(f'<div class="doc">{html.escape(main.strip())}{sub}</div>')
-    colhead.append("</div>")
-
-    # ---- note bands (common first)
-    bands = []
-    for n in common + partial:
-        rail = (
-            '<div class="rail">'
-            f'<span class="serial">{html.escape(n.serial_key)}</span>'
-            f'<div class="rlabel">{html.escape(n.label)}</div>'
-            f'<div class="rsec">{html.escape(n.section)}</div>'
-            f'<div class="status">{_status_chip(n, total)}</div>'
-            '</div>'
-        )
-        cells = "".join(_cell_html(n.cells[lbl]) for lbl in doc_labels)
-        bands.append(f'<div class="note">{rail}{cells}</div>')
-
-    # ---- unnumbered highlights table
-    aux_rows = []
-    for lbl in doc_labels:
-        for m in sorted(unnumbered[lbl], key=lambda x: x.page):
-            snippet = html.escape((m.heading or m.text)[:120])
-            aux_rows.append(
-                f"<tr><td>{html.escape(lbl)}</td><td class='pg'>p.{m.page}</td><td>{snippet}</td></tr>"
-            )
-    aux_table = (
-        '<div class="scroll"><table class="aux"><thead><tr>'
-        '<th>Document</th><th>Page</th><th>Highlighted passage (no serial assigned)</th>'
-        '</tr></thead><tbody>' + ("".join(aux_rows) or
-        "<tr><td colspan='3'>None — every highlight carries a serial number.</td></tr>") +
-        '</tbody></table></div>'
-    )
-
-    gen = date.today().isoformat()
-    doc_list = " · ".join(html.escape(l) for l in doc_labels)
-
-    return f"""<div class="wrap" style="--cols:{total}">
-  <header class="masthead">
-    <div class="eyebrow">Financial Reporting Package · Note Reconciliation</div>
-    <h1>Common Notes — Highlight &amp; Serial Consistency</h1>
-    <p class="sub">Each highlighted note is matched across the four statements by the serial
-    number entered in its comment box. A note is <strong>common</strong> when the same serial
-    appears in every statement; the badge flags whether the serial format and highlighted text
-    also agree.</p>
-  </header>
-
-  <section class="kpis">
-    <div class="kpi accent"><div class="n">{total}</div><div class="l">Statements compared</div></div>
-    <div class="kpi accent"><div class="n">{len(common)}</div><div class="l">Common notes (in all {total})</div></div>
-    <div class="kpi good"><div class="n">{fully_consistent}</div><div class="l">Fully consistent</div></div>
-    <div class="kpi warn"><div class="n">{unnumbered_total}</div><div class="l">Highlights without a serial</div></div>
-  </section>
-
-  <div class="board">
-    {''.join(colhead)}
-    {''.join(bands)}
-  </div>
-
-  <h2>Highlights not yet serial-numbered</h2>
-  <p class="lead">These passages are highlighted but have no serial in the comment box, so they
-  cannot be matched as common notes. They appear in only one statement in this set.</p>
-  {aux_table}
-
-  <footer class="foot">
-    Generated {gen} · Documents: {doc_list} · Source of truth: PDF highlight annotations &amp; their comment text.
-  </footer>
-</div>"""
 
 
 # --------------------------------------------------------------------------- #
