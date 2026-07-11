@@ -263,7 +263,7 @@ def _parse_annotated_row(tr):
 
 
 def _mark_unconfirmed_table_rows(
-    root, corpus, strict: bool = False, pdf_alnum: str = ""
+    root, corpus, strict: bool = False, pdf_alnum: str = "", footed: bool = False
 ) -> int:
     """Paint blue the figures of any real comparative line-item row (2–3
     figures, line-item label) whose exact ``(label, figures)`` the PDF does not
@@ -271,41 +271,60 @@ def _mark_unconfirmed_table_rows(
 
     ``strict``: any figure-bearing row (any column count, shorter labels) whose
     whole ``(label, figures)`` is unconfirmed is marked, so no in-table number
-    is left green unless its row matched the PDF outright."""
+    is left green unless its row matched the PDF outright.
+
+    ``footed``: the reviewer has already footed the HTML's tables and they tie.
+    In a table that carries a stated total, a SINGLE wrong cell breaks the
+    column sum — footing covers it — so one lone unconfirmed row in a
+    total-bearing table is not marked.  Two or more unconfirmed rows in the
+    same table stay marked: a sum-preserving permutation (two rows trading
+    values) survives footing, so those still need the eye."""
     if corpus is None or not getattr(corpus, "pages_raw", None):
         return 0
     confirmed = _pdf_confirmer(corpus)
     n = 0
-    for tr in root.find_all("tr"):
-        if tr.find_parent(class_="secv-callout") is not None:
-            continue
-        lbl, figs, fig_spans, ncells = _parse_annotated_row(tr)
-        min_label = 4 if strict else 10
-        allowed = bool(figs) if strict else len(figs) in (2, 3)
-        if ncells < 2 or len(lbl) < min_label or _FURNITURE_RE.search(lbl):
-            continue
-        if not allowed or confirmed(lbl, tuple(figs)):
-            continue
-        # Verbatim fallback: the whole row's text (words and digits in order,
-        # punctuation/whitespace stripped) found in the PDF confirms the row
-        # even when figure parsing differed — e.g. a PDF text layer that
-        # fractures digits ("2 95,168") canonicalises to the same string.
-        if pdf_alnum:
-            row_canon = canonical(_block_clean_text(tr))
-            if (
-                len(row_canon) >= 16
-                and re.search(r"[a-z].*[a-z].*[a-z]", row_canon)
-                and row_canon in pdf_alnum
-            ):
+    for table in root.find_all("table"):
+        pending: list[list] = []
+        has_total = False
+        for tr in table.find_all("tr"):
+            if tr.find_parent(class_="secv-callout") is not None:
                 continue
-        for span in fig_spans:
-            _paint_blue(
-                span,
-                "Manual-review zone — this row's exact figures could not be "
-                "confirmed against the PDF (its label/values were not matched as "
-                "a whole row). Verify the figures are against the right line item.",
-            )
-            n += 1
+            if tr.find_parent("table") is not table:
+                continue  # nested table rows are handled by their own table
+            lbl, figs, fig_spans, ncells = _parse_annotated_row(tr)
+            if "total" in lbl or "sumof" in lbl:
+                has_total = True
+            min_label = 4 if strict else 10
+            allowed = bool(figs) if strict else len(figs) in (2, 3)
+            if ncells < 2 or len(lbl) < min_label or _FURNITURE_RE.search(lbl):
+                continue
+            if not allowed or confirmed(lbl, tuple(figs)):
+                continue
+            # Verbatim fallback: the whole row's text (words and digits in
+            # order, punctuation/whitespace stripped) found in the PDF confirms
+            # the row even when figure parsing differed — e.g. a PDF text layer
+            # that fractures digits ("2 95,168").
+            if pdf_alnum:
+                row_canon = canonical(_block_clean_text(tr))
+                if (
+                    len(row_canon) >= 16
+                    and re.search(r"[a-z].*[a-z].*[a-z]", row_canon)
+                    and row_canon in pdf_alnum
+                ):
+                    continue
+            pending.append(fig_spans)
+        if footed and has_total and len(pending) == 1:
+            continue  # single suspect cell in a footed table → footing covers
+        for fig_spans in pending:
+            for span in fig_spans:
+                _paint_blue(
+                    span,
+                    "Manual-review zone — this row's exact figures could not be "
+                    "confirmed against the PDF (its label/values were not "
+                    "matched as a whole row). Verify the figures are against "
+                    "the right line item.",
+                )
+                n += 1
     return n
 
 
@@ -437,7 +456,7 @@ def _mark_images(root) -> int:
 
 
 def mark_review_zones(
-    soup, root, corpus=None, strict: bool = False
+    soup, root, corpus=None, strict: bool = False, footed: bool = False
 ) -> tuple[int, int, int, int]:
     """Apply the blue overlay.
 
@@ -453,7 +472,7 @@ def mark_review_zones(
             pdf_alnum = ""
     ctx_ok = _context_confirmer(pdf_alnum)
     intable = _mark_unconfirmed_table_rows(
-        root, corpus, strict=strict, pdf_alnum=pdf_alnum
+        root, corpus, strict=strict, pdf_alnum=pdf_alnum, footed=footed
     )
     context = _mark_context_mismatched_rows(root, corpus)
     figs = _mark_prose_figures(soup, root, strict=strict, ctx_ok=ctx_ok)

@@ -35,7 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, level: str = "base") -> int:
+def main(argv: list[str] | None = None, level: str = "base",
+         strict_default: bool = False) -> int:
     parser = build_parser()
     parser.add_argument(
         "--level",
@@ -53,9 +54,24 @@ def main(argv: list[str] | None = None, level: str = "base") -> int:
     parser.add_argument(
         "--strict",
         action="store_true",
+        default=strict_default,
         help="leave no number un-reviewed: blue-mark EVERY prose number and "
         "every unconfirmed in-table figure (for a reviewer who cannot risk "
         "missing any figure, however small). Implies --review-zones.",
+    )
+    parser.add_argument(
+        "--no-strict",
+        dest="strict",
+        action="store_false",
+        help="turn strict review off (toolsigma runs strict by default)",
+    )
+    parser.add_argument(
+        "--footed",
+        action="store_true",
+        help="the HTML's tables have already been footed and tie: a single "
+        "unconfirmed row in a total-bearing table is covered by the footing "
+        "and is not blue-marked (2+ unconfirmed rows in one table stay "
+        "marked — a sum-preserving permutation survives footing)",
     )
     args = parser.parse_args(argv)
     for path, kind in [(p, "PDF") for p in args.pdf] + [(args.html, "HTML")]:
@@ -65,7 +81,7 @@ def main(argv: list[str] | None = None, level: str = "base") -> int:
 
     result = verify(
         args.pdf, args.html, output_html=args.output, level=args.level,
-        review_zones=args.review_zones, strict=args.strict,
+        review_zones=args.review_zones, strict=args.strict, footed=args.footed,
     )
 
     print(to_console(result))

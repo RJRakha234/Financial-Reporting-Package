@@ -113,6 +113,12 @@ python -m secverify statement.pdf auditorsreport.pdf exv99w09.html
 
 # choose the output paths, add a machine-readable report
 python -m secverify statement.pdf exv99w09.html -o reviewed.html --json report.json
+
+# maximum review (toolsigma default): every number green, blue or red — none
+# unreviewed. Foot the HTML first, then --footed drops the single-suspect-row
+# marks that a tying column sum already covers (permutations stay marked,
+# because a sum-preserving swap survives footing). --no-strict turns it off.
+python -m secverify.toolsigma statement.pdf auditorsreport.pdf filing.html --footed
 ```
 
 Exits `1` when inconsistencies are found, `0` when everything validates —

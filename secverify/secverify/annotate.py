@@ -84,6 +84,7 @@ class Annotator:
         pdf_paths: "list[str] | None" = None,
         review_zones: bool = False,
         strict: bool = False,
+        footed: bool = False,
     ):
         self.corpus = corpus
         self.result = Result()
@@ -92,6 +93,7 @@ class Annotator:
         self.pdf_paths = pdf_paths or []
         self.review_zones = review_zones or strict
         self.strict = strict
+        self.footed = footed
         self._zone_counts = (0, 0, 0, 0)
 
     def _at_least(self, name: str) -> bool:
@@ -753,7 +755,7 @@ class Annotator:
             from .reviewzones import mark_review_zones
 
             self._zone_counts = mark_review_zones(
-                soup, root, self.corpus, strict=self.strict
+                soup, root, self.corpus, strict=self.strict, footed=self.footed
             )
         _inject_banner(
             soup, root, self.result, pdf_name, html_name, unplaced,

@@ -372,3 +372,69 @@ def test_relocated_paragraph_flagged_for_review():
                    pdf_paths=["d.pdf"]).run(
         f"<html><body><p>{pA}</p><p>{pB}</p></body></html>", "r.pdf", "d.html")
     assert not [i for i in r2.issues if i.kind == "order"]
+
+
+def test_occurrence_paired_and_short_heading_anchors():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    def soft(pages, html):
+        r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"]).run(
+            html, "r.pdf", "d.html")
+        return [i for i in r.issues if i.kind == "order" and i.severity == "review"]
+
+    boiler = ("These interim statements should be read in conjunction with "
+              "the annual financial statements")
+    pA = ("The company recognised revenue in accordance with the applicable "
+          "accounting standards during this period.")
+    pB = ("Provisions are measured at the present value of the expected "
+          "outflows required to settle the obligation.")
+    pC = ("Deferred tax is recognised on temporary differences arising "
+          "between carrying amounts and the tax bases.")
+    pdf = "\n".join([boiler, pA, pB, pC, boiler])
+    ok = f"<html><body><p>{boiler}</p><p>{pA}</p><p>{pB}</p><p>{pC}</p><p>{boiler}</p></body></html>"
+    moved = f"<html><body><p>{boiler}</p><p>{pA}</p><p>{boiler}</p><p>{pB}</p><p>{pC}</p></body></html>"
+    assert not soft([pdf], ok)          # clean repeated boilerplate: silent
+    assert soft([pdf], moved)           # relocated 2nd copy: review flag
+
+    pdf2 = "\n".join(["Fair value hierarchy", pA, pB, "Capital management", pC])
+    ok2 = (f"<html><body><p>Fair value hierarchy</p><p>{pA}</p><p>{pB}</p>"
+           f"<p>Capital management</p><p>{pC}</p></body></html>")
+    mv2 = (f"<html><body><p>{pA}</p><p>{pB}</p><p>Capital management</p>"
+           f"<p>Fair value hierarchy</p><p>{pC}</p></body></html>")
+    assert not soft([pdf2], ok2)        # clean headings: silent
+    assert soft([pdf2], mv2)            # moved short heading: review flag
+
+
+def test_footed_suppresses_single_unconfirmed_row_in_totaled_table():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from bs4 import BeautifulSoup
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    # one row's figures unconfirmable (note repeats correct pairing elsewhere);
+    # the table HAS a total. footed=True: single suspect row is footing's job.
+    pages = ["Tax expense recognised in profit or loss",
+             "Current tax 4423 4924", "Deferred tax 601 497",
+             "Total tax expense 5024 5421",
+             "Note income tax Current tax 4423 4924 Deferred tax 601 497"]
+    html = ("<html><body><p>Tax expense recognised in profit or loss</p><table>"
+            "<tr><td>Current tax</td><td>601</td><td>497</td></tr>"
+            "<tr><td>Deferred tax</td><td>4423</td><td>4924</td></tr>"
+            "<tr><td>Total tax expense</td><td>5024</td><td>5421</td></tr></table>"
+            "<p>Note income tax Current tax 4423 4924 Deferred tax 601 497</p></body></html>")
+    def blue601(footed):
+        r = Annotator(make_corpus(pages), level="sigma", pdf_paths=["d.pdf"],
+                      review_zones=True, footed=footed).run(html, "r.pdf", "d.html")
+        soup = BeautifulSoup(r.html_out, "html.parser")
+        soup.find(id="secv-summary").extract()
+        spans = [s for s in soup.find_all("span")
+                 if s.get_text(strip=True) in ("601", "4423")
+                 and "secv-num-review" in s.get("class", [])]
+        return len(spans)
+    # both swapped rows unconfirmed -> 2 pending -> footed does NOT suppress
+    assert blue601(footed=True) > 0
+    assert blue601(footed=False) > 0

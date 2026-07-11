@@ -30,6 +30,7 @@ def verify(
     level: str = "base",
     review_zones: bool = False,
     strict: bool = False,
+    footed: bool = False,
 ) -> Result:
     """Compare *html_path* against one or several reference PDFs.
 
@@ -47,7 +48,7 @@ def verify(
     html_text = Path(html_path).read_text(encoding="utf-8", errors="replace")
     result = Annotator(
         corpus, level=level, pdf_paths=pdf_paths,
-        review_zones=review_zones, strict=strict,
+        review_zones=review_zones, strict=strict, footed=footed,
     ).run(
         html_text,
         " + ".join(Path(p).name for p in pdf_paths),

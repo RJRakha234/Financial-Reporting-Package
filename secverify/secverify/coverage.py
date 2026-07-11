@@ -32,6 +32,9 @@ CONTINUATION_TOP_LINES = 3
 
 #: sequence anchors must be this distinctive (letters) to vote on ordering
 ORDER_ANCHOR_MIN_LEN = 25
+#: shorter unique lines (a section heading) may still anchor the REVIEW tier —
+#: they are too weak for a red verdict but fine for a "verify placement" prompt
+ORDER_ANCHOR_SOFT_MIN_LEN = 12
 #: displacement below this many letters-canon characters is table/cell
 #: jitter, not a moved section
 ORDER_SLACK = 400
@@ -450,9 +453,9 @@ def _order_issues(
     misplaced content.  Consecutive misplaced anchors merge into one issue.
     """
     issues: list[OrderIssue] = []
-    by_doc: dict[str, list[tuple[int, str, int]]] = {}
-    for line_idx, doc, label, pos in anchors:
-        by_doc.setdefault(doc, []).append((line_idx, label, pos))
+    by_doc: dict[str, list[tuple[int, str, int, bool]]] = {}
+    for line_idx, doc, label, pos, soft_only in anchors:
+        by_doc.setdefault(doc, []).append((line_idx, label, pos, soft_only))
 
     def _digit_frac(text: str) -> float:
         chars = [c for c in text if c.isalnum()]
@@ -461,7 +464,7 @@ def _order_issues(
         return sum(c.isdigit() for c in chars) / len(chars)
 
     for doc_anchors in by_doc.values():
-        positions = [pos for _i, _l, pos in doc_anchors]
+        positions = [pos for _i, _l, pos, _s in doc_anchors]
         keep = _lis_indices(positions)
         violators: list[int] = []
         soft: list[int] = []
@@ -490,14 +493,21 @@ def _order_issues(
                 ):
                     soft.append(a_idx)
                 continue
-            violators.append(a_idx)
+            if doc_anchors[a_idx][3]:
+                # a soft-only anchor (short heading / paired occurrence) is
+                # never a red verdict — route to the review tier
+                line_idx = doc_anchors[a_idx][0]
+                if _digit_frac(lines[line_idx].text) <= ORDER_SOFT_MAX_DIGIT_FRAC:
+                    soft.append(a_idx)
+            else:
+                violators.append(a_idx)
 
         def emit_runs(idxs: list[int], review: bool) -> None:
             run: list[int] = []
             for a_idx in [*idxs, None]:
                 if run and (a_idx is None or a_idx != run[-1] + 1):
-                    first_i, first_label, first_pos = doc_anchors[run[0]]
-                    last_i, _l, _p = doc_anchors[run[-1]]
+                    first_i, first_label, first_pos, _s0 = doc_anchors[run[0]]
+                    last_i, _l, _p, _s1 = doc_anchors[run[-1]]
                     lo = max(
                         (positions[k] for k in keep if k < run[0]), default=None
                     )
@@ -543,22 +553,52 @@ def check_pdf_coverage(
     result = CoverageResult()
     #: (line_idx, doc, label, html_pos) for lines occurring exactly once in
     #: the HTML — sequence markers for the content-order check
-    anchors: list[tuple[int, str, str, int]] = []
+    anchors: list[tuple[int, str, str, int, bool]] = []
+    _html_occ_cache: dict[str, list[int]] = {}
+    _occ_seen: "Counter" = __import__("collections").Counter()
+
+    def _html_positions(needle: str) -> list[int]:
+        if needle not in _html_occ_cache:
+            out, start = [], 0
+            while len(out) <= 8:
+                p = html.letters.find(needle, start)
+                if p == -1:
+                    break
+                out.append(p)
+                start = p + 1
+            _html_occ_cache[needle] = out
+        return _html_occ_cache[needle]
 
     def collect_anchor(line: str, page_label: str) -> None:
         letters_line = canonical(line, letters_only=True)
-        if len(letters_line) < ORDER_ANCHOR_MIN_LEN:
-            return
-        pos = html.letters.find(letters_line)
-        if pos == -1 or html.letters.find(letters_line, pos + 1) != -1:
-            return  # absent or ambiguous in the HTML: cannot vote on ordering
-        if pdf_letters.count(letters_line) != 1:
-            # Repeated in the PDF (e.g. a table header reprinted after a
-            # page break): its single HTML occurrence cannot say which PDF
-            # occurrence it reflects.
+        if len(letters_line) < ORDER_ANCHOR_SOFT_MIN_LEN:
             return
         doc = page_label.rsplit(" p.", 1)[0] if " p." in page_label else ""
-        anchors.append((len(result.lines) - 1, doc, page_label, pos))
+        positions = _html_positions(letters_line)
+        pdf_count = pdf_letters.count(letters_line)
+        if len(positions) == 1 and pdf_count == 1:
+            # unique on both sides — a full anchor when long enough to be
+            # distinctive, a review-only (soft) anchor when short (a heading)
+            soft_only = len(letters_line) < ORDER_ANCHOR_MIN_LEN
+            anchors.append(
+                (len(result.lines) - 1, doc, page_label, positions[0], soft_only)
+            )
+            return
+        # Occurrence pairing: a line repeated the SAME number of times in both
+        # documents (boilerplate, a signature line) pairs k-th PDF occurrence
+        # to k-th HTML occurrence — a relocated copy then breaks monotonicity.
+        # Review-only: pairing is an inference, never a hard verdict.
+        if (
+            2 <= pdf_count <= 6
+            and len(positions) == pdf_count
+            and len(letters_line) >= ORDER_ANCHOR_MIN_LEN
+        ):
+            k = _occ_seen[letters_line]
+            _occ_seen[letters_line] += 1
+            if k < len(positions):
+                anchors.append(
+                    (len(result.lines) - 1, doc, page_label, positions[k], True)
+                )
 
     # Section / note reference numbers ("1.1", "2.15", "2.11.1") are outline
     # identifiers, not monetary figures — collect them so the row value check
