@@ -477,6 +477,156 @@ def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 
 
 # --------------------------------------------------------------------------- #
+# Excel rendering
+# --------------------------------------------------------------------------- #
+
+def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
+                notes: list[NoteRow], out_path: str) -> None:
+    """Write a formatted workbook: common-notes matrix + unnumbered highlights."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    total = len(doc_labels)
+    common = [n for n in notes if n.present_count == total]
+    partial = [n for n in notes if n.present_count < total]
+
+    # palette (aRGB, no leading '#')
+    INK, ACCENT, ACC_SOFT = "1A2233", "0F6E78", "E5F1F2"
+    GOOD, GOOD_SOFT = "1F7A4D", "E6F2EC"
+    WARN, WARN_SOFT = "9A6A00", "F7EFDC"
+    BAD, BAD_SOFT = "A63232", "F6E6E6"
+    HI, ZEBRA, LINE = "FFF9E0", "F4F6F8", "D0D5DD"
+
+    thin = Side(style="thin", color=LINE)
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    wrap_top = Alignment(wrap_text=True, vertical="top")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    wb = Workbook()
+
+    # ---------- Sheet 1: Common Notes ----------
+    ws = wb.active
+    ws.title = "Common Notes"
+    ws.sheet_view.showGridLines = False
+
+    headers = ["Serial", "Section"] + doc_labels + ["Status"]
+    ncol = len(headers)
+
+    # Title banner
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+    t = ws.cell(1, 1, "Common Notes — Highlight & Serial Consistency")
+    t.font = Font(name="Calibri", size=15, bold=True, color="FFFFFF")
+    t.fill = PatternFill("solid", fgColor=ACCENT)
+    t.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
+    s = ws.cell(2, 1, f"{total} statements · {len(common)} common notes · matched by comment-box serial number "
+                      f"· generated {date.today().isoformat()}")
+    s.font = Font(size=9, italic=True, color="5B6472")
+    s.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 16
+
+    # Header row
+    hr = 3
+    for c, name in enumerate(headers, start=1):
+        cell = ws.cell(hr, c, name)
+        cell.font = Font(bold=True, color=ACCENT, size=10)
+        cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
+        cell.alignment = center
+        cell.border = border
+    ws.row_dimensions[hr].height = 34
+
+    def status_text(n: NoteRow) -> tuple[str, str, str]:
+        present = n.present_count
+        txt_ok = text_consistency(n) >= 0.90
+        fmt_ok = serial_format_consistent(n)
+        if present == total and txt_ok and fmt_ok:
+            return "Consistent", GOOD, GOOD_SOFT
+        if present == total:
+            issues = []
+            if not fmt_ok: issues.append("serial format")
+            if not txt_ok: issues.append("text differs")
+            return "Check " + " & ".join(issues), WARN, WARN_SOFT
+        return f"In {present}/{total} only", BAD, BAD_SOFT
+
+    r = hr + 1
+    for i, n in enumerate(common + partial):
+        zebra = ZEBRA if i % 2 else "FFFFFF"
+        ws.cell(r, 1, n.serial_key).font = Font(bold=True, color=ACCENT, size=12)
+        ws.cell(r, 1).alignment = center
+        ws.cell(r, 2, n.section).alignment = wrap_top
+        for c, lbl in enumerate(doc_labels, start=3):
+            m = n.cells[lbl]
+            if m is None:
+                cell = ws.cell(r, c, "— not highlighted —")
+                cell.font = Font(italic=True, color="8A929E", size=9)
+            else:
+                cell = ws.cell(r, c, f"[serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+                cell.font = Font(size=9)
+                cell.fill = PatternFill("solid", fgColor=HI)
+            cell.alignment = wrap_top
+        stxt, scol, sfill = status_text(n)
+        sc = ws.cell(r, ncol, stxt)
+        sc.font = Font(bold=True, color=scol, size=9)
+        sc.fill = PatternFill("solid", fgColor=sfill)
+        sc.alignment = center
+        # zebra + borders for non-highlighted cells
+        for c in range(1, ncol + 1):
+            cell = ws.cell(r, c)
+            cell.border = border
+            if cell.fill.fgColor.rgb in (None, "00000000"):
+                cell.fill = PatternFill("solid", fgColor=zebra)
+        ws.row_dimensions[r].height = 92
+        r += 1
+
+    # widths
+    ws.column_dimensions["A"].width = 8
+    ws.column_dimensions["B"].width = 30
+    for c in range(3, 3 + total):
+        ws.column_dimensions[get_column_letter(c)].width = 40
+    ws.column_dimensions[get_column_letter(ncol)].width = 16
+    ws.freeze_panes = "C4"
+
+    # ---------- Sheet 2: Unnumbered highlights ----------
+    ws2 = wb.create_sheet("Unnumbered Highlights")
+    ws2.sheet_view.showGridLines = False
+    h2 = ["Document", "Page", "Highlighted passage (no serial assigned)"]
+    for c, name in enumerate(h2, start=1):
+        cell = ws2.cell(1, c, name)
+        cell.font = Font(bold=True, color=ACCENT, size=10)
+        cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
+        cell.alignment = center
+        cell.border = border
+    ws2.row_dimensions[1].height = 26
+    rr = 2
+    any_un = False
+    for lbl in doc_labels:
+        for m in sorted((x for x in marks_by_doc[lbl] if x.serial_key is None), key=lambda x: x.page):
+            any_un = True
+            ws2.cell(rr, 1, lbl).alignment = wrap_top
+            ws2.cell(rr, 2, m.page).alignment = Alignment(horizontal="center", vertical="top")
+            ws2.cell(rr, 3, m.heading or m.text).alignment = wrap_top
+            for c in range(1, 4):
+                cell = ws2.cell(rr, c)
+                cell.border = border
+                cell.font = Font(size=9)
+                if rr % 2:
+                    cell.fill = PatternFill("solid", fgColor=ZEBRA)
+            ws2.row_dimensions[rr].height = 30
+            rr += 1
+    if not any_un:
+        ws2.cell(2, 1, "None — every highlight carries a serial number.").font = Font(italic=True, color="5B6472")
+    ws2.column_dimensions["A"].width = 30
+    ws2.column_dimensions["B"].width = 8
+    ws2.column_dimensions["C"].width = 90
+    ws2.freeze_panes = "A2"
+
+    wb.save(out_path)
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
@@ -495,6 +645,8 @@ def main(argv=None):
     ap.add_argument("--doc", action="append", default=[],
                     help="Repeatable. Format: 'Label=/path/to.pdf' (column order preserved).")
     ap.add_argument("--out", default="common_notes_report.html", help="Output HTML file.")
+    ap.add_argument("--xlsx", default=None,
+                    help="Also write an Excel workbook to this path (e.g. report.xlsx).")
     args = ap.parse_args(argv)
 
     docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
@@ -520,7 +672,11 @@ def main(argv=None):
     )
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(page)
-    print(f"\n  Report written to: {os.path.abspath(args.out)}")
+    print(f"\n  HTML report written to: {os.path.abspath(args.out)}")
+
+    if args.xlsx:
+        render_xlsx(labels, marks_by_doc, notes, args.xlsx)
+        print(f"  Excel report written to: {os.path.abspath(args.xlsx)}")
 
 
 if __name__ == "__main__":
