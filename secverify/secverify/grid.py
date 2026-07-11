@@ -271,14 +271,21 @@ def grid_compare(corpus, soup, pdf_paths):
             continue
         apos = sorted(pdf_pos[l][0] for l in anchors)
         lo, hi = apos[0] - 8, apos[-1] + 8
+        table_label_count = Counter(l for l, f in html_rows if l and f)
         seq: list[tuple[str, int, list[str]]] = []
         for l, f in html_rows:
             if not (l and f) or len(l) < 10 or "refertonote" in l:
                 continue
+            if table_label_count[l] != 1:
+                continue  # label repeats in this table (dates strip out of
+                #           SOCIE balance rows) — ambiguous, skip
             in_win = [p for p in pdf_pos.get(l, []) if lo <= p <= hi]
             if len(in_win) != 1:
                 continue  # not unambiguously locatable in this region
             seq.append((l, in_win[0], f))
+        # two rows sharing one PDF position are the same ambiguity — drop both
+        pos_count = Counter(p for _l, p, _f in seq)
+        seq = [e for e in seq if pos_count[e[1]] == 1]
         if len(seq) < 3:
             continue
         keep = _lis_indices([p for _l, p, _f in seq])
