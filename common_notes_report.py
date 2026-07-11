@@ -887,9 +887,28 @@ def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 # Excel rendering
 # --------------------------------------------------------------------------- #
 
+def load_decisions(path: str) -> dict[tuple[str, str], str]:
+    """Read a decisions JSON exported from the HTML console -> {(serial, doc): decision}."""
+    import json
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    out: dict[tuple[str, str], str] = {}
+    for n in data.get("notes", []):
+        serial = str(n.get("serial"))
+        for d in n.get("decisions", []):
+            out[(serial, d.get("document"))] = (d.get("decision") or "").lower()
+    return out
+
+
 def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
-                notes: list[NoteRow], out_path: str) -> None:
-    """Write a formatted workbook: common-notes matrix + unnumbered highlights."""
+                notes: list[NoteRow], out_path: str,
+                decisions_path: Optional[str] = None) -> None:
+    """Write a formatted workbook: common-notes matrix + unnumbered highlights.
+
+    If decisions_path is given (a JSON exported from the interactive console),
+    each financial cell is tagged and tinted with its Accept/Reject decision, a
+    per-note Sign-off column is added, and a Decision Log sheet is appended.
+    """
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -897,6 +916,27 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     total = len(doc_labels)
     common = [n for n in notes if n.present_count == total]
     partial = [n for n in notes if n.present_count < total]
+
+    # Decisions + per-cell diff model (reuse the same logic the front-end uses).
+    decisions = load_decisions(decisions_path) if decisions_path else {}
+    have_dec = bool(decisions_path)
+    payload = build_payload(doc_labels, marks_by_doc, notes)
+    pnote_by_serial = {n["serial"]: n for n in payload["notes"]}
+
+    def cell_differs(serial: str, doc: str) -> bool:
+        pn = pnote_by_serial.get(serial)
+        if not pn:
+            return False
+        for c in pn["cells"]:
+            if c["doc"] == doc:
+                return c["differs"]
+        return False
+
+    def decision_for(serial: str, doc: str) -> str:
+        """'accepted' | 'rejected' | 'pending' | 'auto-match' | ''"""
+        if not cell_differs(serial, doc):
+            return "auto-match"
+        return decisions.get((serial, doc)) or "pending"
 
     # palette (aRGB, no leading '#')
     INK, ACCENT, ACC_SOFT = "1A2233", "0F6E78", "E5F1F2"
@@ -918,7 +958,11 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     ws.sheet_view.showGridLines = False
 
     headers = ["Serial", "Section"] + doc_labels + ["Status"]
+    if have_dec:
+        headers += ["Sign-off"]
     ncol = len(headers)
+    status_col = 3 + total          # column holding structural "Status"
+    signoff_col = status_col + 1    # column holding review "Sign-off" (if any)
 
     # Title banner
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
@@ -958,6 +1002,25 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
             return "Check " + " & ".join(issues), WARN, WARN_SOFT
         return f"In {present}/{total} only", BAD, BAD_SOFT
 
+    DEC_TAG = {"accepted": "✔ ACCEPTED", "rejected": "✘ REJECTED",
+               "pending": "◻ PENDING", "auto-match": ""}
+    DEC_FILL = {"accepted": GOOD_SOFT, "rejected": BAD_SOFT, "pending": WARN_SOFT}
+    DEC_TXT = {"accepted": GOOD, "rejected": BAD, "pending": WARN}
+
+    def signoff_text(n: NoteRow) -> tuple[str, str, str]:
+        pn = pnote_by_serial.get(n.serial_key, {})
+        diff_cells = [c for c in pn.get("cells", []) if c["differs"]]
+        if not diff_cells:
+            return "No review needed", "5B6472", "FFFFFF"
+        acc = sum(1 for c in diff_cells if decisions.get((n.serial_key, c["doc"])) == "accepted")
+        rej = sum(1 for c in diff_cells if decisions.get((n.serial_key, c["doc"])) == "rejected")
+        pend = len(diff_cells) - acc - rej
+        if pend:
+            return f"Pending\n{acc} acc · {rej} rej · {pend} to do", WARN, WARN_SOFT
+        if rej:
+            return f"Signed off\n{acc} accepted · {rej} rejected", WARN, WARN_SOFT
+        return f"Signed off\nall {acc} accepted", GOOD, GOOD_SOFT
+
     r = hr + 1
     for i, n in enumerate(common + partial):
         zebra = ZEBRA if i % 2 else "FFFFFF"
@@ -970,15 +1033,25 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 cell = ws.cell(r, c, "— not highlighted —")
                 cell.font = Font(italic=True, color="8A929E", size=9)
             else:
-                cell = ws.cell(r, c, f"[serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
-                cell.font = Font(size=9)
-                cell.fill = PatternFill("solid", fgColor=HI)
+                dec = decision_for(n.serial_key, lbl) if have_dec else "auto-match"
+                tag = DEC_TAG.get(dec, "")
+                prefix = f"{tag} — " if tag else ""
+                cell = ws.cell(r, c, f"{prefix}[serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+                cell.font = Font(size=9, color=DEC_TXT.get(dec, INK),
+                                 bold=dec in ("accepted", "rejected"))
+                cell.fill = PatternFill("solid", fgColor=DEC_FILL.get(dec, HI))
             cell.alignment = wrap_top
         stxt, scol, sfill = status_text(n)
-        sc = ws.cell(r, ncol, stxt)
+        sc = ws.cell(r, status_col, stxt)
         sc.font = Font(bold=True, color=scol, size=9)
         sc.fill = PatternFill("solid", fgColor=sfill)
         sc.alignment = center
+        if have_dec:
+            otxt, ocol, ofill = signoff_text(n)
+            oc = ws.cell(r, signoff_col, otxt)
+            oc.font = Font(bold=True, color=ocol, size=9)
+            oc.fill = PatternFill("solid", fgColor=ofill)
+            oc.alignment = center
         # zebra + borders for non-highlighted cells
         for c in range(1, ncol + 1):
             cell = ws.cell(r, c)
@@ -993,7 +1066,9 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     ws.column_dimensions["B"].width = 30
     for c in range(3, 3 + total):
         ws.column_dimensions[get_column_letter(c)].width = 40
-    ws.column_dimensions[get_column_letter(ncol)].width = 16
+    ws.column_dimensions[get_column_letter(status_col)].width = 16
+    if have_dec:
+        ws.column_dimensions[get_column_letter(signoff_col)].width = 20
     ws.freeze_panes = "C4"
 
     # ---------- Sheet 2: Unnumbered highlights ----------
@@ -1030,6 +1105,45 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     ws2.column_dimensions["C"].width = 90
     ws2.freeze_panes = "A2"
 
+    # ---------- Sheet 3: Decision Log (only when decisions supplied) ----------
+    if have_dec:
+        ws3 = wb.create_sheet("Decision Log")
+        ws3.sheet_view.showGridLines = False
+        h3 = ["Serial", "Note", "Statement", "Page", "Differs?", "Reason(s)", "Match %", "Decision"]
+        for c, name in enumerate(h3, start=1):
+            cell = ws3.cell(1, c, name)
+            cell.font = Font(bold=True, color=ACCENT, size=10)
+            cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
+            cell.alignment = center
+            cell.border = border
+        ws3.row_dimensions[1].height = 26
+        rr = 2
+        for pn in payload["notes"]:
+            for c in pn["cells"]:
+                dec = decision_for(pn["serial"], c["doc"])
+                vals = [pn["serial"], pn["label"], c["doc"],
+                        "" if c["page"] is None else c["page"],
+                        "yes" if c["differs"] else "no",
+                        "; ".join(c["reasons"]),
+                        f"{round(c['sim'] * 100)}%" if c["present"] else "",
+                        DEC_TAG.get(dec, dec) or "—"]
+                for c2, v in enumerate(vals, start=1):
+                    cell = ws3.cell(rr, c2, v)
+                    cell.border = border
+                    cell.font = Font(size=9,
+                                     color=DEC_TXT.get(dec, INK) if c2 == 8 else INK,
+                                     bold=(c2 == 8 and dec in ("accepted", "rejected")))
+                    cell.alignment = wrap_top if c2 in (2, 3, 6) else center
+                    if c2 == 8 and dec in DEC_FILL:
+                        cell.fill = PatternFill("solid", fgColor=DEC_FILL[dec])
+                    elif rr % 2:
+                        cell.fill = PatternFill("solid", fgColor=ZEBRA)
+                ws3.row_dimensions[rr].height = 28
+                rr += 1
+        for col, w in zip("ABCDEFGH", (8, 26, 26, 8, 10, 22, 10, 16)):
+            ws3.column_dimensions[col].width = w
+        ws3.freeze_panes = "A2"
+
     wb.save(out_path)
 
 
@@ -1054,6 +1168,9 @@ def main(argv=None):
     ap.add_argument("--out", default="common_notes_report.html", help="Output HTML file.")
     ap.add_argument("--xlsx", default=None,
                     help="Also write an Excel workbook to this path (e.g. report.xlsx).")
+    ap.add_argument("--decisions", default=None,
+                    help="Path to a decisions JSON exported from the HTML console. Folds each "
+                         "Accept/Reject into the Excel (cell tags, Sign-off column, Decision Log).")
     args = ap.parse_args(argv)
 
     docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
@@ -1082,8 +1199,11 @@ def main(argv=None):
     print(f"\n  HTML report written to: {os.path.abspath(args.out)}")
 
     if args.xlsx:
-        render_xlsx(labels, marks_by_doc, notes, args.xlsx)
-        print(f"  Excel report written to: {os.path.abspath(args.xlsx)}")
+        render_xlsx(labels, marks_by_doc, notes, args.xlsx, decisions_path=args.decisions)
+        note = " (with Accept/Reject sign-off)" if args.decisions else ""
+        print(f"  Excel report written to: {os.path.abspath(args.xlsx)}{note}")
+    elif args.decisions:
+        print("  Note: --decisions has no effect without --xlsx.")
 
 
 if __name__ == "__main__":
