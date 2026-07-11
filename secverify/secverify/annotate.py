@@ -899,16 +899,28 @@ class Annotator:
                 else f"“{_shorten(oi.first_text, 80)}” … “{_shorten(oi.last_text, 80)}”"
                 f" ({oi.count} lines)"
             )
-            self._new_issue(
-                "order",
-                "error",
-                f"(PDF {oi.pdf_label}) {oi.first_text}",
-                f"Out of sequence: this content is on PDF {oi.pdf_label}, but "
-                f"in the HTML it appears {oi.direction} than the PDF order "
-                f"requires — it sits near the content of PDF {oi.near_label}. "
-                f"Affected: {span}. Check whether this section was moved "
-                "during conversion.",
-            )
+            if oi.review:
+                self._new_issue(
+                    "order",
+                    "review",
+                    f"(PDF {oi.pdf_label}) {oi.first_text}",
+                    f"Relocated content — this text is word-for-word correct "
+                    f"but appears {oi.direction} in the HTML than the PDF "
+                    f"order requires (by roughly a paragraph; it sits near the "
+                    f"content of PDF {oi.near_label}). Affected: {span}. "
+                    "Verify the paragraph sits under the intended heading.",
+                )
+            else:
+                self._new_issue(
+                    "order",
+                    "error",
+                    f"(PDF {oi.pdf_label}) {oi.first_text}",
+                    f"Out of sequence: this content is on PDF {oi.pdf_label}, but "
+                    f"in the HTML it appears {oi.direction} than the PDF order "
+                    f"requires — it sits near the content of PDF {oi.near_label}. "
+                    f"Affected: {span}. Check whether this section was moved "
+                    "during conversion.",
+                )
         for m in self.result.figure_count_mismatches:
             pages = ", ".join(str(p) for p in m["pdf_pages"][:5])
             self._new_issue(
@@ -1249,7 +1261,8 @@ the HTML.</p>
 <p><b>PDF → HTML coverage:</b> {result.coverage.ok}/{result.coverage.total} PDF lines
 reflected in the HTML, {result.coverage.review} to review,
 <span class="{'sev-error' if result.coverage.missing else ''}">{result.coverage.missing} missing</span>,
-<span class="{'sev-error' if result.coverage.order_issues else ''}">{len(result.coverage.order_issues)} content-order violation(s)</span>.
+<span class="{'sev-error' if any(not o.review for o in result.coverage.order_issues) else ''}">{sum(1 for o in result.coverage.order_issues if not o.review)} content-order violation(s)</span>,
+<span class="{'sev-review' if any(o.review for o in result.coverage.order_issues) else ''}">{sum(1 for o in result.coverage.order_issues if o.review)} relocated paragraph(s) to review</span>.
 Omitted PDF content is shown <b>inline</b> as a red callout box at the exact
 position in this document where it should have appeared; the content-order
 check verifies the HTML presents the PDF's content in the PDF's sequence.</p>

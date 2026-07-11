@@ -35,6 +35,14 @@ ORDER_ANCHOR_MIN_LEN = 25
 #: displacement below this many letters-canon characters is table/cell
 #: jitter, not a moved section
 ORDER_SLACK = 400
+#: a prose anchor out of sequence by at least this many letters-canon chars
+#: (roughly one sentence) is reported for review even inside ORDER_SLACK —
+#: a relocated paragraph whose every word is verbatim would otherwise be the
+#: one silent way to change a document's reading order
+ORDER_SOFT_MIN = 40
+#: only digit-light lines (prose, not table rows) join the soft check, so
+#: print-vs-web cell jitter cannot flood it
+ORDER_SOFT_MAX_DIGIT_FRAC = 0.15
 
 #: an index / table-of-contents entry: label, dot leader, then a page number
 #: (text extraction often garbles the number with leader dots: 19 → "1.9")
@@ -77,6 +85,9 @@ class OrderIssue:
     count: int          # lines in the run
     direction: str      # "earlier" | "later"
     near_label: str     # PDF page whose content surrounds it in the HTML
+    #: True for a small relocation (within the red check's slack) — a prose
+    #: line out of sequence by roughly a paragraph; review, not error
+    review: bool = False
 
 
 @dataclass
@@ -443,10 +454,17 @@ def _order_issues(
     for line_idx, doc, label, pos in anchors:
         by_doc.setdefault(doc, []).append((line_idx, label, pos))
 
+    def _digit_frac(text: str) -> float:
+        chars = [c for c in text if c.isalnum()]
+        if not chars:
+            return 1.0
+        return sum(c.isdigit() for c in chars) / len(chars)
+
     for doc_anchors in by_doc.values():
         positions = [pos for _i, _l, pos in doc_anchors]
         keep = _lis_indices(positions)
         violators: list[int] = []
+        soft: list[int] = []
         for a_idx in range(len(doc_anchors)):
             if a_idx in keep:
                 continue
@@ -456,36 +474,58 @@ def _order_issues(
             if (lo is None or pos >= lo - ORDER_SLACK) and (
                 hi is None or pos <= hi + ORDER_SLACK
             ):
-                continue  # small displacement: table/cell jitter
+                # Within the red check's slack — but a digit-light PROSE line
+                # out of sequence by a sentence-plus is a relocated paragraph
+                # (every word verbatim, just in the wrong place): review it.
+                displaced = 0
+                if lo is not None and pos < lo:
+                    displaced = lo - pos
+                if hi is not None and pos > hi:
+                    displaced = max(displaced, pos - hi)
+                line_idx = doc_anchors[a_idx][0]
+                if (
+                    displaced >= ORDER_SOFT_MIN
+                    and _digit_frac(lines[line_idx].text)
+                    <= ORDER_SOFT_MAX_DIGIT_FRAC
+                ):
+                    soft.append(a_idx)
+                continue
             violators.append(a_idx)
 
-        run: list[int] = []
-        for a_idx in [*violators, None]:
-            if run and (a_idx is None or a_idx != run[-1] + 1):
-                first_i, first_label, first_pos = doc_anchors[run[0]]
-                last_i, _l, _p = doc_anchors[run[-1]]
-                lo = max((positions[k] for k in keep if k < run[0]), default=None)
-                direction = (
-                    "earlier" if lo is not None and first_pos < lo else "later"
-                )
-                near = min(
-                    (doc_anchors[k] for k in keep),
-                    key=lambda a: abs(a[2] - first_pos),
-                    default=None,
-                )
-                issues.append(
-                    OrderIssue(
-                        pdf_label=first_label,
-                        first_text=lines[first_i].text,
-                        last_text=lines[last_i].text,
-                        count=len(run),
-                        direction=direction,
-                        near_label=near[1] if near else "?",
+        def emit_runs(idxs: list[int], review: bool) -> None:
+            run: list[int] = []
+            for a_idx in [*idxs, None]:
+                if run and (a_idx is None or a_idx != run[-1] + 1):
+                    first_i, first_label, first_pos = doc_anchors[run[0]]
+                    last_i, _l, _p = doc_anchors[run[-1]]
+                    lo = max(
+                        (positions[k] for k in keep if k < run[0]), default=None
                     )
-                )
-                run = []
-            if a_idx is not None:
-                run.append(a_idx)
+                    direction = (
+                        "earlier" if lo is not None and first_pos < lo else "later"
+                    )
+                    near = min(
+                        (doc_anchors[k] for k in keep),
+                        key=lambda a: abs(a[2] - first_pos),
+                        default=None,
+                    )
+                    issues.append(
+                        OrderIssue(
+                            pdf_label=first_label,
+                            first_text=lines[first_i].text,
+                            last_text=lines[last_i].text,
+                            count=len(run),
+                            direction=direction,
+                            near_label=near[1] if near else "?",
+                            review=review,
+                        )
+                    )
+                    run = []
+                if a_idx is not None:
+                    run.append(a_idx)
+
+        emit_runs(violators, review=False)
+        emit_runs(soft, review=True)
     return issues
 
 

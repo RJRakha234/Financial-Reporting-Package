@@ -87,6 +87,13 @@ The structural detectors run:
   section moved during conversion — page 12's content pasted before page
   1's — is flagged as an out-of-sequence error naming both locations, so
   presence checks can never be satisfied by a scrambled document.
+  Smaller relocations get their own tier: a digit-light **prose** anchor out
+  of sequence by a sentence-plus but within the error check's slack — a
+  paragraph whose every word is verbatim, sitting in the wrong place — is
+  reported as a **review** item ("relocated paragraph"), since re-ordering
+  otherwise-verbatim blocks is the one silent way to change a document's
+  reading order. Table rows are excluded (digit-heavy), so print-vs-web cell
+  jitter cannot flood this.
 
 ## Install
 

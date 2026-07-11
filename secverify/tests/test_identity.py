@@ -346,3 +346,29 @@ def test_verbatim_sentence_auto_validates_figure():
     s2 = BeautifulSoup(r2.html_out, "html.parser"); s2.find(id="secv-summary").extract()
     nine = next(s for s in s2.find_all("span") if s.get_text(strip=True) == "9")
     assert "secv-num-review" in nine.get("class", [])
+
+
+def test_relocated_paragraph_flagged_for_review():
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    pA = ("The provision for onerous contracts was recognised during the "
+          "current quarter following a detailed reassessment of obligations.")
+    pB = ("The gratuity obligation increased materially as at the reporting "
+          "date owing to the revision in actuarial assumptions this year.")
+    # PDF order: A then B (separate lines). HTML swaps them — every word
+    # verbatim, only the order changed. Must be flagged for review.
+    r = Annotator(make_corpus([pA + "\n" + pB]), level="sigma",
+                  pdf_paths=["d.pdf"]).run(
+        f"<html><body><p>{pB}</p><p>{pA}</p></body></html>", "r.pdf", "d.html")
+    soft = [i for i in r.issues if i.kind == "order" and i.severity == "review"]
+    assert soft, "swapped verbatim paragraphs must be flagged for review"
+    assert not [i for i in r.issues if i.kind == "order" and i.severity == "error"]
+
+    # unswapped: no order issue of any kind
+    r2 = Annotator(make_corpus([pA + "\n" + pB]), level="sigma",
+                   pdf_paths=["d.pdf"]).run(
+        f"<html><body><p>{pA}</p><p>{pB}</p></body></html>", "r.pdf", "d.html")
+    assert not [i for i in r2.issues if i.kind == "order"]
