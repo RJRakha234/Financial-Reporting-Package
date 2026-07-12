@@ -1195,7 +1195,7 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                           "benchmark": lbl == bench})
 
     note_objs = []
-    for n in common + partial:
+    for n in notes:  # already sorted by serial number
         # Per-note reference: the primary benchmark if it highlights this note;
         # otherwise the fallback (IFRS INR Consolidated); otherwise majority vote.
         if n.cells.get(bench):
@@ -1441,7 +1441,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         return f"Signed off\nall {acc} accepted", GOOD, GOOD_SOFT
 
     r = hr + 1
-    for i, n in enumerate(common + partial):
+    for i, n in enumerate(notes):  # sequential serial order
         zebra = ZEBRA if i % 2 else "FFFFFF"
         ws.cell(r, 1, n.serial_key).font = Font(bold=True, color=ACCENT, size=12)
         ws.cell(r, 1).alignment = center
