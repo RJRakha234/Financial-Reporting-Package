@@ -93,6 +93,8 @@ class Mark:
     serial_key: Optional[str]  # normalized key ("1." -> "1"), None if no comment
     text: str                # the highlighted text
     heading: str             # section/heading context captured just above the mark
+    y0: float = 0.0          # top of the highlight on the page (for reading order)
+    x0: float = 0.0          # left edge (tie-break within a line)
 
 
 @dataclass
@@ -177,6 +179,8 @@ def extract_marks(label: str, path: str) -> list[Mark]:
                     serial_key=_normalize_serial(raw),
                     text=_highlighted_text(page, annot),
                     heading=_heading_above(page, annot),
+                    y0=annot.rect.y0,
+                    x0=annot.rect.x0,
                 ))
     finally:
         doc.close()
@@ -198,6 +202,30 @@ def _derive_section(marks: list[Mark]) -> str:
 def _serial_sort_key(key: str):
     parts = re.findall(r"\d+", key)
     return (0, [int(p) for p in parts]) if parts else (1, key)
+
+
+def _merge_marks(hits: list[Mark]) -> Mark:
+    """Merge multiple same-serial highlights in one document into one Mark.
+
+    Reviewers sometimes highlight a note as several strokes (e.g. the heading
+    plus the paragraph) sharing one serial. Joining them in reading order
+    (page, then top-to-bottom, then left-to-right) makes the comparison see
+    the same combined passage in every document instead of an arbitrary piece.
+    """
+    if len(hits) == 1:
+        return hits[0]
+    ordered = sorted(hits, key=lambda m: (m.page, m.y0, m.x0))
+    first = ordered[0]
+    return Mark(
+        doc=first.doc,
+        page=first.page,
+        serial_raw=first.serial_raw,
+        serial_key=first.serial_key,
+        text=_clean(" ".join(m.text for m in ordered if m.text)),
+        heading=max((m.heading for m in ordered), key=len, default=""),
+        y0=first.y0,
+        x0=first.x0,
+    )
 
 
 def build_notes(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]]) -> list[NoteRow]:
@@ -222,7 +250,7 @@ def build_notes(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]]) -> l
             by_doc.setdefault(m.doc, []).append(m)
         for label in doc_labels:
             hits = by_doc.get(label, [])
-            row.cells[label] = hits[0] if hits else None
+            row.cells[label] = _merge_marks(hits) if hits else None
         rows.append(row)
     return rows
 
