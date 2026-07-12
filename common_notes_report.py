@@ -334,7 +334,7 @@ def _anchor_scan(toks: list[str], anchor: list[str], lo: int, hi: int) -> tuple[
     k = len(anchor)
     best: tuple[float, Optional[int]] = (0.0, None)
     for i in range(max(0, lo), min(len(toks) - k, hi) + 1):
-        r = SequenceMatcher(None, anchor, toks[i:i + k]).ratio()
+        r = SequenceMatcher(None, anchor, toks[i:i + k], autojunk=False).ratio()
         if r > best[0]:
             best = (r, i)
     return best
@@ -387,7 +387,7 @@ def locate_passage(pages: list[tuple[int, list[str]]], target: str) -> Optional[
         W = min(n, L)
         stride = max(1, L // 5)
         for s in range(0, max(1, n - W + 1), stride):
-            sm = SequenceMatcher(None, t, toks[s:s + W])
+            sm = SequenceMatcher(None, t, toks[s:s + W], autojunk=False)
             if sm.real_quick_ratio() <= best[0]:
                 continue
             r = sm.ratio()
@@ -405,12 +405,12 @@ def locate_passage(pages: list[tuple[int, list[str]]], target: str) -> Optional[
             s2, W2 = max(0, s + ds), max(5, W + dw)
             if s2 + W2 > len(toks):
                 continue
-            r2 = SequenceMatcher(None, t, toks[s2:s2 + W2]).ratio()
+            r2 = SequenceMatcher(None, t, toks[s2:s2 + W2], autojunk=False).ratio()
             if r2 > r:
                 r, s, W = r2, s2, W2
     # word-exact edges: align to the template's opening/closing words
     s, W = _pin_bounds(toks, t, s, W)
-    r = SequenceMatcher(None, t, toks[s:s + W]).ratio()
+    r = SequenceMatcher(None, t, toks[s:s + W], autojunk=False).ratio()
     return {"conf": r, "page": pno, "text": " ".join(toks[s:s + W])}
 
 
@@ -468,7 +468,7 @@ def _best_word_window(words: list, target_tokens: list[str]) -> tuple[float, int
     W = min(n, L)
     stride = max(1, L // 6)
     for s in range(0, max(1, n - W + 1), stride):
-        sm = SequenceMatcher(None, target_tokens, toks[s:s + W])
+        sm = SequenceMatcher(None, target_tokens, toks[s:s + W], autojunk=False)
         if sm.real_quick_ratio() <= best[0]:
             continue
         r = sm.ratio()
@@ -482,11 +482,11 @@ def _best_word_window(words: list, target_tokens: list[str]) -> tuple[float, int
             s2, W2 = max(0, s + ds), max(3, W + dw)
             if s2 + W2 > n:
                 continue
-            r2 = SequenceMatcher(None, target_tokens, toks[s2:s2 + W2]).ratio()
+            r2 = SequenceMatcher(None, target_tokens, toks[s2:s2 + W2], autojunk=False).ratio()
             if r2 > r:
                 r, s, W = r2, s2, W2
     s, W = _pin_bounds(toks, target_tokens, s, W)
-    r = SequenceMatcher(None, target_tokens, toks[s:s + W]).ratio()
+    r = SequenceMatcher(None, target_tokens, toks[s:s + W], autojunk=False).ratio()
     return r, s, W
 
 
@@ -538,7 +538,7 @@ def text_consistency(row: NoteRow) -> float:
     worst = 1.0
     for i in range(len(texts)):
         for j in range(i + 1, len(texts)):
-            worst = min(worst, SequenceMatcher(None, texts[i], texts[j]).ratio())
+            worst = min(worst, SequenceMatcher(None, texts[i].split(), texts[j].split(), autojunk=False).ratio())
     return worst
 
 
@@ -1172,7 +1172,7 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         """(extra, missing) word counts of cur vs ref, case- and punctuation-sensitive."""
         a, b = ref.split(), cur.split()
         add = dele = 0
-        for tag, i1, i2, j1, j2 in SequenceMatcher(None, a, b).get_opcodes():
+        for tag, i1, i2, j1, j2 in SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
             if tag == "replace":
                 dele += i2 - i1
                 add += j2 - j1
@@ -1231,7 +1231,8 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 })
                 continue
             reasons = []
-            sim = SequenceMatcher(None, m.text, ref_text).ratio() if ref_text else 1.0
+            sim = (SequenceMatcher(None, ref_text.split(), m.text.split(),
+                                   autojunk=False).ratio() if ref_text else 1.0)
             add, dele = word_diff_counts(ref_text, m.text) if ref_text else (0, 0)
             if not is_bench:
                 if (m.serial_raw or "").strip() != (ref_serial or "").strip():
