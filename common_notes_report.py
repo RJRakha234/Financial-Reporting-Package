@@ -406,6 +406,76 @@ def apply_template(template: dict, docs: list[tuple[str, str]],
     return log
 
 
+def _best_word_window(words: list, target_tokens: list[str]) -> tuple[float, int, int]:
+    """Best (ratio, start, width) window over a page's word list for target tokens."""
+    toks = [w[4] for w in words]
+    L, n = len(target_tokens), len(toks)
+    if not L or not n:
+        return 0.0, 0, 0
+    best = (0.0, 0, min(n, L))
+    W = min(n, L)
+    stride = max(1, L // 6)
+    for s in range(0, max(1, n - W + 1), stride):
+        sm = SequenceMatcher(None, target_tokens, toks[s:s + W])
+        if sm.real_quick_ratio() <= best[0]:
+            continue
+        r = sm.ratio()
+        if r > best[0]:
+            best = (r, s, W)
+    r, s, W = best
+    step = max(1, L // 16)
+    span = max(step, L // 8)
+    for ds in range(-span, span + 1, step):
+        for dw in range(-span, span + 1, step):
+            s2, W2 = max(0, s + ds), max(3, W + dw)
+            if s2 + W2 > n:
+                continue
+            r2 = SequenceMatcher(None, target_tokens, toks[s2:s2 + W2]).ratio()
+            if r2 > r:
+                r, s, W = r2, s2, W2
+    return r, s, W
+
+
+def annotate_pdf(src_path: str, dst_path: str, marks: list[Mark],
+                 include_own: bool = False) -> int:
+    """Write highlight annotations (serial number in the comment box) into a copy
+    of the PDF for every auto-located mark. Returns the number added.
+
+    The reviewer's own highlights are already in the file; only marks synthesized
+    from a template (mark.conf set) are drawn unless include_own=True.
+    """
+    doc = fitz.open(src_path)
+    added = 0
+    try:
+        for m in marks:
+            if m.serial_key is None or (m.conf is None and not include_own):
+                continue
+            page = doc[m.page - 1]
+            words = page.get_text("words")  # x0,y0,x1,y1,text,block,line,word_no
+            r, s, W = _best_word_window(words, m.text.split())
+            sel = words[s:s + W]
+            if not sel or r < 0.4:
+                continue
+            # one rectangle per text line so the highlight hugs the words
+            lines: dict[tuple, fitz.Rect] = {}
+            for w in sel:
+                key = (w[5], w[6])
+                rct = fitz.Rect(w[:4])
+                if key in lines:
+                    lines[key] |= rct
+                else:
+                    lines[key] = rct
+            annot = page.add_highlight_annot(list(lines.values()))
+            annot.set_info(content=m.serial_raw or m.serial_key,
+                           title="Common Notes Tool")
+            annot.update()
+            added += 1
+        doc.save(dst_path)
+    finally:
+        doc.close()
+    return added
+
+
 def text_consistency(row: NoteRow) -> float:
     """Lowest pairwise similarity of highlighted text among present cells (0..1)."""
     texts = [m.text for m in row.cells.values() if m and m.text]
@@ -1487,6 +1557,9 @@ def main(argv=None):
                          "document does not highlight itself is fuzzy-matched from the template.")
     ap.add_argument("--min-confidence", type=float, default=0.6,
                     help="Minimum match confidence (0-1) for a template-located note (default 0.6).")
+    ap.add_argument("--annotate-dir", default=None, metavar="DIR",
+                    help="Write highlighted copies of the PDFs here: every auto-located note is "
+                         "drawn as a highlight with its serial number in the comment box.")
     args = ap.parse_args(argv)
 
     docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
@@ -1526,6 +1599,15 @@ def main(argv=None):
     if args.save_template:
         save_template(args.save_template, labels, notes, args.benchmark)
         print(f"  Template saved to: {os.path.abspath(args.save_template)}")
+
+    if args.annotate_dir:
+        os.makedirs(args.annotate_dir, exist_ok=True)
+        print()
+        for label, path in docs:
+            base = os.path.splitext(os.path.basename(path))[0]
+            dst = os.path.join(args.annotate_dir, f"{base}_highlighted.pdf")
+            n_added = annotate_pdf(path, dst, marks_by_doc[label])
+            print(f"  Highlighted PDF ({n_added} notes drawn): {dst}")
 
     body = render_html(labels, marks_by_doc, notes, benchmark=args.benchmark)
     page = (
