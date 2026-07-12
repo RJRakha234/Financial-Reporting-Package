@@ -112,6 +112,7 @@ class Mark:
     heading: str             # section/heading context captured just above the mark
     y0: float = 0.0          # top of the highlight on the page (for reading order)
     x0: float = 0.0          # left edge (tie-break within a line)
+    conf: Optional[float] = None  # set when auto-located from a template (0..1)
 
 
 @dataclass
@@ -270,6 +271,139 @@ def build_notes(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]]) -> l
             row.cells[label] = _merge_marks(hits) if hits else None
         rows.append(row)
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Template: learn common notes once, locate them in unhighlighted periods
+# --------------------------------------------------------------------------- #
+
+def save_template(path: str, doc_labels: list[str], notes: list[NoteRow],
+                  benchmark: Optional[str]) -> None:
+    """Persist the highlighted common-note passages as a reusable template."""
+    import json
+    bench = resolve_benchmark(doc_labels, benchmark)
+    tpl = {
+        "version": 1,
+        "created": date.today().isoformat(),
+        "benchmark": bench,
+        "docs": doc_labels,
+        "notes": [],
+    }
+    for n in notes:
+        entry = {"serial": n.serial_key, "section": n.section, "passages": {}}
+        for lbl, m in n.cells.items():
+            if m:
+                entry["passages"][lbl] = {
+                    "text": m.text, "serial_raw": m.serial_raw, "page": m.page,
+                }
+        tpl["notes"].append(entry)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(tpl, fh, ensure_ascii=False, indent=2)
+
+
+def load_template(path: str) -> dict:
+    import json
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _page_token_index(pdf_path: str) -> list[tuple[int, list[str]]]:
+    """[(page_no, tokens)] for every page of a PDF."""
+    doc = fitz.open(pdf_path)
+    out = []
+    try:
+        for pno in range(len(doc)):
+            out.append((pno + 1, _clean(doc[pno].get_text("text")).split()))
+    finally:
+        doc.close()
+    return out
+
+
+def locate_passage(pages: list[tuple[int, list[str]]], target: str) -> Optional[dict]:
+    """Find the window of a document that best matches a template passage.
+
+    Slides a token window across every page, scoring with SequenceMatcher,
+    then refines the best window's boundaries. Returns
+    {"conf": 0..1, "page": int, "text": str} or None if nothing scored.
+    """
+    t = target.split()
+    L = len(t)
+    if not L:
+        return None
+    best = (0.0, None, 0, 0)  # ratio, page, start, width
+    for pno, toks in pages:
+        n = len(toks)
+        if n == 0:
+            continue
+        W = min(n, L)
+        stride = max(1, L // 5)
+        for s in range(0, max(1, n - W + 1), stride):
+            sm = SequenceMatcher(None, t, toks[s:s + W])
+            if sm.real_quick_ratio() <= best[0]:
+                continue
+            r = sm.ratio()
+            if r > best[0]:
+                best = (r, pno, s, W)
+    if best[1] is None:
+        return None
+    r, pno, s, W = best
+    toks = dict(pages)[pno]
+    # refine boundaries around the winning window
+    step = max(1, L // 16)
+    span = max(step, L // 8)
+    for ds in range(-span, span + 1, step):
+        for dw in range(-span, span + 1, step):
+            s2, W2 = max(0, s + ds), max(5, W + dw)
+            if s2 + W2 > len(toks):
+                continue
+            r2 = SequenceMatcher(None, t, toks[s2:s2 + W2]).ratio()
+            if r2 > r:
+                r, s, W = r2, s2, W2
+    return {"conf": r, "page": pno, "text": " ".join(toks[s:s + W])}
+
+
+def apply_template(template: dict, docs: list[tuple[str, str]],
+                   marks_by_doc: dict[str, list[Mark]],
+                   min_conf: float = 0.6) -> dict[str, list[dict]]:
+    """Fill in template notes that are not already highlighted in each document.
+
+    For every (note, statement) in the template: keep the reviewer's own
+    highlight when one carries that serial; otherwise fuzzy-locate the passage
+    in the PDF and synthesize a Mark (tagged with its confidence). Returns a
+    per-document log of what was located/kept/not found.
+    """
+    log: dict[str, list[dict]] = {}
+    page_index: dict[str, list] = {}
+    paths = dict(docs)
+    for lbl, _ in docs:
+        have = {m.serial_key for m in marks_by_doc.get(lbl, []) if m.serial_key}
+        log[lbl] = []
+        for entry in template.get("notes", []):
+            serial = str(entry["serial"])
+            passage = entry.get("passages", {}).get(lbl)
+            if passage is None:
+                continue  # template says this note is not present in this statement
+            if serial in have:
+                log[lbl].append({"serial": serial, "action": "kept-highlight"})
+                continue
+            if lbl not in page_index:
+                page_index[lbl] = _page_token_index(paths[lbl])
+            hit = locate_passage(page_index[lbl], passage["text"])
+            if hit and hit["conf"] >= min_conf:
+                marks_by_doc.setdefault(lbl, []).append(Mark(
+                    doc=lbl, page=hit["page"],
+                    serial_raw=passage.get("serial_raw", serial),
+                    serial_key=serial,
+                    text=hit["text"],
+                    heading=entry.get("section", ""),
+                    conf=round(hit["conf"], 3),
+                ))
+                log[lbl].append({"serial": serial, "action": "located",
+                                 "conf": round(hit["conf"], 3), "page": hit["page"]})
+            else:
+                log[lbl].append({"serial": serial, "action": "not-found",
+                                 "conf": round(hit["conf"], 3) if hit else 0.0})
+    return log
 
 
 def text_consistency(row: NoteRow) -> float:
@@ -539,6 +673,8 @@ _APP_CSS = """
 .dcell.absent{background:repeating-linear-gradient(45deg,transparent,transparent 7px,
   color-mix(in srgb,var(--faint) 8%,transparent) 7px,color-mix(in srgb,var(--faint) 8%,transparent) 14px)}
 .mini.muted{background:transparent;border:1px dashed var(--line-strong);color:var(--faint)}
+.mini.tmpl{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);
+  border-color:transparent;font-weight:700}
 .tag-absent{margin-top:auto;font-size:11px;font-weight:650;color:var(--faint);line-height:1.4}
 .hann{margin-top:5px;font-size:11.5px;font-weight:600;color:var(--warn);
   background:var(--warn-soft);display:inline-block;padding:3px 9px;border-radius:7px}
@@ -708,6 +844,7 @@ _APP_JS = r"""
     var scls = c.reasons.indexOf('serial format')>=0 ? 'mini ser warn' : 'mini ser';
     chips = '<span class="'+scls+'">serial '+esc(c.serial||'—')+'</span>'+
             '<span class="mini">p.'+c.page+'</span>'+
+            (c.autoFound ? '<span class="mini tmpl">◎ auto-located '+Math.round(c.autoFound*100)+'%</span>' : '')+
             (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
     // Benchmark shows its own text as the reference; others highlight only the
     // words that are extra (in this statement) vs missing (present in benchmark).
@@ -981,7 +1118,7 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 "doc": lbl, "present": True, "page": m.page, "serial": m.serial_raw,
                 "text": m.text, "differs": bool(reasons), "reasons": reasons,
                 "sim": round(sim, 3), "wordAdd": add, "wordDel": dele,
-                "isBenchmark": is_bench, "absent": False,
+                "isBenchmark": is_bench, "absent": False, "autoFound": m.conf,
             })
 
         diff_cells = [c for c in cells if c["differs"]]
@@ -1194,14 +1331,16 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 cell.font = Font(italic=True, color="8A929E", size=9)
             elif pc.get("isBenchmark"):
                 fb = " (fallback)" if pnote_by_serial[n.serial_key].get("fallbackUsed") else ""
-                cell = ws.cell(r, c, f"★ BENCHMARK{fb} — [serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+                auto = f" ◎ auto-located {round(pc['autoFound']*100)}%" if pc.get("autoFound") else ""
+                cell = ws.cell(r, c, f"★ BENCHMARK{fb}{auto} — [serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
                 cell.font = Font(size=9, color=ACCENT, bold=True)
                 cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
             else:
                 dec = decision_for(n.serial_key, lbl) if have_dec else "auto-match"
                 tag = DEC_TAG.get(dec, "")
+                auto = f"◎ auto-located {round(pc['autoFound']*100)}% · " if pc.get("autoFound") else ""
                 prefix = f"{tag} — " if tag else ""
-                cell = ws.cell(r, c, f"{prefix}[serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+                cell = ws.cell(r, c, f"{prefix}{auto}[serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
                 cell.font = Font(size=9, color=DEC_TXT.get(dec, INK),
                                  bold=dec in ("accepted", "rejected"))
                 cell.fill = PatternFill("solid", fgColor=DEC_FILL.get(dec, HI))
@@ -1340,6 +1479,14 @@ def main(argv=None):
     ap.add_argument("--benchmark", default=DEFAULT_BENCHMARK,
                     help="Label of the statement to benchmark all others against "
                          f"(default: {DEFAULT_BENCHMARK!r}; auto-detects a consolidated Ind AS statement).")
+    ap.add_argument("--save-template", default=None, metavar="PATH",
+                    help="Learn from this (highlighted) set: save the common-note passages "
+                         "as a reusable template JSON for future periods.")
+    ap.add_argument("--template", default=None, metavar="PATH",
+                    help="Locate the template's notes in these (unhighlighted) PDFs: any note a "
+                         "document does not highlight itself is fuzzy-matched from the template.")
+    ap.add_argument("--min-confidence", type=float, default=0.6,
+                    help="Minimum match confidence (0-1) for a template-located note (default 0.6).")
     args = ap.parse_args(argv)
 
     docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
@@ -1352,11 +1499,33 @@ def main(argv=None):
         numbered = sum(1 for m in marks if m.serial_key is not None)
         print(f"  {label:32s} {len(marks):3d} highlights  ({numbered} serial-numbered)")
 
+    if args.template:
+        template = load_template(args.template)
+        log = apply_template(template, docs, marks_by_doc, min_conf=args.min_confidence)
+        print(f"\n  Template: {args.template} ({len(template.get('notes', []))} notes)")
+        for lbl in labels:
+            located = [e for e in log[lbl] if e["action"] == "located"]
+            kept = [e for e in log[lbl] if e["action"] == "kept-highlight"]
+            missing = [e for e in log[lbl] if e["action"] == "not-found"]
+            parts = []
+            if kept:
+                parts.append(f"{len(kept)} own highlights")
+            if located:
+                confs = ", ".join(f"{e['serial']}@{round(e['conf']*100)}%" for e in located)
+                parts.append(f"{len(located)} auto-located ({confs})")
+            if missing:
+                parts.append(f"{len(missing)} NOT FOUND ({', '.join(e['serial'] for e in missing)})")
+            print(f"    {lbl:32s} " + " · ".join(parts or ["nothing to locate"]))
+
     notes = build_notes(labels, marks_by_doc)
     common = [n for n in notes if n.present_count == len(labels)]
     bench = resolve_benchmark(labels, args.benchmark)
     print(f"\n  {len(notes)} distinct serials · {len(common)} common across all {len(labels)} statements")
     print(f"  Benchmark statement: {bench}")
+
+    if args.save_template:
+        save_template(args.save_template, labels, notes, args.benchmark)
+        print(f"  Template saved to: {os.path.abspath(args.save_template)}")
 
     body = render_html(labels, marks_by_doc, notes, benchmark=args.benchmark)
     page = (
