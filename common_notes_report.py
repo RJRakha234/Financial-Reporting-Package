@@ -67,7 +67,7 @@ DEFAULT_BENCHMARK = "Ind AS · Consolidated"
 
 
 def resolve_benchmark(doc_labels: list[str], requested: Optional[str]) -> str:
-    """Pick the benchmark document label from the set."""
+    """Pick the primary benchmark document label from the set."""
     if requested and requested in doc_labels:
         return requested
     for lbl in doc_labels:  # auto-detect a consolidated Ind AS statement
@@ -75,6 +75,23 @@ def resolve_benchmark(doc_labels: list[str], requested: Optional[str]) -> str:
         if "consol" in low and ("ind as" in low or "indas" in low or "ind-as" in low):
             return lbl
     return doc_labels[0]
+
+
+def resolve_fallback_benchmark(doc_labels: list[str], primary: str) -> Optional[str]:
+    """Secondary benchmark used for a note the primary statement does not highlight.
+
+    Defaults to the IFRS INR Consolidated statement (a consolidated basis like the
+    primary), so a note absent from Ind AS Consolidated is still benchmarked against
+    a consolidated financial rather than a standalone one.
+    """
+    for lbl in doc_labels:
+        low = lbl.lower()
+        if lbl != primary and "ifrs" in low and "inr" in low:
+            return lbl
+    for lbl in doc_labels:  # any other consolidated statement
+        if lbl != primary and "consol" in lbl.lower():
+            return lbl
+    return None
 
 # Highlight annotation subtypes we treat as a "mark".
 _MARK_TYPES = {"Highlight", "Underline", "Squiggly", "StrikeOut"}
@@ -516,8 +533,15 @@ _APP_CSS = """
 .difflegend .del{background:var(--warn-soft);color:var(--warn)}
 .benchtag{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
   color:#fff;background:var(--ink);padding:2px 8px;border-radius:999px}
+.benchtag.fb{background:var(--warn);color:#fff}
 .dcell.isbench{background:color-mix(in srgb,var(--accent) 7%,var(--card));
   box-shadow:inset 3px 0 0 var(--accent)}
+.dcell.absent{background:repeating-linear-gradient(45deg,transparent,transparent 7px,
+  color-mix(in srgb,var(--faint) 8%,transparent) 7px,color-mix(in srgb,var(--faint) 8%,transparent) 14px)}
+.mini.muted{background:transparent;border:1px dashed var(--line-strong);color:var(--faint)}
+.tag-absent{margin-top:auto;font-size:11px;font-weight:650;color:var(--faint);line-height:1.4}
+.hann{margin-top:5px;font-size:11.5px;font-weight:600;color:var(--warn);
+  background:var(--warn-soft);display:inline-block;padding:3px 9px;border-radius:7px}
 .tag-bench{margin-top:auto;font-size:11px;font-weight:650;color:var(--accent);line-height:1.4}
 .dcell[data-state="rejected"]{box-shadow:inset 3px 0 0 var(--bad)}
 .dcell[data-state="accepted"]{box-shadow:inset 3px 0 0 var(--good)}
@@ -605,10 +629,12 @@ _APP_JS = r"""
       '<header class="masthead">'+
       '<div class="eyebrow">Financial Reporting Package · Interactive Note Review</div>'+
       '<h1>Common Notes — Accept / Reject Console</h1>'+
-      '<p class="intro">Every common note is benchmarked against <strong>'+esc(benchShort())+'</strong>. '+
-      'Where another statement <strong>differs</strong>, the note shows only the differing words — '+
+      '<p class="intro">Every common note is benchmarked against <strong>'+esc(benchShort())+'</strong>'+
+      (DATA.fallbackBenchmark?' (or <strong>'+esc(docShort(DATA.fallbackBenchmark))+'</strong> when the note is absent from it)':'')+'. '+
+      'Where a statement <strong>differs</strong>, the note shows only the differing words — '+
       '<span class="del" style="padding:0 4px;border-radius:3px">missing</span> words are present in the benchmark but absent here; '+
       '<span class="add" style="padding:0 4px;border-radius:3px">extra</span> words appear here but not in the benchmark. '+
+      'A note that is <em>not highlighted</em> in a statement is treated as <strong>not present</strong> there — expected, no review needed. '+
       'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported.</p>'+
       '</header>'+
       '<section class="kpis">'+
@@ -644,11 +670,17 @@ _APP_JS = r"""
     var bulk = n.hasDiff ? '<div class="bulk">'+
         '<button data-bulk="accepted" data-serial="'+esc(n.serial)+'">Accept all</button>'+
         '<button data-bulk="rejected" data-serial="'+esc(n.serial)+'">Reject all</button></div>' : '';
+    var notes = [];
+    if(n.absentDocs && n.absentDocs.length)
+      notes.push('Not present in: '+n.absentDocs.map(docShort).join(', '));
+    if(n.fallbackUsed)
+      notes.push('Benchmarked against '+docShort(n.benchmarkDoc)+' (absent from '+docShort(BENCH)+')');
+    var ann = notes.length ? '<div class="hann">'+esc(notes.join('  ·  '))+'</div>' : '';
     return '<article class="notecard" data-sev="'+n.severity+'" data-serial="'+esc(n.serial)+'" data-hasdiff="'+(n.hasDiff?1:0)+'">'+
       '<div class="note-head">'+
         '<span class="badge-serial">'+esc(n.serial)+'</span>'+
         '<div class="htext"><div class="hlabel">'+esc(n.label)+'</div>'+
-          '<div class="hsec">'+esc(n.section)+'</div></div>'+
+          '<div class="hsec">'+esc(n.section)+'</div>'+ann+'</div>'+
         '<div class="hstat"><span class="statpill" data-stat></span>'+bulk+'</div>'+
       '</div>'+
       '<div class="doc-grid" style="--cols:'+COLS+'">'+cells+'</div>'+
@@ -656,35 +688,40 @@ _APP_JS = r"""
   }
 
   var BENCH = DATA.benchmark;
-  function benchShort(){ var m=docMeta(BENCH); return m.main + (m.sub?(' '+m.sub):''); }
+  function docShort(label){ if(!label) return 'the majority version'; var m=docMeta(label); return m.main + (m.sub?(' '+m.sub):''); }
+  function benchShort(){ return docShort(BENCH); }
 
   function cell(n,c){
     var meta = docMeta(c.doc);
-    var badge = c.isBenchmark ? '<span class="benchtag">Benchmark</span>' : '';
+    var refName = docShort(n.benchmarkDoc);
+    var badge = c.isBenchmark ? ('<span class="benchtag'+(n.fallbackUsed?' fb':'')+'">Benchmark'+(n.fallbackUsed?' (fallback)':'')+'</span>') : '';
     var name = '<div class="dname">'+esc(meta.main)+(meta.sub?'<small>'+esc(meta.sub)+'</small>':'')+'</div>';
     var body, chips='', decision='';
-    if(!c.present){
-      chips = '<span class="mini bad">not highlighted</span>';
-      body = '<div class="dtext" style="background:none;color:var(--faint);font-style:italic">This note is not highlighted in this statement.</div>';
-    } else {
-      var scls = c.reasons.indexOf('serial format')>=0 ? 'mini ser warn' : 'mini ser';
-      chips = '<span class="'+scls+'">serial '+esc(c.serial||'—')+'</span>'+
-              '<span class="mini">p.'+c.page+'</span>'+
-              (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
-      // Benchmark shows its own text as the reference; others highlight only the
-      // words that are extra (in this statement) vs missing (present in benchmark).
-      var inner = c.isBenchmark ? esc(c.text) : (c.differs ? diffHTML(n.refText, c.text) : esc(c.text));
-      body = '<div class="dclip"><span class="dtext'+(c.differs&&!c.isBenchmark?' diffed':'')+'">'+inner+'</span></div>'+
-             '<button class="expand" data-exp>Show full text ▾</button>';
+    if(c.absent){
+      // Note not highlighted here = not present in this statement (expected).
+      chips = '<span class="mini muted">not present</span>';
+      body = '<div class="dtext" style="background:none;color:var(--faint);font-style:italic">This note is not present in this statement — no review needed.</div>';
+      decision = '<div class="tag-absent">Not applicable here</div>';
+      return '<div class="dcell absent" data-serial="'+esc(n.serial)+'" data-doc="'+esc(c.doc)+'" data-differs="0">'+
+        '<div class="dtop">'+name+'</div><div class="chiprow">'+chips+'</div>'+body+decision+'</div>';
     }
+    var scls = c.reasons.indexOf('serial format')>=0 ? 'mini ser warn' : 'mini ser';
+    chips = '<span class="'+scls+'">serial '+esc(c.serial||'—')+'</span>'+
+            '<span class="mini">p.'+c.page+'</span>'+
+            (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
+    // Benchmark shows its own text as the reference; others highlight only the
+    // words that are extra (in this statement) vs missing (present in benchmark).
+    var inner = c.isBenchmark ? esc(c.text) : (c.differs ? diffHTML(n.refText, c.text) : esc(c.text));
+    body = '<div class="dclip"><span class="dtext'+(c.differs&&!c.isBenchmark?' diffed':'')+'">'+inner+'</span></div>'+
+           '<button class="expand" data-exp>Show full text ▾</button>';
     if(c.isBenchmark){
-      decision = '<div class="tag-bench">Reference statement · all others compared to this</div>';
+      decision = '<div class="tag-bench">Reference statement'+(n.fallbackUsed?' (used because the note is absent from '+esc(benchShort())+')':'')+' · all others compared to this</div>';
     } else if(c.differs){
-      var counts = c.present ? diffCounts(n.refText, c.text) : {add:0, del:0};
+      var counts = diffCounts(n.refText, c.text);
       var legend = '<div class="dh"><span class="del">missing from this statement ('+counts.del+')</span>'+
                    ' · <span class="add">extra here ('+counts.add+')</span></div>';
       decision = '<div class="decision">'+
-        '<div class="difflegend">'+legend+'Highlighted above vs <strong>'+esc(benchShort())+'</strong>.</div>'+
+        '<div class="difflegend">'+legend+'Highlighted above vs <strong>'+esc(refName)+'</strong>.</div>'+
         '<div class="seg" role="group" aria-label="decision">'+
           '<button class="acc" data-dec="accepted" aria-pressed="false"><span class="pop">✓</span> Accept</button>'+
           '<button class="rej" data-dec="rejected" aria-pressed="false"><span class="pop">✕</span> Reject</button>'+
@@ -725,7 +762,7 @@ _APP_JS = r"""
     DATA.notes.forEach(function(n){
       var card = app.querySelector('.notecard[data-serial="'+cssesc(n.serial)+'"]');
       var pill = card.querySelector('[data-stat]');
-      if(!n.hasDiff){ pill.className='statpill good'; pill.textContent='Consistent'; return; }
+      if(!n.hasDiff){ pill.className='statpill '+(n.severity||'good'); pill.textContent=n.status||'Consistent'; return; }
       var req = noteRequired(n).length, dec = noteDecided(n);
       var rejd = noteRequired(n).filter(function(c){return store[key(n.serial,c.doc)]==='rejected';}).length;
       if(dec>=req){
@@ -815,6 +852,7 @@ _APP_JS = r"""
 
   // ---- export ------------------------------------------------------------
   function decisionOf(n,c){
+    if(c.absent) return 'not-present';
     if(c.isBenchmark) return 'benchmark';
     if(!c.differs) return 'auto-match';
     return store[key(n.serial,c.doc)] || 'pending';
@@ -869,8 +907,23 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     """
     from collections import Counter
 
+    def word_diff_counts(ref: str, cur: str) -> tuple[int, int]:
+        """(extra, missing) word counts of cur vs ref, case- and punctuation-sensitive."""
+        a, b = ref.split(), cur.split()
+        add = dele = 0
+        for tag, i1, i2, j1, j2 in SequenceMatcher(None, a, b).get_opcodes():
+            if tag == "replace":
+                dele += i2 - i1
+                add += j2 - j1
+            elif tag == "delete":
+                dele += i2 - i1
+            elif tag == "insert":
+                add += j2 - j1
+        return add, dele
+
     total = len(doc_labels)
     bench = resolve_benchmark(doc_labels, benchmark)
+    fallback = resolve_fallback_benchmark(doc_labels, bench)
     common = [n for n in notes if n.present_count == total]
     partial = [n for n in notes if n.present_count < total]
 
@@ -882,11 +935,18 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 
     note_objs = []
     for n in common + partial:
-        bmark = n.cells.get(bench)
-        # Reference = benchmark statement's version; fall back to majority if the
-        # benchmark itself does not highlight this note.
+        # Per-note reference: the primary benchmark if it highlights this note;
+        # otherwise the fallback (IFRS INR Consolidated); otherwise majority vote.
+        if n.cells.get(bench):
+            eff_bench = bench
+        elif fallback and n.cells.get(fallback):
+            eff_bench = fallback
+        else:
+            eff_bench = None
+
+        bmark = n.cells.get(eff_bench) if eff_bench else None
         if bmark:
-            ref_serial, ref_text, ref_source = bmark.serial_raw, bmark.text, bench
+            ref_serial, ref_text, ref_source = bmark.serial_raw, bmark.text, eff_bench
         else:
             present_marks = [m for m in n.cells.values() if m]
             serials_raw = [m.serial_raw for m in present_marks if m.serial_raw]
@@ -897,39 +957,47 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 
         cells = []
         for lbl in doc_labels:
-            is_bench = (lbl == bench)
+            is_bench = (lbl == eff_bench)
             m = n.cells[lbl]
             if m is None:
+                # Not highlighted here = the note is not present in this statement.
+                # That is expected/not applicable, not a difference to reconcile.
                 cells.append({
                     "doc": lbl, "present": False, "page": None, "serial": "",
-                    "text": "", "differs": not is_bench, "reasons": ["not highlighted"],
-                    "sim": 0.0, "isBenchmark": is_bench,
+                    "text": "", "differs": False, "absent": True,
+                    "reasons": ["not present in this statement"],
+                    "sim": 0.0, "isBenchmark": False,
                 })
                 continue
             reasons = []
             sim = SequenceMatcher(None, m.text, ref_text).ratio() if ref_text else 1.0
+            add, dele = word_diff_counts(ref_text, m.text) if ref_text else (0, 0)
             if not is_bench:
                 if (m.serial_raw or "").strip() != (ref_serial or "").strip():
                     reasons.append("serial format")
-                if sim < 0.985:
+                if add or dele:  # ANY word-level difference, however small (e.g. case)
                     reasons.append("text differs")
             cells.append({
                 "doc": lbl, "present": True, "page": m.page, "serial": m.serial_raw,
                 "text": m.text, "differs": bool(reasons), "reasons": reasons,
-                "sim": round(sim, 3), "isBenchmark": is_bench,
+                "sim": round(sim, 3), "wordAdd": add, "wordDel": dele,
+                "isBenchmark": is_bench, "absent": False,
             })
 
         diff_cells = [c for c in cells if c["differs"]]
-        if not diff_cells:
-            label, severity, has_diff = "Consistent", "good", False
-        elif all(c["present"] for c in cells):
+        absent_docs = [c["doc"] for c in cells if c.get("absent")]
+        present_n = total - len(absent_docs)
+        if diff_cells:
             label, severity, has_diff = "Needs review", "warn", True
+        elif absent_docs:
+            label, severity, has_diff = f"Aligned · in {present_n} of {total}", "good", False
         else:
-            present_n = sum(1 for c in cells if c["present"])
-            label, severity, has_diff = f"In {present_n}/{total} only", "bad", True
+            label, severity, has_diff = "Consistent", "good", False
         note_objs.append({
             "serial": n.serial_key, "label": n.label, "section": n.section,
             "refSerial": ref_serial, "refText": ref_text, "refSource": ref_source,
+            "benchmarkDoc": eff_bench, "fallbackUsed": eff_bench not in (None, bench),
+            "absentDocs": absent_docs, "presentCount": present_n,
             "status": label, "severity": severity, "hasDiff": has_diff,
             "diffCount": len(diff_cells), "cells": cells,
         })
@@ -939,11 +1007,11 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         for m in sorted((x for x in marks_by_doc[lbl] if x.serial_key is None), key=lambda x: x.page):
             unnumbered.append({"doc": lbl, "page": m.page, "text": (m.heading or m.text)[:160]})
 
-    fully_consistent = sum(1 for n in note_objs if not n["hasDiff"] and
-                           all(c["present"] for c in n["cells"]))
+    fully_consistent = sum(1 for n in note_objs if not n["hasDiff"])
     return {
         "generated": date.today().isoformat(),
         "benchmark": bench,
+        "fallbackBenchmark": fallback,
         "docs": docs_meta,
         "notes": note_objs,
         "unnumbered": unnumbered,
@@ -1012,18 +1080,24 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     bench = payload["benchmark"]
     pnote_by_serial = {n["serial"]: n for n in payload["notes"]}
 
-    def cell_differs(serial: str, doc: str) -> bool:
+    def pcell(serial: str, doc: str) -> Optional[dict]:
         pn = pnote_by_serial.get(serial)
-        if not pn:
-            return False
-        for c in pn["cells"]:
-            if c["doc"] == doc:
-                return c["differs"]
-        return False
+        if pn:
+            for c in pn["cells"]:
+                if c["doc"] == doc:
+                    return c
+        return None
 
     def decision_for(serial: str, doc: str) -> str:
-        """'accepted' | 'rejected' | 'pending' | 'auto-match' | ''"""
-        if not cell_differs(serial, doc):
+        """'accepted' | 'rejected' | 'pending' | 'auto-match' | 'not-present' | 'benchmark'"""
+        c = pcell(serial, doc)
+        if c is None:
+            return "auto-match"
+        if c.get("absent"):
+            return "not-present"
+        if c.get("isBenchmark"):
+            return "benchmark"
+        if not c["differs"]:
             return "auto-match"
         return decisions.get((serial, doc)) or "pending"
 
@@ -1113,12 +1187,14 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         ws.cell(r, 2, n.section).alignment = wrap_top
         for c, lbl in enumerate(doc_labels, start=3):
             m = n.cells[lbl]
-            is_bench_col = lbl == bench
+            pc = pcell(n.serial_key, lbl) or {}
             if m is None:
-                cell = ws.cell(r, c, "— not highlighted —")
+                # Not present in this statement — expected, not an error.
+                cell = ws.cell(r, c, "— not present in this statement —")
                 cell.font = Font(italic=True, color="8A929E", size=9)
-            elif is_bench_col:
-                cell = ws.cell(r, c, f"★ BENCHMARK — [serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+            elif pc.get("isBenchmark"):
+                fb = " (fallback)" if pnote_by_serial[n.serial_key].get("fallbackUsed") else ""
+                cell = ws.cell(r, c, f"★ BENCHMARK{fb} — [serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
                 cell.font = Font(size=9, color=ACCENT, bold=True)
                 cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
             else:
@@ -1207,7 +1283,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
             cell.border = border
         ws3.row_dimensions[1].height = 26
         rr = 2
-        DEC_TAG_LOG = dict(DEC_TAG, benchmark="★ BENCHMARK")
+        DEC_TAG_LOG = dict(DEC_TAG, benchmark="★ BENCHMARK", **{"not-present": "not present"})
         for pn in payload["notes"]:
             for c in pn["cells"]:
                 dec = "benchmark" if c.get("isBenchmark") else decision_for(pn["serial"], c["doc"])
