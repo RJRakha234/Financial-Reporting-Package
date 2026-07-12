@@ -307,16 +307,65 @@ def load_template(path: str) -> dict:
         return json.load(fh)
 
 
+def _sorted_words(page) -> list:
+    """Page words in visual reading order (top-to-bottom, left-to-right).
+
+    The PDF's internal text-object order can be scrambled (headings emitted
+    after their content); sorting by position restores what a reader sees.
+    """
+    words = page.get_text("words")
+    return sorted(words, key=lambda w: (round(w[1], 1), w[0]))
+
+
 def _page_token_index(pdf_path: str) -> list[tuple[int, list[str]]]:
-    """[(page_no, tokens)] for every page of a PDF."""
+    """[(page_no, tokens)] for every page of a PDF, in visual reading order."""
     doc = fitz.open(pdf_path)
     out = []
     try:
         for pno in range(len(doc)):
-            out.append((pno + 1, _clean(doc[pno].get_text("text")).split()))
+            out.append((pno + 1, [w[4] for w in _sorted_words(doc[pno])]))
     finally:
         doc.close()
     return out
+
+
+def _anchor_scan(toks: list[str], anchor: list[str], lo: int, hi: int) -> tuple[float, Optional[int]]:
+    """Best (ratio, index) placement of a short anchor within toks[lo..hi], step 1."""
+    k = len(anchor)
+    best: tuple[float, Optional[int]] = (0.0, None)
+    for i in range(max(0, lo), min(len(toks) - k, hi) + 1):
+        r = SequenceMatcher(None, anchor, toks[i:i + k]).ratio()
+        if r > best[0]:
+            best = (r, i)
+    return best
+
+
+def _pin_bounds(toks: list[str], target: list[str], s: int, W: int) -> tuple[int, int]:
+    """Pin a coarse window to word-exact boundaries using the target's own
+    opening and closing words as anchors (searched at stride 1)."""
+    k = min(6, len(target))
+    if k < 2:
+        return s, W
+    span = max(12, len(target) // 4)
+    r_head, hs = _anchor_scan(toks, target[:k], s - span, s + span)
+    r_tail, ts = _anchor_scan(toks, target[-k:], s + W - k - span, s + W - k + span)
+    start = hs if (hs is not None and r_head >= 0.55) else s
+    end = ts + k if (ts is not None and r_tail >= 0.55) else s + W
+    if end - start < max(5, len(target) // 3):  # anchors collapsed — keep coarse
+        return s, W
+    # drop stray edge words that don't belong to the template's boundaries
+    # (e.g. table cells preceding the paragraph in reading order)
+    head_words = {w.lower() for w in target[:8]}
+    tail_words = {w.lower() for w in target[-8:]}
+    trims = 0
+    while trims < 4 and end - start > 5 and toks[start].lower() not in head_words:
+        start += 1
+        trims += 1
+    trims = 0
+    while trims < 4 and end - start > 5 and toks[end - 1].lower() not in tail_words:
+        end -= 1
+        trims += 1
+    return start, end - start
 
 
 def locate_passage(pages: list[tuple[int, list[str]]], target: str) -> Optional[dict]:
@@ -359,6 +408,9 @@ def locate_passage(pages: list[tuple[int, list[str]]], target: str) -> Optional[
             r2 = SequenceMatcher(None, t, toks[s2:s2 + W2]).ratio()
             if r2 > r:
                 r, s, W = r2, s2, W2
+    # word-exact edges: align to the template's opening/closing words
+    s, W = _pin_bounds(toks, t, s, W)
+    r = SequenceMatcher(None, t, toks[s:s + W]).ratio()
     return {"conf": r, "page": pno, "text": " ".join(toks[s:s + W])}
 
 
@@ -433,6 +485,8 @@ def _best_word_window(words: list, target_tokens: list[str]) -> tuple[float, int
             r2 = SequenceMatcher(None, target_tokens, toks[s2:s2 + W2]).ratio()
             if r2 > r:
                 r, s, W = r2, s2, W2
+    s, W = _pin_bounds(toks, target_tokens, s, W)
+    r = SequenceMatcher(None, target_tokens, toks[s:s + W]).ratio()
     return r, s, W
 
 
@@ -451,15 +505,15 @@ def annotate_pdf(src_path: str, dst_path: str, marks: list[Mark],
             if m.serial_key is None or (m.conf is None and not include_own):
                 continue
             page = doc[m.page - 1]
-            words = page.get_text("words")  # x0,y0,x1,y1,text,block,line,word_no
+            words = _sorted_words(page)  # visual reading order, matches the locator
             r, s, W = _best_word_window(words, m.text.split())
             sel = words[s:s + W]
             if not sel or r < 0.4:
                 continue
-            # one rectangle per text line so the highlight hugs the words
-            lines: dict[tuple, fitz.Rect] = {}
+            # one rectangle per visual text line so the highlight hugs the words
+            lines: dict[float, fitz.Rect] = {}
             for w in sel:
-                key = (w[5], w[6])
+                key = round(w[1], 1)
                 rct = fitz.Rect(w[:4])
                 if key in lines:
                     lines[key] |= rct
