@@ -180,8 +180,16 @@ def _heading_above(page, annot) -> str:
 
 def extract_marks(label: str, path: str) -> list[Mark]:
     if not os.path.exists(path):
-        raise FileNotFoundError(path)
-    doc = fitz.open(path)
+        sys.exit(f"error: file not found for '{label}': {path}")
+    try:
+        doc = fitz.open(path)
+        if doc.needs_pass:
+            sys.exit(f"error: '{label}' is password-protected: {path}")
+        _ = len(doc)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        sys.exit(f"error: cannot open '{label}' ({path}): {exc}")
     marks: list[Mark] = []
     try:
         for pno in range(len(doc)):
@@ -303,8 +311,17 @@ def save_template(path: str, doc_labels: list[str], notes: list[NoteRow],
 
 def load_template(path: str) -> dict:
     import json
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    if not os.path.exists(path):
+        sys.exit(f"error: template file not found: {path}")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as exc:
+        sys.exit(f"error: template is not valid JSON ({path}): {exc}")
+    if not isinstance(data, dict) or not isinstance(data.get("notes"), list):
+        sys.exit(f"error: template has no 'notes' list — is {path} really a "
+                 "file saved with --save-template?")
+    return data
 
 
 def _sorted_words(page) -> list:
@@ -369,49 +386,54 @@ def _pin_bounds(toks: list[str], target: list[str], s: int, W: int) -> tuple[int
 
 
 def locate_passage(pages: list[tuple[int, list[str]]], target: str) -> Optional[dict]:
-    """Find the window of a document that best matches a template passage.
+    """Find the span of a document that best matches a template passage.
 
-    Slides a token window across every page, scoring with SequenceMatcher,
-    then refines the best window's boundaries. Returns
-    {"conf": 0..1, "page": int, "text": str} or None if nothing scored.
+    Searches one flat token stream across the whole document (so passages that
+    cross a page break still match), scores windows with SequenceMatcher,
+    refines the best window, then pins word-exact boundaries. Returns
+    {"conf": 0..1, "page": int, "endPage": int, "text": str} or None.
     """
     t = target.split()
     L = len(t)
     if not L:
         return None
-    best = (0.0, None, 0, 0)  # ratio, page, start, width
+    flat: list[str] = []
+    pmap: list[int] = []
     for pno, toks in pages:
-        n = len(toks)
-        if n == 0:
+        flat.extend(toks)
+        pmap.extend([pno] * len(toks))
+    n = len(flat)
+    if n == 0:
+        return None
+    W = min(n, L)
+    stride = max(1, L // 5)
+    best = (0.0, None)
+    for s in range(0, max(1, n - W + 1), stride):
+        sm = SequenceMatcher(None, t, flat[s:s + W], autojunk=False)
+        if sm.real_quick_ratio() <= best[0]:
             continue
-        W = min(n, L)
-        stride = max(1, L // 5)
-        for s in range(0, max(1, n - W + 1), stride):
-            sm = SequenceMatcher(None, t, toks[s:s + W], autojunk=False)
-            if sm.real_quick_ratio() <= best[0]:
-                continue
-            r = sm.ratio()
-            if r > best[0]:
-                best = (r, pno, s, W)
+        r = sm.ratio()
+        if r > best[0]:
+            best = (r, s)
     if best[1] is None:
         return None
-    r, pno, s, W = best
-    toks = dict(pages)[pno]
+    r, s = best
     # refine boundaries around the winning window
     step = max(1, L // 16)
     span = max(step, L // 8)
     for ds in range(-span, span + 1, step):
         for dw in range(-span, span + 1, step):
             s2, W2 = max(0, s + ds), max(5, W + dw)
-            if s2 + W2 > len(toks):
+            if s2 + W2 > n:
                 continue
-            r2 = SequenceMatcher(None, t, toks[s2:s2 + W2], autojunk=False).ratio()
+            r2 = SequenceMatcher(None, t, flat[s2:s2 + W2], autojunk=False).ratio()
             if r2 > r:
                 r, s, W = r2, s2, W2
     # word-exact edges: align to the template's opening/closing words
-    s, W = _pin_bounds(toks, t, s, W)
-    r = SequenceMatcher(None, t, toks[s:s + W], autojunk=False).ratio()
-    return {"conf": r, "page": pno, "text": " ".join(toks[s:s + W])}
+    s, W = _pin_bounds(flat, t, s, W)
+    r = SequenceMatcher(None, t, flat[s:s + W], autojunk=False).ratio()
+    return {"conf": r, "page": pmap[s], "endPage": pmap[min(s + W - 1, n - 1)],
+            "text": " ".join(flat[s:s + W])}
 
 
 def apply_template(template: dict, docs: list[tuple[str, str]],
@@ -427,10 +449,19 @@ def apply_template(template: dict, docs: list[tuple[str, str]],
     log: dict[str, list[dict]] = {}
     page_index: dict[str, list] = {}
     paths = dict(docs)
+    # a template passage keyed to a label that matches no document would be
+    # silently skipped — surface the mismatch instead
+    tpl_labels = {lbl for e in template.get("notes", []) for lbl in e.get("passages", {})}
+    unmatched = tpl_labels - set(paths)
+    if unmatched:
+        print(f"    warning: template statement labels not in this run "
+              f"(their notes are skipped): {', '.join(sorted(unmatched))}")
     for lbl, _ in docs:
         have = {m.serial_key for m in marks_by_doc.get(lbl, []) if m.serial_key}
         log[lbl] = []
         for entry in template.get("notes", []):
+            if entry.get("serial") is None:
+                continue
             serial = str(entry["serial"])
             passage = entry.get("passages", {}).get(lbl)
             if passage is None:
@@ -440,7 +471,7 @@ def apply_template(template: dict, docs: list[tuple[str, str]],
                 continue
             if lbl not in page_index:
                 page_index[lbl] = _page_token_index(paths[lbl])
-            hit = locate_passage(page_index[lbl], passage["text"])
+            hit = locate_passage(page_index[lbl], passage.get("text", ""))
             if hit and hit["conf"] >= min_conf:
                 marks_by_doc.setdefault(lbl, []).append(Mark(
                     doc=lbl, page=hit["page"],
@@ -504,26 +535,39 @@ def annotate_pdf(src_path: str, dst_path: str, marks: list[Mark],
         for m in marks:
             if m.serial_key is None or (m.conf is None and not include_own):
                 continue
-            page = doc[m.page - 1]
-            words = _sorted_words(page)  # visual reading order, matches the locator
-            r, s, W = _best_word_window(words, m.text.split())
-            sel = words[s:s + W]
-            if not sel or r < 0.4:
-                continue
-            # one rectangle per visual text line so the highlight hugs the words
-            lines: dict[float, fitz.Rect] = {}
-            for w in sel:
-                key = round(w[1], 1)
-                rct = fitz.Rect(w[:4])
-                if key in lines:
-                    lines[key] |= rct
-                else:
-                    lines[key] = rct
-            annot = page.add_highlight_annot(list(lines.values()))
-            annot.set_info(content=m.serial_raw or m.serial_key,
-                           title="Common Notes Tool")
-            annot.update()
-            added += 1
+            try:
+                # combine the start page and the next page so passages that
+                # cross a page break are drawn in full; hold Page objects —
+                # a temporary page is deallocated before annot.update() runs
+                pages = {pno: doc[pno - 1] for pno in (m.page, m.page + 1)
+                         if 1 <= pno <= len(doc)}
+                entries = []  # (page_no, word)
+                for pno, pg in pages.items():
+                    for w in _sorted_words(pg):
+                        entries.append((pno, w))
+                r, s, W = _best_word_window([e[1] for e in entries], m.text.split())
+                sel = entries[s:s + W]
+                if not sel or r < 0.4:
+                    continue
+                # one rectangle per visual text line, grouped per page
+                per_page: dict[int, dict[float, fitz.Rect]] = {}
+                for pno, w in sel:
+                    lines = per_page.setdefault(pno, {})
+                    key = round(w[1], 1)
+                    rct = fitz.Rect(w[:4])
+                    if key in lines:
+                        lines[key] |= rct
+                    else:
+                        lines[key] = rct
+                for pno, lines in per_page.items():
+                    annot = pages[pno].add_highlight_annot(list(lines.values()))
+                    annot.set_info(content=m.serial_raw or m.serial_key,
+                                   title="Common Notes Tool")
+                    annot.update()
+                added += 1
+            except Exception as exc:  # one bad note must not lose the whole file
+                print(f"    warning: could not draw serial {m.serial_key} "
+                      f"on page {m.page} of {os.path.basename(src_path)}: {exc}")
         doc.save(dst_path)
     finally:
         doc.close()
@@ -1304,11 +1348,28 @@ def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 # Excel rendering
 # --------------------------------------------------------------------------- #
 
+# characters that are text in a PDF but illegal inside an XLSX cell
+_ILLEGAL_XLSX = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _xls(value):
+    """Sanitize a value for an Excel cell: strip illegal control characters
+    and stay under the 32,767-character cell limit."""
+    if isinstance(value, str):
+        return _ILLEGAL_XLSX.sub("", value)[:32000]
+    return value
+
+
 def load_decisions(path: str) -> dict[tuple[str, str], str]:
     """Read a decisions JSON exported from the HTML console -> {(serial, doc): decision}."""
     import json
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    if not os.path.exists(path):
+        sys.exit(f"error: decisions file not found: {path}")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except json.JSONDecodeError as exc:
+        sys.exit(f"error: decisions file is not valid JSON ({path}): {exc}")
     out: dict[tuple[str, str], str] = {}
     for n in data.get("notes", []):
         serial = str(n.get("serial"))
@@ -1327,9 +1388,12 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     each financial cell is tagged and tinted with its Accept/Reject decision, a
     per-note Sign-off column is added, and a Decision Log sheet is appended.
     """
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        sys.exit("error: Excel export needs openpyxl — install with:  pip install openpyxl")
 
     total = len(doc_labels)
     common = [n for n in notes if n.present_count == total]
@@ -1446,7 +1510,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         zebra = ZEBRA if i % 2 else "FFFFFF"
         ws.cell(r, 1, n.serial_key).font = Font(bold=True, color=ACCENT, size=12)
         ws.cell(r, 1).alignment = center
-        ws.cell(r, 2, n.section).alignment = wrap_top
+        ws.cell(r, 2, _xls(n.section)).alignment = wrap_top
         for c, lbl in enumerate(doc_labels, start=3):
             m = n.cells[lbl]
             pc = pcell(n.serial_key, lbl) or {}
@@ -1457,7 +1521,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
             elif pc.get("isBenchmark"):
                 fb = " (fallback)" if pnote_by_serial[n.serial_key].get("fallbackUsed") else ""
                 auto = f" ◎ auto-located {round(pc['autoFound']*100)}%" if pc.get("autoFound") else ""
-                cell = ws.cell(r, c, f"★ BENCHMARK{fb}{auto} — [serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+                cell = ws.cell(r, c, _xls(f"★ BENCHMARK{fb}{auto} — [serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}"))
                 cell.font = Font(size=9, color=ACCENT, bold=True)
                 cell.fill = PatternFill("solid", fgColor=ACC_SOFT)
             else:
@@ -1465,7 +1529,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 tag = DEC_TAG.get(dec, "")
                 auto = f"◎ auto-located {round(pc['autoFound']*100)}% · " if pc.get("autoFound") else ""
                 prefix = f"{tag} — " if tag else ""
-                cell = ws.cell(r, c, f"{prefix}{auto}[serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}")
+                cell = ws.cell(r, c, _xls(f"{prefix}{auto}[serial {m.serial_raw or '—'} · p.{m.page}]\n{m.text}"))
                 cell.font = Font(size=9, color=DEC_TXT.get(dec, INK),
                                  bold=dec in ("accepted", "rejected"))
                 cell.fill = PatternFill("solid", fgColor=DEC_FILL.get(dec, HI))
@@ -1518,7 +1582,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
             any_un = True
             ws2.cell(rr, 1, lbl).alignment = wrap_top
             ws2.cell(rr, 2, m.page).alignment = Alignment(horizontal="center", vertical="top")
-            ws2.cell(rr, 3, m.heading or m.text).alignment = wrap_top
+            ws2.cell(rr, 3, _xls(m.heading or m.text)).alignment = wrap_top
             for c in range(1, 4):
                 cell = ws2.cell(rr, c)
                 cell.border = border
@@ -1558,7 +1622,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                         f"{round(c['sim'] * 100)}%" if c["present"] else "",
                         DEC_TAG_LOG.get(dec, dec) or "—"]
                 for c2, v in enumerate(vals, start=1):
-                    cell = ws3.cell(rr, c2, v)
+                    cell = ws3.cell(rr, c2, _xls(v))
                     cell.border = border
                     cell.font = Font(size=9,
                                      color=DEC_TXT.get(dec, INK) if c2 == 8 else INK,
@@ -1588,6 +1652,11 @@ def parse_docs(pairs: list[str]) -> list[tuple[str, str]]:
             sys.exit(f"--doc must be 'Label=/path.pdf', got: {p}")
         label, path = p.split("=", 1)
         out.append((label.strip(), os.path.expanduser(path.strip())))
+    labels = [l for l, _ in out]
+    dupes = {l for l in labels if labels.count(l) > 1}
+    if dupes:
+        sys.exit(f"error: duplicate --doc labels: {', '.join(sorted(dupes))} — "
+                 "each statement needs a unique label.")
     return out
 
 
