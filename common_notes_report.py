@@ -861,6 +861,16 @@ _APP_CSS = """
 .mini.muted{background:transparent;border:1px dashed var(--line-strong);color:var(--faint)}
 .mini.tmpl{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);
   border-color:transparent;font-weight:700}
+a.mini.pglink{text-decoration:none;cursor:pointer;color:var(--accent);
+  border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);
+  transition:all .15s ease}
+a.mini.pglink:hover{background:var(--accent);color:#fff;border-color:var(--accent);
+  transform:translateY(-1px);box-shadow:0 3px 8px color-mix(in srgb,var(--accent) 35%,transparent)}
+a.badge-serial{text-decoration:none;cursor:pointer;
+  transition:transform .18s cubic-bezier(.34,1.56,.64,1),box-shadow .18s}
+a.badge-serial:hover{transform:scale(1.12) rotate(-3deg);
+  box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 55%,transparent)}
+a.badge-serial:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .tag-absent{margin-top:auto;font-size:11px;font-weight:650;color:var(--faint);line-height:1.4}
 .hann{margin-top:5px;font-size:11.5px;font-weight:600;color:var(--warn);
   background:var(--warn-soft);display:inline-block;padding:3px 9px;border-radius:7px}
@@ -957,7 +967,8 @@ _APP_JS = r"""
       '<span class="del" style="padding:0 4px;border-radius:3px">missing</span> words are present in the benchmark but absent here; '+
       '<span class="add" style="padding:0 4px;border-radius:3px">extra</span> words appear here but not in the benchmark. '+
       'A note that is <em>not highlighted</em> in a statement is treated as <strong>not present</strong> there — expected, no review needed. '+
-      'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported.</p>'+
+      'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported. '+
+      '<strong>Click a serial badge or a p.N chip</strong> to open that PDF at the exact page — keep this report in the same folder as the PDFs.</p>'+
       '</header>'+
       '<section class="kpis">'+
         kpi('accent', k.total, 'Statements') +
@@ -998,9 +1009,16 @@ _APP_JS = r"""
     if(n.fallbackUsed)
       notes.push('Benchmarked against '+docShort(n.benchmarkDoc)+' (absent from '+docShort(BENCH)+')');
     var ann = notes.length ? '<div class="hann">'+esc(notes.join('  ·  '))+'</div>' : '';
+    // the serial badge links to the note in its benchmark statement's PDF
+    var bcell = n.cells.find(function(c){ return c.isBenchmark && c.present; });
+    var bmeta = bcell ? docMeta(bcell.doc) : null;
+    var badge = (bcell && bmeta && bmeta.href)
+      ? '<a class="badge-serial" href="'+esc(bmeta.href)+'#page='+bcell.page+'" target="_blank" rel="noopener" '+
+        'title="Open the benchmark ('+esc(bmeta.main)+' '+esc(bmeta.sub||'')+') at page '+bcell.page+'">'+esc(n.serial)+'</a>'
+      : '<span class="badge-serial">'+esc(n.serial)+'</span>';
     return '<article class="notecard" data-sev="'+n.severity+'" data-serial="'+esc(n.serial)+'" data-hasdiff="'+(n.hasDiff?1:0)+'">'+
       '<div class="note-head">'+
-        '<span class="badge-serial">'+esc(n.serial)+'</span>'+
+        badge+
         '<div class="htext"><div class="hlabel">'+esc(n.label)+'</div>'+
           '<div class="hsec">'+esc(n.section)+'</div>'+ann+'</div>'+
         '<div class="hstat"><span class="statpill" data-stat></span>'+bulk+'</div>'+
@@ -1028,8 +1046,12 @@ _APP_JS = r"""
         '<div class="dtop">'+name+'</div><div class="chiprow">'+chips+'</div>'+body+decision+'</div>';
     }
     var scls = c.reasons.indexOf('serial format')>=0 ? 'mini ser warn' : 'mini ser';
+    var pageChip = meta.href
+      ? '<a class="mini pglink" href="'+esc(meta.href)+'#page='+c.page+'" target="_blank" rel="noopener" '+
+        'title="Open '+esc(meta.main)+' '+esc(meta.sub||'')+' at page '+c.page+'">p.'+c.page+' ↗</a>'
+      : '<span class="mini">p.'+c.page+'</span>';
     chips = '<span class="'+scls+'">serial '+esc(c.serial||'—')+'</span>'+
-            '<span class="mini">p.'+c.page+'</span>'+
+            pageChip+
             (c.autoFound ? '<span class="mini tmpl">◎ auto-located '+Math.round(c.autoFound*100)+'%</span>' : '')+
             (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
     // Benchmark shows its own text as the reference; others highlight only the
@@ -1220,7 +1242,8 @@ def _note_status(row: NoteRow, total_docs: int) -> tuple[str, str, bool]:
 
 
 def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
-                  notes: list[NoteRow], benchmark: Optional[str] = None) -> dict:
+                  notes: list[NoteRow], benchmark: Optional[str] = None,
+                  doc_links: Optional[dict[str, str]] = None) -> dict:
     """Assemble the JSON model the interactive front-end renders from.
 
     Every note is compared against the *benchmark* statement (default: the
@@ -1254,7 +1277,8 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     for lbl in doc_labels:
         main, _, tail = lbl.partition("·")
         docs_meta.append({"label": lbl, "main": main.strip(), "sub": tail.strip(),
-                          "benchmark": lbl == bench})
+                          "benchmark": lbl == bench,
+                          "href": (doc_links or {}).get(lbl)})
 
     note_objs = []
     for n in notes:  # already sorted by serial number
@@ -1350,8 +1374,10 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 
 
 def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
-                notes: list[NoteRow], benchmark: Optional[str] = None) -> str:
-    payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark)
+                notes: list[NoteRow], benchmark: Optional[str] = None,
+                doc_links: Optional[dict[str, str]] = None) -> str:
+    payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark,
+                            doc_links=doc_links)
     import json
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     return (
@@ -1742,6 +1768,9 @@ def main(argv=None):
         save_template(args.save_template, labels, notes, args.benchmark)
         print(f"  Template saved to: {os.path.abspath(args.save_template)}")
 
+    # Page-number links in the report open the PDF beside it (same folder):
+    # the highlighted copy when --annotate-dir is used, else the source file.
+    doc_links: dict[str, str] = {}
     if args.annotate_dir:
         os.makedirs(args.annotate_dir, exist_ok=True)
         print()
@@ -1749,9 +1778,14 @@ def main(argv=None):
             base = os.path.splitext(os.path.basename(path))[0]
             dst = os.path.join(args.annotate_dir, f"{base}_highlighted.pdf")
             n_added = annotate_pdf(path, dst, marks_by_doc[label])
+            doc_links[label] = os.path.basename(dst)
             print(f"  Highlighted PDF ({n_added} notes drawn): {dst}")
+    else:
+        for label, path in docs:
+            doc_links[label] = os.path.basename(path)
 
-    body = render_html(labels, marks_by_doc, notes, benchmark=args.benchmark)
+    body = render_html(labels, marks_by_doc, notes, benchmark=args.benchmark,
+                       doc_links=doc_links)
     page = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
