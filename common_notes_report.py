@@ -838,20 +838,22 @@ _APP_CSS = """
 .seg button[aria-pressed="true"] .pop{transform:scale(1)}
 .dcell[data-state="accepted"]{background:var(--good-soft)}
 .dcell[data-state="rejected"]{background:var(--bad-soft)}
-/* word-level diff, Word track-changes style:
-   blue struck-through = deletion (extra in this statement, absent from benchmark)
-   orange underlined   = insertion (benchmark wording coming in) */
+/* word-level diff: highlight ONLY the differing words, never the whole line
+   blue = extra in this statement · orange = benchmark insertion */
 .add{background:var(--accent-soft);color:var(--accent)}
 .del{background:var(--warn-soft);color:var(--warn)}
 .dtext.diffed{background:none}                         /* drop the full-line highlighter */
 .dtext .add{background:var(--accent-soft);color:var(--accent);border-radius:3px;
-  padding:0 2px;font-weight:700;text-decoration:line-through;
-  text-decoration-thickness:1.5px}
+  padding:0 2px;font-weight:700}
 .dtext .del{background:var(--warn-soft);color:var(--warn);border-radius:3px;
-  padding:0 2px;font-weight:600;text-decoration:underline;
-  text-decoration-thickness:1.5px}
+  padding:0 2px;font-weight:600;border-bottom:1.5px dashed var(--warn)}
 
-/* Track changes / Before / After views */
+/* Track changes / Before / After: same markup, only the strikethrough moves.
+   Before = orange insertions cut (not yet in force); After = blue extras cut. */
+.dclip[data-view="before"] .dtext .del{text-decoration:line-through;
+  text-decoration-thickness:1.6px;opacity:.72}
+.dclip[data-view="after"] .dtext .add{text-decoration:line-through;
+  text-decoration-thickness:1.6px;opacity:.72}
 .viewbar{display:flex;gap:4px;align-items:center}
 .vbtn{font:inherit;font-size:10.5px;font-weight:700;cursor:pointer;border-radius:7px;
   padding:3px 9px;border:1px solid var(--line-strong);background:transparent;color:var(--muted);
@@ -859,11 +861,6 @@ _APP_CSS = """
 .vbtn:hover{border-color:var(--accent);color:var(--accent)}
 .vbtn.on{background:var(--accent);border-color:var(--accent);color:#fff;
   box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 30%,transparent)}
-.dclip .view-markup,.dclip .view-before,.dclip .view-after{display:none}
-.dclip[data-view="markup"] .view-markup{display:inline}
-.dclip[data-view="before"] .view-before{display:inline}
-.dclip[data-view="after"] .view-after{display:inline}
-.dtext.view-after{background:linear-gradient(transparent 60%,var(--accent-soft) 60%)}
 .gview{display:flex;gap:4px;align-items:center}
 .gview .gvlabel{font-size:11.5px;color:var(--muted);font-weight:650;margin-right:4px}
 .difflegend{font-size:11px;color:var(--muted);line-height:1.5}
@@ -983,10 +980,10 @@ _APP_JS = r"""
       '<h1>Common Notes — Accept / Reject Console</h1>'+
       '<p class="intro">Every common note is benchmarked against <strong>'+esc(benchShort())+'</strong>'+
       (DATA.fallbackBenchmark?' (or <strong>'+esc(docShort(DATA.fallbackBenchmark))+'</strong> when the note is absent from it)':'')+'. '+
-      'Where a statement <strong>differs</strong>, the note shows Word-style track changes — '+
-      '<span class="del" style="padding:0 4px;border-radius:3px;text-decoration:underline">insertions</span> are benchmark wording coming in; '+
-      '<span class="add" style="padding:0 4px;border-radius:3px;text-decoration:line-through">deletions</span> are words in this statement the benchmark does not have. '+
-      'Toggle each note (or all at once) between <strong>Track changes</strong>, <strong>Before</strong> (as filed) and <strong>After</strong> (as per benchmark). '+
+      'Where a statement <strong>differs</strong>, the note shows track changes — '+
+      '<span class="del" style="padding:0 4px;border-radius:3px">orange</span> words are benchmark wording coming in; '+
+      '<span class="add" style="padding:0 4px;border-radius:3px">blue</span> words exist here but not in the benchmark. '+
+      'Toggle <strong>Before</strong> to cut the orange (change not yet made) or <strong>After</strong> to cut the blue (change incorporated) — per note or all at once. '+
       'A note that is <em>not highlighted</em> in a statement is treated as <strong>not present</strong> there — expected, no review needed. '+
       'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported. '+
       '<strong>Click a serial badge or a p.N chip</strong> to open that PDF at the exact page — keep this report in the same folder as the PDFs.</p>'+
@@ -1081,18 +1078,17 @@ _APP_JS = r"""
             pageChip+
             (c.autoFound ? '<span class="mini tmpl">◎ auto-located '+Math.round(c.autoFound*100)+'%</span>' : '')+
             (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
-    // Benchmark shows its own text as the reference; differing statements get a
-    // Word-style view toggle: Track changes / Before (as filed) / After (as benchmark).
+    // Benchmark shows its own text as the reference; differing statements keep the
+    // track-changes markup in every view — the toggle only moves the strikethrough:
+    // Before cuts the orange insertions (not yet in force), After cuts the blue extras.
     if(c.differs && !c.isBenchmark){
       body = '<div class="viewbar" role="group" aria-label="view">'+
-          '<button class="vbtn on" data-view="markup" title="Show insertions and deletions vs the benchmark">Track changes</button>'+
-          '<button class="vbtn" data-view="before" title="This statement as filed — before incorporating benchmark wording">Before</button>'+
-          '<button class="vbtn" data-view="after" title="How the note reads after incorporating the benchmark wording">After</button>'+
+          '<button class="vbtn on" data-view="markup" title="All changes visible, nothing cut">Track changes</button>'+
+          '<button class="vbtn" data-view="before" title="Before the change — benchmark insertions (orange) shown cut">Before</button>'+
+          '<button class="vbtn" data-view="after" title="After the change — extra words (blue) shown cut">After</button>'+
         '</div>'+
         '<div class="dclip" data-view="markup">'+
-          '<span class="dtext diffed view-markup">'+diffHTML(n.refText, c.text)+'</span>'+
-          '<span class="dtext view-before">'+esc(c.text)+'</span>'+
-          '<span class="dtext view-after">'+esc(n.refText)+'</span>'+
+          '<span class="dtext diffed">'+diffHTML(n.refText, c.text)+'</span>'+
         '</div>'+
         '<button class="expand" data-exp>Show full text ▾</button>';
     } else {
