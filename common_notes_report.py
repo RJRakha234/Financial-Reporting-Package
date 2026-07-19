@@ -838,14 +838,34 @@ _APP_CSS = """
 .seg button[aria-pressed="true"] .pop{transform:scale(1)}
 .dcell[data-state="accepted"]{background:var(--good-soft)}
 .dcell[data-state="rejected"]{background:var(--bad-soft)}
-/* word-level diff: highlight ONLY the differing words, never the whole line */
-.add{background:var(--accent-soft);color:var(--accent)}   /* extra (in this statement) */
-.del{background:var(--warn-soft);color:var(--warn)}       /* missing (present in benchmark) */
+/* word-level diff, Word track-changes style:
+   blue struck-through = deletion (extra in this statement, absent from benchmark)
+   orange underlined   = insertion (benchmark wording coming in) */
+.add{background:var(--accent-soft);color:var(--accent)}
+.del{background:var(--warn-soft);color:var(--warn)}
 .dtext.diffed{background:none}                         /* drop the full-line highlighter */
 .dtext .add{background:var(--accent-soft);color:var(--accent);border-radius:3px;
-  padding:0 2px;font-weight:700}                        /* extra words in this statement */
+  padding:0 2px;font-weight:700;text-decoration:line-through;
+  text-decoration-thickness:1.5px}
 .dtext .del{background:var(--warn-soft);color:var(--warn);border-radius:3px;
-  padding:0 2px;font-weight:600;border-bottom:1.5px dashed var(--warn)}  /* words present in benchmark, missing here */
+  padding:0 2px;font-weight:600;text-decoration:underline;
+  text-decoration-thickness:1.5px}
+
+/* Track changes / Before / After views */
+.viewbar{display:flex;gap:4px;align-items:center}
+.vbtn{font:inherit;font-size:10.5px;font-weight:700;cursor:pointer;border-radius:7px;
+  padding:3px 9px;border:1px solid var(--line-strong);background:transparent;color:var(--muted);
+  transition:all .15s ease;letter-spacing:.01em}
+.vbtn:hover{border-color:var(--accent);color:var(--accent)}
+.vbtn.on{background:var(--accent);border-color:var(--accent);color:#fff;
+  box-shadow:0 2px 8px color-mix(in srgb,var(--accent) 30%,transparent)}
+.dclip .view-markup,.dclip .view-before,.dclip .view-after{display:none}
+.dclip[data-view="markup"] .view-markup{display:inline}
+.dclip[data-view="before"] .view-before{display:inline}
+.dclip[data-view="after"] .view-after{display:inline}
+.dtext.view-after{background:linear-gradient(transparent 60%,var(--accent-soft) 60%)}
+.gview{display:flex;gap:4px;align-items:center}
+.gview .gvlabel{font-size:11.5px;color:var(--muted);font-weight:650;margin-right:4px}
 .difflegend{font-size:11px;color:var(--muted);line-height:1.5}
 .difflegend .dh{margin-bottom:4px}
 .difflegend .add,.difflegend .del{border-radius:3px;padding:0 5px;font-weight:700}
@@ -963,9 +983,10 @@ _APP_JS = r"""
       '<h1>Common Notes — Accept / Reject Console</h1>'+
       '<p class="intro">Every common note is benchmarked against <strong>'+esc(benchShort())+'</strong>'+
       (DATA.fallbackBenchmark?' (or <strong>'+esc(docShort(DATA.fallbackBenchmark))+'</strong> when the note is absent from it)':'')+'. '+
-      'Where a statement <strong>differs</strong>, the note shows only the differing words — '+
-      '<span class="del" style="padding:0 4px;border-radius:3px">missing</span> words are present in the benchmark but absent here; '+
-      '<span class="add" style="padding:0 4px;border-radius:3px">extra</span> words appear here but not in the benchmark. '+
+      'Where a statement <strong>differs</strong>, the note shows Word-style track changes — '+
+      '<span class="del" style="padding:0 4px;border-radius:3px;text-decoration:underline">insertions</span> are benchmark wording coming in; '+
+      '<span class="add" style="padding:0 4px;border-radius:3px;text-decoration:line-through">deletions</span> are words in this statement the benchmark does not have. '+
+      'Toggle each note (or all at once) between <strong>Track changes</strong>, <strong>Before</strong> (as filed) and <strong>After</strong> (as per benchmark). '+
       'A note that is <em>not highlighted</em> in a statement is treated as <strong>not present</strong> there — expected, no review needed. '+
       'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported. '+
       '<strong>Click a serial badge or a p.N chip</strong> to open that PDF at the exact page — keep this report in the same folder as the PDFs.</p>'+
@@ -982,6 +1003,12 @@ _APP_JS = r"""
         '<div class="progress"><div class="ptop"><span class="plabel">Decisions completed</span>'+
         '<span class="ppct" id="ppct">0%</span></div>'+
         '<div class="track"><div class="bar" id="bar"></div></div></div>'+
+        '<div class="gview" id="gview" role="group" aria-label="view all notes as">'+
+          '<span class="gvlabel">View all</span>'+
+          '<button class="vbtn on" data-gview="markup">Track changes</button>'+
+          '<button class="vbtn" data-gview="before">Before</button>'+
+          '<button class="vbtn" data-gview="after">After</button>'+
+        '</div>'+
         '<div class="filterwrap"><span>Only unresolved</span><div class="switch" id="flt" role="switch" aria-checked="false" tabindex="0"></div></div>'+
         '<div class="actions">'+
           '<button class="btn ghost" id="expCsv">Export CSV</button>'+
@@ -1054,17 +1081,30 @@ _APP_JS = r"""
             pageChip+
             (c.autoFound ? '<span class="mini tmpl">◎ auto-located '+Math.round(c.autoFound*100)+'%</span>' : '')+
             (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
-    // Benchmark shows its own text as the reference; others highlight only the
-    // words that are extra (in this statement) vs missing (present in benchmark).
-    var inner = c.isBenchmark ? esc(c.text) : (c.differs ? diffHTML(n.refText, c.text) : esc(c.text));
-    body = '<div class="dclip"><span class="dtext'+(c.differs&&!c.isBenchmark?' diffed':'')+'">'+inner+'</span></div>'+
-           '<button class="expand" data-exp>Show full text ▾</button>';
+    // Benchmark shows its own text as the reference; differing statements get a
+    // Word-style view toggle: Track changes / Before (as filed) / After (as benchmark).
+    if(c.differs && !c.isBenchmark){
+      body = '<div class="viewbar" role="group" aria-label="view">'+
+          '<button class="vbtn on" data-view="markup" title="Show insertions and deletions vs the benchmark">Track changes</button>'+
+          '<button class="vbtn" data-view="before" title="This statement as filed — before incorporating benchmark wording">Before</button>'+
+          '<button class="vbtn" data-view="after" title="How the note reads after incorporating the benchmark wording">After</button>'+
+        '</div>'+
+        '<div class="dclip" data-view="markup">'+
+          '<span class="dtext diffed view-markup">'+diffHTML(n.refText, c.text)+'</span>'+
+          '<span class="dtext view-before">'+esc(c.text)+'</span>'+
+          '<span class="dtext view-after">'+esc(n.refText)+'</span>'+
+        '</div>'+
+        '<button class="expand" data-exp>Show full text ▾</button>';
+    } else {
+      body = '<div class="dclip"><span class="dtext">'+esc(c.text)+'</span></div>'+
+             '<button class="expand" data-exp>Show full text ▾</button>';
+    }
     if(c.isBenchmark){
       decision = '<div class="tag-bench">Reference statement'+(n.fallbackUsed?' (used because the note is absent from '+esc(benchShort())+')':'')+' · all others compared to this</div>';
     } else if(c.differs){
       var counts = diffCounts(n.refText, c.text);
-      var legend = '<div class="dh"><span class="del">missing from this statement ('+counts.del+')</span>'+
-                   ' · <span class="add">extra here ('+counts.add+')</span></div>';
+      var legend = '<div class="dh"><span class="del">insertions from benchmark ('+counts.del+')</span>'+
+                   ' · <span class="add">deletions — extra here ('+counts.add+')</span></div>';
       decision = '<div class="decision">'+
         '<div class="difflegend">'+legend+'Highlighted above vs <strong>'+esc(refName)+'</strong>.</div>'+
         '<div class="seg" role="group" aria-label="decision">'+
@@ -1180,6 +1220,18 @@ _APP_JS = r"""
         persist(); refresh(); return; }
       if(t.closest('[data-exp]')){ var b=t.closest('[data-exp]'); var clip=b.previousElementSibling;
         clip.classList.toggle('open'); b.textContent = clip.classList.contains('open')?'Show less ▴':'Show full text ▾'; return; }
+      var vb=t.closest('[data-view]');
+      if(vb){ var cellEl=vb.closest('.dcell'); var v=vb.getAttribute('data-view');
+        cellEl.querySelector('.dclip').setAttribute('data-view', v);
+        cellEl.querySelectorAll('.vbtn[data-view]').forEach(function(x){ x.classList.toggle('on', x===vb); });
+        return; }
+      var gv=t.closest('[data-gview]');
+      if(gv){ var v2=gv.getAttribute('data-gview');
+        document.querySelectorAll('#gview .vbtn').forEach(function(x){ x.classList.toggle('on', x===gv); });
+        app.querySelectorAll('.dclip[data-view]').forEach(function(cl){ cl.setAttribute('data-view', v2); });
+        app.querySelectorAll('.dcell .vbtn[data-view]').forEach(function(x){
+          x.classList.toggle('on', x.getAttribute('data-view')===v2); });
+        return; }
       if(t.id==='expCsv'){ exportCsv(); return; }
       if(t.id==='expJson'){ exportJson(); return; }
       if(t.id==='reset'){ if(confirm('Clear all accept/reject decisions?')){ store={}; persist();
