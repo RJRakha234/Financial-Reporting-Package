@@ -1018,6 +1018,9 @@ _APP_JS = r"""
     app.className = '';
     app.innerHTML = html;
     wire();
+    // rehydrate saved decisions into the cell buttons (persistence across reloads)
+    DATA.notes.forEach(function(n){ n.cells.forEach(function(c){
+      if(c.differs && store[key(n.serial,c.doc)]) syncCell(n.serial,c.doc); }); });
     refresh();
   }
   function kpi(cls,n,l){ return '<div class="kpi '+cls+'"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
@@ -1289,6 +1292,22 @@ def _note_status(row: NoteRow, total_docs: int) -> tuple[str, str, bool]:
     return f"In {present}/{total_docs} only", "bad", True
 
 
+def _display_section(heading: str, ref_text: str) -> str:
+    """Prefer the captured heading; fall back to the note's opening words when
+    the heading is missing or garbled (vertical/watermark text caught in the
+    heading clip produces strings of 1-2 character fragments)."""
+    h = _clean(heading)
+    toks = h.split()
+    if toks:
+        tiny = sum(1 for t in toks if len(t) <= 2)
+        if len(h) >= 12 and tiny / len(toks) <= 0.34:
+            return h[:140]
+    words = ref_text.split()
+    if words:
+        return " ".join(words[:12]) + ("…" if len(words) > 12 else "")
+    return h
+
+
 def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                   notes: list[NoteRow], benchmark: Optional[str] = None,
                   doc_links: Optional[dict[str, str]] = None) -> dict:
@@ -1390,7 +1409,8 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         else:
             label, severity, has_diff = "Consistent", "good", False
         note_objs.append({
-            "serial": n.serial_key, "label": n.label, "section": n.section,
+            "serial": n.serial_key, "label": n.label,
+            "section": _display_section(n.section, ref_text),
             "refSerial": ref_serial, "refText": ref_text, "refSource": ref_source,
             "benchmarkDoc": eff_bench, "fallbackUsed": eff_bench not in (None, bench),
             "absentDocs": absent_docs, "presentCount": present_n,
@@ -1602,7 +1622,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         zebra = ZEBRA if i % 2 else "FFFFFF"
         ws.cell(r, 1, n.serial_key).font = Font(bold=True, color=ACCENT, size=12)
         ws.cell(r, 1).alignment = center
-        ws.cell(r, 2, _xls(n.section)).alignment = wrap_top
+        ws.cell(r, 2, _xls(pnote_by_serial.get(n.serial_key, {}).get("section", n.section))).alignment = wrap_top
         for c, lbl in enumerate(doc_labels, start=3):
             m = n.cells[lbl]
             pc = pcell(n.serial_key, lbl) or {}
