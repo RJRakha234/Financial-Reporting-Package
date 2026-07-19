@@ -545,22 +545,40 @@ def annotate_pdf(src_path: str, dst_path: str, marks: list[Mark],
                 for pno, pg in pages.items():
                     for w in _sorted_words(pg):
                         entries.append((pno, w))
-                r, s, W = _best_word_window([e[1] for e in entries], m.text.split())
-                sel = entries[s:s + W]
-                if not sel or r < 0.4:
-                    continue
-                # one rectangle per visual text line, grouped per page
-                per_page: dict[int, dict[float, fitz.Rect]] = {}
+                target = m.text.split()
+                toks = [e[1][4] for e in entries]
+                # exact token-sequence match first: the located text came from this
+                # same word stream, so this guarantees highlight == report text
+                s = -1
+                for i in range(len(toks) - len(target) + 1):
+                    if toks[i:i + len(target)] == target:
+                        s = i
+                        break
+                if s >= 0:
+                    sel = entries[s:s + len(target)]
+                else:  # fall back to fuzzy matching (e.g. reviewer's own marks)
+                    r, s, W = _best_word_window(toks, target)
+                    sel = entries[s:s + W]
+                    if not sel or r < 0.4:
+                        continue
+                # merge only horizontally-adjacent words on the same line, so the
+                # highlight never sweeps across a table-column gap onto words
+                # that are not part of the note
+                per_page: dict[int, list[fitz.Rect]] = {}
+                prev_page = prev_y = None
+                prev_rect: Optional[fitz.Rect] = None
                 for pno, w in sel:
-                    lines = per_page.setdefault(pno, {})
-                    key = round(w[1], 1)
+                    ykey = round(w[1], 1)
                     rct = fitz.Rect(w[:4])
-                    if key in lines:
-                        lines[key] |= rct
+                    rects = per_page.setdefault(pno, [])
+                    if (prev_rect is not None and prev_page == pno and prev_y == ykey
+                            and 0 <= rct.x0 - prev_rect.x1 <= 14):
+                        prev_rect.include_rect(rct)  # extend the run in place
                     else:
-                        lines[key] = rct
-                for pno, lines in per_page.items():
-                    annot = pages[pno].add_highlight_annot(list(lines.values()))
+                        rects.append(rct)
+                        prev_page, prev_y, prev_rect = pno, ykey, rct
+                for pno, rects in per_page.items():
+                    annot = pages[pno].add_highlight_annot(rects)
                     annot.set_info(content=m.serial_raw or m.serial_key,
                                    title="Common Notes Tool")
                     annot.update()
