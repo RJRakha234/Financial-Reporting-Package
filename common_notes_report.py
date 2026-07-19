@@ -1847,7 +1847,18 @@ def parse_docs(pairs: list[str]) -> list[tuple[str, str]]:
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Compare highlighted common notes across statements.")
+    ap = argparse.ArgumentParser(
+        description="Compare highlighted common notes across statements.",
+        epilog="Simplest use: python common_notes_report.py FOLDER — runs everything "
+               "(template auto-found next to this script, outputs in FOLDER/output).")
+    ap.add_argument("folder", nargs="?", default=None,
+                    help="One-command mode: folder with the PDFs. Implies --dir FOLDER, "
+                         "auto-uses notes_template_final.json if present beside this "
+                         "script (disable with --no-template), and writes report.html, "
+                         "report.xlsx and highlighted PDFs into FOLDER/output.")
+    ap.add_argument("--no-template", action="store_true",
+                    help="In one-command mode, skip the template (pure comparison of "
+                         "already-highlighted PDFs).")
     ap.add_argument("--doc", action="append", default=[],
                     help="Repeatable. Format: 'Label=/path/to.pdf' (column order preserved).")
     ap.add_argument("--dir", default=None, metavar="FOLDER",
@@ -1875,6 +1886,30 @@ def main(argv=None):
                     help="Write highlighted copies of the PDFs here: every auto-located note is "
                          "drawn as a highlight with its serial number in the comment box.")
     args = ap.parse_args(argv)
+
+    if args.folder:
+        # One-command mode: fill in every unset option with sensible defaults.
+        if args.dir or args.doc:
+            sys.exit("error: give either a bare FOLDER or --dir/--doc, not both.")
+        args.dir = args.folder
+        outdir = os.path.join(args.folder, "output")
+        if args.annotate_dir is None:
+            args.annotate_dir = outdir
+        if args.out == "common_notes_report.html":  # parser default untouched
+            args.out = os.path.join(outdir, "report.html")
+        if args.xlsx is None:
+            args.xlsx = os.path.join(outdir, "report.xlsx")
+        if args.template is None and not args.no_template:
+            for cand in (os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "notes_template_final.json"),
+                         "notes_template_final.json"):
+                if os.path.exists(cand):
+                    args.template = cand
+                    break
+        os.makedirs(outdir, exist_ok=True)
+        print(f"  One-command mode: PDFs from {args.folder} → outputs in {outdir}"
+              + (f"  (template: {os.path.basename(args.template)})" if args.template
+                 else "  (no template — comparing the PDFs' own highlights)"))
 
     if args.dir and args.doc:
         sys.exit("error: use either --dir or --doc, not both.")
