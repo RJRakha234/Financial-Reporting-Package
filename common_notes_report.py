@@ -96,6 +96,9 @@ def resolve_fallback_benchmark(doc_labels: list[str], primary: str) -> Optional[
 # Highlight annotation subtypes we treat as a "mark".
 _MARK_TYPES = {"Highlight", "Underline", "Squiggly", "StrikeOut"}
 
+# Author name the tool writes on its own highlight annotations.
+MACHINE_AUTHOR = "Common Notes Tool"
+
 
 # --------------------------------------------------------------------------- #
 # Data model
@@ -113,6 +116,7 @@ class Mark:
     y0: float = 0.0          # top of the highlight on the page (for reading order)
     x0: float = 0.0          # left edge (tie-break within a line)
     conf: Optional[float] = None  # set when auto-located from a template (0..1)
+    author: str = ""         # annotation author; the tool signs its own highlights
 
 
 @dataclass
@@ -207,6 +211,7 @@ def extract_marks(label: str, path: str) -> list[Mark]:
                     heading=_heading_above(page, annot),
                     y0=annot.rect.y0,
                     x0=annot.rect.x0,
+                    author=_clean(annot.info.get("title", "")),
                 ))
     finally:
         doc.close()
@@ -276,6 +281,11 @@ def build_notes(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]]) -> l
             by_doc.setdefault(m.doc, []).append(m)
         for label in doc_labels:
             hits = by_doc.get(label, [])
+            # A reviewer's own highlight overrides the tool's machine-drawn one
+            # for the same serial (correction workflow: re-highlight, re-run).
+            manual = [m for m in hits if m.author != MACHINE_AUTHOR]
+            if manual and len(manual) < len(hits):
+                hits = manual
             row.cells[label] = _merge_marks(hits) if hits else None
         rows.append(row)
     return rows
@@ -580,7 +590,7 @@ def annotate_pdf(src_path: str, dst_path: str, marks: list[Mark],
                 for pno, rects in per_page.items():
                     annot = pages[pno].add_highlight_annot(rects)
                     annot.set_info(content=m.serial_raw or m.serial_key,
-                                   title="Common Notes Tool")
+                                   title=MACHINE_AUTHOR)
                     annot.update()
                 added += 1
             except Exception as exc:  # one bad note must not lose the whole file
