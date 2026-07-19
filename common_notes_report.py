@@ -1757,6 +1757,64 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 # CLI
 # --------------------------------------------------------------------------- #
 
+def detect_docs_in_dir(folder: str) -> list[tuple[str, str]]:
+    """Scan a folder of PDFs and assign each to its statement by filename.
+
+    Recognized patterns (case-insensitive), matching this package's naming:
+      ifrs + inr   -> IFRS · INR Consolidated   (consolifrsinr… / IFRS_INR_…)
+      ifrs + usd   -> IFRS · USD Earnings Release (ifrsusd… / IFRS_USD_…)
+      sa… / standalone -> Ind AS · Standalone   (safy… / SA_FY…)
+      consol…      -> Ind AS · Consolidated     (consolfy… / CONSOL_FY…)
+    Exactly one file per statement is required.
+    """
+    import glob as _glob
+    if not os.path.isdir(folder):
+        sys.exit(f"error: --dir is not a folder: {folder}")
+    pdfs = sorted(_glob.glob(os.path.join(folder, "*.pdf")))
+    if not pdfs:
+        sys.exit(f"error: no PDFs found in {folder}")
+
+    def classify(path: str) -> Optional[str]:
+        name = os.path.basename(path).lower()
+        if "ifrs" in name and "inr" in name:
+            return "IFRS · INR Consolidated"
+        if "ifrs" in name and "usd" in name:
+            return "IFRS · USD Earnings Release"
+        if name.startswith(("sa_", "sa-", "safy")) or "standalone" in name or re.search(r"(^|[^a-z])sa[^a-z]?fy", name):
+            return "Ind AS · Standalone"
+        if "consol" in name:
+            return "Ind AS · Consolidated"
+        return None
+
+    found: dict[str, list[str]] = {}
+    skipped: list[str] = []
+    for p in pdfs:
+        lbl = classify(p)
+        if lbl:
+            found.setdefault(lbl, []).append(p)
+        else:
+            skipped.append(os.path.basename(p))
+
+    order = ["Ind AS · Consolidated", "Ind AS · Standalone",
+             "IFRS · INR Consolidated", "IFRS · USD Earnings Release"]
+    problems = []
+    for lbl in order:
+        hits = found.get(lbl, [])
+        if not hits:
+            problems.append(f"missing a PDF for {lbl}")
+        elif len(hits) > 1:
+            problems.append(f"multiple PDFs match {lbl}: "
+                            + ", ".join(os.path.basename(h) for h in hits))
+    if problems:
+        sys.exit("error: could not assign the folder's PDFs to the four statements:\n  - "
+                 + "\n  - ".join(problems)
+                 + ("\n  (unrecognized: " + ", ".join(skipped) + ")" if skipped else "")
+                 + "\n  Use explicit --doc 'Label=path' arguments instead.")
+    if skipped:
+        print(f"  note: ignoring unrecognized PDFs in folder: {', '.join(skipped)}")
+    return [(lbl, found[lbl][0]) for lbl in order]
+
+
 def parse_docs(pairs: list[str]) -> list[tuple[str, str]]:
     out = []
     for p in pairs:
@@ -1776,6 +1834,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Compare highlighted common notes across statements.")
     ap.add_argument("--doc", action="append", default=[],
                     help="Repeatable. Format: 'Label=/path/to.pdf' (column order preserved).")
+    ap.add_argument("--dir", default=None, metavar="FOLDER",
+                    help="Folder containing the four PDFs — statements are assigned "
+                         "automatically by filename (consol…/sa…/…ifrsinr…/…ifrsusd…). "
+                         "Alternative to --doc.")
     ap.add_argument("--out", default="common_notes_report.html", help="Output HTML file.")
     ap.add_argument("--xlsx", default=None,
                     help="Also write an Excel workbook to this path (e.g. report.xlsx).")
@@ -1798,7 +1860,12 @@ def main(argv=None):
                          "drawn as a highlight with its serial number in the comment box.")
     args = ap.parse_args(argv)
 
-    docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
+    if args.dir and args.doc:
+        sys.exit("error: use either --dir or --doc, not both.")
+    if args.dir:
+        docs = detect_docs_in_dir(os.path.expanduser(args.dir))
+    else:
+        docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
     labels = [d[0] for d in docs]
 
     marks_by_doc: dict[str, list[Mark]] = {}
