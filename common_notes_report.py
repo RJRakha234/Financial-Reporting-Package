@@ -1800,19 +1800,25 @@ def detect_docs_in_dir(folder: str) -> list[tuple[str, str]]:
     problems = []
     for lbl in order:
         hits = found.get(lbl, [])
-        if not hits:
-            problems.append(f"missing a PDF for {lbl}")
-        elif len(hits) > 1:
+        if len(hits) > 1:
             problems.append(f"multiple PDFs match {lbl}: "
                             + ", ".join(os.path.basename(h) for h in hits))
+    present = [lbl for lbl in order if found.get(lbl)]
+    if len(present) < 2 and not problems:
+        problems.append(f"only {len(present)} statement(s) recognized — at least 2 are "
+                        "needed for a comparison")
     if problems:
-        sys.exit("error: could not assign the folder's PDFs to the four statements:\n  - "
+        sys.exit("error: could not assign the folder's PDFs to statements:\n  - "
                  + "\n  - ".join(problems)
                  + ("\n  (unrecognized: " + ", ".join(skipped) + ")" if skipped else "")
                  + "\n  Use explicit --doc 'Label=path' arguments instead.")
+    missing = [lbl for lbl in order if lbl not in present]
+    if missing:
+        print(f"  note: comparing {len(present)} statements — no PDF found for: "
+              + ", ".join(missing))
     if skipped:
         print(f"  note: ignoring unrecognized PDFs in folder: {', '.join(skipped)}")
-    return [(lbl, found[lbl][0]) for lbl in order]
+    return [(lbl, found[lbl][0]) for lbl in present]
 
 
 def parse_docs(pairs: list[str]) -> list[tuple[str, str]]:
