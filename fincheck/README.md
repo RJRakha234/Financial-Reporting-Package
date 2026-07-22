@@ -18,6 +18,12 @@ It is built for real-world statements: figures with thousands separators,
 parenthesised negatives, currency symbols/codes, nil dashes, and nested
 balance-sheet / income-statement hierarchies.
 
+It also **compares a reference PDF against a scanned copy** of the same document
+(`fincheck compare`) and reports every passage — and, more importantly, every
+**figure** — that differs between them, so an altered digit or dropped line in a
+printed-and-rescanned statement does not slip through. See *Compare a scanned
+copy* below.
+
 ## Install
 
 ```bash
@@ -59,6 +65,60 @@ Highlighted PDF written to: sample_financials.highlighted.pdf
 The process exits with status `1` when inconsistencies are found and `0` when
 everything foots — handy in CI or a pipeline.
 
+## Compare a scanned copy against the PDF
+
+Given the original text PDF and a scanned copy of the same document, check that
+the scan actually says the same thing:
+
+```bash
+# Reference (text PDF)  vs  scanned copy (image PDF, image, or a searchable PDF)
+python -m fincheck compare original.pdf scanned.pdf
+```
+
+It extracts the text of each document, diffs the words, and — on top of that —
+diffs every **figure** using the same financial-number parsing as the footing
+checker. The numeric diff is the part that matters for statements: it catches a
+corrupted digit (`8,750` scanned as `8,150`), a figure that went missing, or one
+that appeared out of nowhere, even when OCR reshuffles the surrounding words.
+
+```
+✗ Documents differ (word similarity 97.8%).
+
+reference: original.pdf (1 page)
+scanned:   scanned.pdf (1 page)   [OCR used]
+
+Figures that do not match (1):
+  1. reference 8,750  ->  scanned 8,150
+
+Text differences (2):
+  1. changed: 'inventories'  ->  'lnventorles'
+  2. changed: '8,750'  ->  '8,150'
+```
+
+* A **searchable** scan (one that already carries a text layer) is compared
+  directly — no OCR needed.
+* An **image-only** scan (or an image file: PNG/JPG/TIFF/…) is read with OCR.
+  This needs the `tesseract` engine plus `pytesseract`/`Pillow`
+  (`pip install pytesseract Pillow` and `apt-get install tesseract-ocr` or
+  `brew install tesseract`). Control it with `--ocr auto|always|never`,
+  `--lang eng+deu`, and `--dpi 300`. With `--ocr never`, image-only pages are
+  simply skipped rather than OCR'd.
+* Exits `0` when the documents match and `1` when they differ (`3` if a page
+  needs OCR but the OCR stack is not installed). Add `--json` for machine output,
+  `--case-sensitive` to stop folding case.
+
+From Python:
+
+```python
+from fincheck import compare_documents
+
+result = compare_documents("original.pdf", "scanned.pdf")
+print(result.identical, round(result.similarity, 3))
+for change in result.number_changes:
+    print(change.kind, change.reference, "->", change.scanned)
+print(result.as_json())
+```
+
 ## Use it (library)
 
 ```python
@@ -75,9 +135,10 @@ print(result.as_json())
 
 **fincheck runs entirely offline. It makes no network calls of any kind.** It
 only uses local libraries (`pdfplumber`/`pdfminer` to read text, `PyMuPDF` to
-annotate). Your financial statements are read from disk and the highlighted PDF
-is written back to disk — nothing is uploaded, sent to any API, logged remotely,
-or cached anywhere outside the folder you run it in. It is safe to run on an
+annotate, and — for `compare` on scanned pages — a locally installed `tesseract`
+engine via `pytesseract`). Your financial statements are read from disk and the
+highlighted PDF is written back to disk — nothing is uploaded, sent to any API,
+logged remotely, or cached anywhere outside the folder you run it in. It is safe to run on an
 air-gapped machine. (You can verify: there is no `requests`/`urllib`/`http`/
 `socket`/API-client import anywhere in `fincheck/`.)
 
@@ -141,5 +202,7 @@ this", not a definitive error.
   *aggregate*, *sum of*, or *grand total*.
 - `--tolerance` sets the absolute rounding slack (default `1.0`); the checker
   also allows ±0.5 per summed component for rounding drift.
-- Works on text-based PDFs. Scanned/image PDFs would need OCR first.
+- The **footing check** works on text-based PDFs; a scanned/image PDF would need
+  OCR first. The **compare** command reads scanned/image documents directly by
+  OCR'ing pages that have no text layer.
 ```
