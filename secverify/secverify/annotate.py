@@ -35,6 +35,22 @@ BLOCK_TAGS = ("p", "td", "th", "li", "caption", "h1", "h2", "h3", "h4", "h5", "h
 SKIP_PARENTS = {"script", "style", "title", "head"}
 FUZZY_REVIEW_RATIO = 0.80  # ≥ this but not exact → amber "review"
 
+#: a calendar date "Month DD, YYYY" or "Month YYYY" — the reporting-period
+#: form that hides inside otherwise-identical wording ("quarter ended June 30,
+#: 2025" vs the PDF's "…2026").  Word canonicalisation drops the digits, so a
+#: wrong year in such a phrase would pass the words-only match as green; the
+#: Tier-2 date guard re-checks these positionally.
+_MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
+_DATE_RE = re.compile(rf"{_MONTH}\s+\d{{1,2}},?\s+\d{{4}}|{_MONTH}\s+\d{{4}}", re.I)
+
+
+def _dates_in(text: str) -> list[str]:
+    """Ordered, normalised calendar dates in *text* (e.g. 'june 30 2025')."""
+    return [
+        re.sub(r"[,\s]+", " ", m.group(0)).strip().lower()
+        for m in _DATE_RE.finditer(text)
+    ]
+
 
 @dataclass
 class Issue:
@@ -490,6 +506,50 @@ class Annotator:
                 spans[-1].insert_after(marker)
 
     # -- text ------------------------------------------------------------
+    def _date_mismatch(
+        self, sentence: str, letters: str
+    ) -> tuple[str, str, str] | None:
+        """Compare calendar dates when the words matched but the digits didn't.
+
+        The sentence's words are present verbatim in the PDF (letters-only
+        match), so we align to that letter span, read the PDF's original
+        wording there, and compare the dates in order.  Flagged only when
+        both sides carry the SAME number of dates but a value differs — an
+        unequal count means a fractured/interleaved PDF date, which is left
+        to the other checks so this guard never false-alarms on extraction
+        artifacts.
+        """
+        html_dates = _dates_in(sentence)
+        if not html_dates:
+            return None
+        view = self.corpus.letters
+        pos = view.canon.find(letters)
+        if pos < 0 or pos >= len(view.index_map):
+            return None
+        # Read the PDF's original wording aligned to this letter run.  The
+        # raw window is bounded to roughly the sentence's own length (plus a
+        # little slack for the final date's trailing digits, which the
+        # letters-canon drops) so it never reaches into the next sentence —
+        # and if a table interleaves figures and lengthens the PDF line, the
+        # window simply truncates and the count guard below stays silent.
+        page_idx, off = view.index_map[pos]
+        raw = self.corpus.pages_raw[page_idx]
+        window = raw[off : off + len(sentence) + 12]
+        pdf_dates = _dates_in(window)
+        if len(pdf_dates) != len(html_dates):
+            return None
+        diffs = [(h, p) for h, p in zip(html_dates, pdf_dates) if h != p]
+        if not diffs:
+            return None
+        h, p = diffs[0]
+        more = f" (and {len(diffs) - 1} more date(s) differ)" if len(diffs) > 1 else ""
+        return "error", (
+            "Date mismatch — the wording matches the PDF but a reporting date "
+            f"differs. The HTML reads “{h}” where the PDF reads “{p}”{more}. A "
+            "wrong period or comparative date mis-states the whole column; "
+            "verify against the PDF."
+        ), "discrepancy"
+
     def _check_sentence(self, sentence: str) -> tuple[str, str, str]:
         """Return ``(status, remark, category)``.
 
@@ -509,6 +569,14 @@ class Annotator:
         # themselves are validated by the separate number pass.
         letters = canonical(sentence, letters_only=True)
         if letters and letters in self.corpus.letters.canon:
+            # Words match verbatim, but canonicalisation dropped the digits.
+            # A reporting date carried inside identical wording ("quarter
+            # ended June 30, 2025" where the PDF reads "…2026") would slip
+            # through as green.  Align to the PDF at this letter span and
+            # compare the dates positionally.
+            date_issue = self._date_mismatch(sentence, letters)
+            if date_issue is not None:
+                return date_issue
             return "ok", "", ""
         needle = letters or canon
         view = self.corpus.letters if letters else self.corpus.alnum
