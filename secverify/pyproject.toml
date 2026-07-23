@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secverify"
+version = "1.0.0"
+description = "Offline PDF <-> HTML SEC-filing fidelity validator (strict/maximum review)."
+requires-python = ">=3.9"
+dependencies = [
+    "pdfplumber>=0.11",
+    "beautifulsoup4>=4.12",
+]
+
+# Installs a system-wide command named "secverify" that runs the strictest
+# (sigma / maximum-review) configuration.  After `pip install .` you can call
+# it from ANY folder:  secverify statements.pdf auditors.pdf exhibit.htm -o out.html
+[project.scripts]
+secverify = "secverify.toolsigma:cli_entry"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["secverify*"]
