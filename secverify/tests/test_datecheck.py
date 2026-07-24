@@ -86,3 +86,24 @@ def test_unequal_date_count_does_not_false_flag():
         "ref.pdf", "doc.html",
     )
     assert _date_flags(result) == []
+
+
+# --- short unreadable header must not be a false red ----------------------
+
+def test_short_unreadable_header_is_review_not_red():
+    # PDF's segment header "Particulars" is white-on-blue / merged and does not
+    # survive text extraction; the HTML has it as a clean cell.
+    pdf = ("Revenue by business segment\nFinancial Services 13,463 12,976\n"
+           "Total 48,211 46,402")
+    html = ("<table><tr><th>Particulars</th></tr>"
+            "<tr><td>Revenue by business segment</td></tr>"
+            "<tr><td>Financial Services</td><td>13,463</td><td>12,976</td></tr>"
+            "<tr><td>Total</td><td>48,211</td><td>46,402</td></tr></table>")
+    r = Annotator(make_corpus([pdf]), level="sigma", strict=True).run(
+        html, "r.pdf", "d.html")
+    particulars = [
+        i for i in r.issues if (i.excerpt or "").strip() == "Particulars"
+    ]
+    assert particulars, "Particulars should still be surfaced"
+    assert particulars[0].severity == "review", "must be review, not a red error"
+    assert "could not be located" in particulars[0].remark

@@ -619,10 +619,21 @@ class Annotator:
                     "several lines in the PDF. Verify that page manually."
                 ), "layout"
             if len(needle) < 12:
-                # Too short to fuzzy-match; only exact lookup was possible.
-                return "error", (
-                    f"“{sentence.strip()}” was not found in the PDF."
-                ), "absent"
+                # Too short to fuzzy-match, so only an exact lookup was
+                # possible — and it failed.  A lone short label like a table
+                # header ("Particulars", "Opinion") is frequently rendered by
+                # the PDF as a styled/merged/coloured header cell, or sits on
+                # a scanned page, that text extraction cannot read; declaring
+                # it "absent" (red) is then a false alarm.  It is genuinely
+                # unverifiable, so surface it for the eye (review) rather than
+                # assert it is missing — and never pass it as green.
+                return "review", (
+                    f"“{sentence.strip()}” could not be located in the PDF's "
+                    "text. Short headings/labels are often rendered as styled "
+                    "or merged header cells (or lie on scanned pages) that "
+                    "text extraction cannot read — confirm by eye that it "
+                    "appears in the PDF."
+                ), "layout"
             return "error", (
                 f"Not found in the PDF: “{_shorten(sentence)}”. "
                 "No similar passage exists — this content may be missing from "
