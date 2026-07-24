@@ -358,12 +358,13 @@ def test_segment_correct_order_not_flagged():
     assert list(_row_sequence_findings(html, _SEG_GEOM)) == []
 
 
-def test_lone_outlier_row_not_flagged():
-    # one row's single PDF match lands far away (a coincidental cross-table
-    # hit): a lone spike, not an adjacent transposition — must NOT flag.
+def test_true_spurious_cross_table_match_not_flagged():
+    # a row whose single PDF match sits among FOREIGN rows (its PDF
+    # neighbours are not in this HTML table) is a coincidence, not a move.
     geom = [("aaaaaa", ["1"]), ("bbbbbb", ["2"]), ("cccccc", ["3"]),
-            ("dddddd", ["4"]), ("eeeeee", ["5"])]
-    html = [[("aaaaaa", ["1"]), ("eeeeee", ["5"]), ("bbbbbb", ["2"]),
+            ("dddddd", ["4"]),
+            ("foreignp", ["9"]), ("xrowxx", ["7"]), ("foreignq", ["8"])]
+    html = [[("aaaaaa", ["1"]), ("xrowxx", ["7"]), ("bbbbbb", ["2"]),
              ("cccccc", ["3"]), ("dddddd", ["4"])]]
     assert list(_row_sequence_findings(html, geom)) == []
 
@@ -443,14 +444,15 @@ def test_non_adjacent_move_in_repeated_label_table_is_caught():
     assert found, "a non-adjacent move in a repeated-label table must be caught"
 
 
-def test_spurious_edge_match_not_flagged():
-    # a row whose only PDF match sits BEYOND the table's in-order span (a
-    # cross-sub-table coincidence) must not be flagged.
+def test_first_last_row_moved_to_opposite_end_is_caught():
+    # the LAST row moved to the top: it is at the edge of the PDF span, but
+    # its PDF neighbour is in this table, so the move is genuine and caught.
     geom = [("aaaaaa", ["1"]), ("bbbbbb", ["2"]), ("cccccc", ["3"]),
             ("dddddd", ["4"]), ("eeeeee", ["5"])]
-    html = [[("aaaaaa", ["1"]), ("eeeeee", ["5"]), ("bbbbbb", ["2"]),
+    html = [[("eeeeee", ["5"]), ("aaaaaa", ["1"]), ("bbbbbb", ["2"]),
              ("cccccc", ["3"]), ("dddddd", ["4"])]]
-    assert list(_row_sequence_findings(html, geom)) == []
+    assert list(_row_sequence_findings(html, geom)), \
+        "the last row moved to the top must be caught via its neighbour"
 
 
 # --- verbatim block placed where a near-identical (other-period) one belongs -

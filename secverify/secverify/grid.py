@@ -423,11 +423,26 @@ def _row_sequence_findings(html_tables, geom_rows):
         if not kept:
             continue
         lo_k, hi_k = min(kept), max(kept)
+        table_keys = set(hrows)  # every (label, values) in this HTML table
         for idx, (g, key) in enumerate(seq):
             if idx in keep or key in emitted:
                 continue
             if not (lo_k <= g <= hi_k):
-                continue  # beyond the in-order span → spurious cross-table match
+                # Beyond the in-order span — could be a genuine move of the
+                # first/last row to the opposite end, OR a spurious match in a
+                # different sub-table.  Tell them apart by the neighbours: a
+                # row that truly belongs here has the row directly above or
+                # below it in the PDF ALSO present in this HTML table; a
+                # cross-table coincidence sits among foreign rows.
+                nbrs = set()
+                if g > 0:
+                    nl, nf = geom_rows[g - 1]
+                    nbrs.add((nl, tuple(nf)))
+                if g + 1 < len(geom_rows):
+                    nl, nf = geom_rows[g + 1]
+                    nbrs.add((nl, tuple(nf)))
+                if not (nbrs & table_keys):
+                    continue  # foreign neighbours → spurious cross-table match
             emitted.add(key)
             lbl, figs = key
             yield (
