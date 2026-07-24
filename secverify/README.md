@@ -81,6 +81,17 @@ The structural detectors run:
 * **unit of scale** — every "in ₹ crore / million / lakh" declaration the
   PDF makes must appear in the HTML; a silently rescaled table (digits
   unchanged, unit word altered) is flagged;
+* **segment / row sequence (geometry)** — even when every figure is present
+  and correct, two rows can be **swapped** inside a statement (Life Sciences ↔
+  Hi-Tech) with no value check firing. From PDF word geometry the tool pins
+  each row to its position and checks the sequence, keyed on `(label, values)`
+  so a segment listed twice (revenue **and** profit) is disambiguated. It also
+  closes the **transposed matrix** case: where the PDF prints the segment
+  schedule as a **wide row** (segments across the columns) but the HTML lists
+  each segment as its own row, an HTML column that is an exact permutation of
+  a wide PDF row — same figures, different order — is flagged as a **review**
+  item. Both require an exact value match before flagging, so a correctly
+  ordered table never misfires;
 * **content ordering** — distinctive PDF lines that occur exactly once in
   both documents act as sequence anchors; their HTML positions must be
   increasing (per source PDF, via longest-increasing-subsequence). A

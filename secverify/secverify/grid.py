@@ -337,6 +337,7 @@ def grid_compare(corpus, soup, pdf_paths):
     ]
     yield from _row_swap_findings(html_tables, geom_rows)
     yield from _row_sequence_findings(html_tables, geom_rows)
+    yield from _transpose_order_findings(html_tables, geom_rows)
 
 
 #: two matched PDF rows more than this many rows apart belong to different
@@ -508,3 +509,77 @@ def _row_swap_findings(html_tables, geom_rows):
                         "against the correct occurrence of this row.",
                     )
                     break
+
+
+#: a transposed matrix must carry at least this many figures before an out-of-
+#: order permutation is trusted as a real reordering.  Short sequences permute
+#: by coincidence; 6+ significant figures forming a perfect permutation do not.
+_TRANSPOSE_MIN_LEN = 6
+
+
+def _transpose_order_findings(html_tables, geom_rows):
+    """Segment order across a TRANSPOSED matrix.
+
+    Some exhibits print the segment schedule as a wide matrix — segments across
+    the COLUMNS, one metric per ROW ("Revenue from operations 49,908 29,078 …",
+    "Segment profit 12,678 …") — while the HTML lists each segment as its own
+    ROW.  Neither the row-order nor the column-order check aligns across that
+    transpose, so a swap of two segments (Life Sciences ↔ Hi-Tech) stayed
+    invisible: every value is present and correct, only the sequence changed.
+
+    This closes it.  Each wide PDF row (≥ 6 figures) is a segment sequence in
+    column order; each HTML table column, read top to bottom, is the same
+    segment sequence in row order.  When an HTML column is an EXACT permutation
+    of a wide PDF row — the identical multiset of values — but in a different
+    order, the segments are transposed out of sequence.  Requiring an exact
+    multiset match of 6+ significant figures is what keeps this false-positive-
+    free: an unrelated column is astronomically unlikely to be a perfect
+    permutation of a wide matrix row, and a correctly-ordered matrix matches
+    value-for-value so it never flags.
+    """
+    if not geom_rows:
+        return
+    wide = [(l, [str(x) for x in f]) for l, f in geom_rows if len(f) >= _TRANSPOSE_MIN_LEN]
+    if not wide:
+        return
+    # index wide PDF rows by their value multiset so a matching HTML column is
+    # found directly rather than by scanning every pair
+    wide_by_key: dict[tuple, list[tuple[str, list[str]]]] = {}
+    for l, f in wide:
+        wide_by_key.setdefault(tuple(sorted(f)), []).append((l, f))
+
+    emitted: set[tuple] = set()
+    for html_rows in html_tables:
+        data = [[str(x) for x in f] for _l, f in html_rows if f]
+        if len(data) < _TRANSPOSE_MIN_LEN:
+            continue
+        ncols = max(len(f) for f in data)
+        for c in range(ncols):
+            col = [f[c] for f in data if len(f) > c]
+            if len(col) < _TRANSPOSE_MIN_LEN:
+                continue
+            # a real segment matrix carries thousands/crores — ignore columns
+            # of tiny values (footnote refs, counts) that could permute by luck
+            if not any(len(re.sub(r"\D", "", v)) >= 4 for v in col):
+                continue
+            key = tuple(sorted(col))
+            for plbl, pf in wide_by_key.get(key, []):
+                if col == pf:
+                    continue  # same order → correct
+                sig = (plbl, key)
+                if sig in emitted:
+                    continue
+                emitted.add(sig)
+                yield (
+                    "grid-transpose-order",
+                    "review",
+                    f"{plbl}: HTML column {' '.join(col)} / PDF row {' '.join(pf)}",
+                    f"Segment order (transposed matrix) — the PDF prints “{plbl}” "
+                    "as a wide row with the segments across the columns, while "
+                    "the HTML lists each segment as a row. Every value is present "
+                    f"and correct, but the sequence differs: the HTML reads "
+                    f"{', '.join(col)} down the column where the PDF row reads "
+                    f"{', '.join(pf)}. Two segments may have been swapped — verify "
+                    "the segment order against the PDF.",
+                )
+                break

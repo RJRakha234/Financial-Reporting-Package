@@ -369,6 +369,49 @@ def test_true_spurious_cross_table_match_not_flagged():
     assert list(_row_sequence_findings(html, geom)) == []
 
 
+# --- transposed matrix: segments across PDF COLUMNS, down HTML ROWS ----------
+from secverify.grid import _transpose_order_findings
+
+# PDF prints the segment schedule as a WIDE matrix — segments run across the
+# columns, one metric per row.  Two wide rows: revenue and segment profit.
+_WIDE_GEOM = [
+    ("revenuefromoperations",
+     ["49908", "29078", "23818", "23077", "21765", "13928", "12267", "4809", "178650"]),
+    ("segmentprofit",
+     ["12678", "5678", "4321", "3987", "3210", "2876", "2109", "870", "35729"]),
+]
+# HTML lists each segment as a ROW (segment | revenue | profit), correct order
+_WIDE_HTML_ROWS = [
+    ("financialservices", ["49908", "12678"]), ("manufacturing", ["29078", "5678"]),
+    ("energy", ["23818", "4321"]), ("retail", ["23077", "3987"]),
+    ("communication", ["21765", "3210"]), ("hitech", ["13928", "2876"]),
+    ("lifesciences", ["12267", "2109"]), ("allothersegments", ["4809", "870"]),
+    ("total", ["178650", "35729"]),
+]
+
+
+def test_transposed_segment_order_correct_not_flagged():
+    assert list(_transpose_order_findings([_WIDE_HTML_ROWS], _WIDE_GEOM)) == []
+
+
+def test_transposed_segment_swap_is_caught():
+    # Hi-Tech <-> Life Sciences swapped in the HTML rows.  Across the transpose
+    # neither row- nor column-order check aligns; every value is still present.
+    rows = _WIDE_HTML_ROWS[:]
+    i, j = 5, 6  # hitech, lifesciences
+    rows[i], rows[j] = rows[j], rows[i]
+    found = list(_transpose_order_findings([rows], _WIDE_GEOM))
+    assert found, "a segment swap across a transposed matrix must be caught"
+    assert found[0][0] == "grid-transpose-order"
+
+
+def test_transposed_unrelated_column_not_flagged():
+    # a plain two-column balance sheet whose figures do not permute any wide
+    # PDF row must stay silent (no coincidental transpose match)
+    bs = [(f"lineitem{chr(97+k)}", [str(1000 + k), str(2000 + k)]) for k in range(9)]
+    assert list(_transpose_order_findings([bs], _WIDE_GEOM)) == []
+
+
 # --- broader structural moves: table relocation, non-adjacent row, column ----
 
 def _run_kinds(pdf, html):
