@@ -179,3 +179,51 @@ def test_row_order_swap_is_caught():
 def test_correct_row_order_not_flagged():
     r = _seg_run(["fs", "mf", "en", "rt", "co", "ls", "ht", "ao", "tt"])
     assert [i for i in r.issues if i.kind == "grid-row-order"] == []
+
+
+# --- transposed table: a swapped segment COLUMN is caught via column-order ---
+
+def test_transposed_column_swap_is_caught():
+    # Segments as COLUMNS. Life Sciences and Hi-Tech columns swapped (header +
+    # the values beneath). A data row with a normal-length label ("Segment
+    # profit") trips the column-order check.
+    pdf = ("Segment reporting\n"
+           "Particulars Financial Services Manufacturing Energy Retail "
+           "Communication Life Sciences Hi-Tech All other Total\n"
+           "Revenue 13,463 7,668 6,452 6,172 5,791 3,842 3,710 1,113 48,211\n"
+           "Segment profit 3,662 1,685 1,576 1,701 1,180 619 911 75 11,409")
+    html = ("<table><tr><th>Particulars</th><th>Financial Services</th>"
+            "<th>Manufacturing</th><th>Energy</th><th>Retail</th>"
+            "<th>Communication</th><th>Hi-Tech</th><th>Life Sciences</th>"
+            "<th>All other</th><th>Total</th></tr>"
+            "<tr><td>Revenue</td><td>13,463</td><td>7,668</td><td>6,452</td>"
+            "<td>6,172</td><td>5,791</td><td>3,710</td><td>3,842</td>"
+            "<td>1,113</td><td>48,211</td></tr>"
+            "<tr><td>Segment profit</td><td>3,662</td><td>1,685</td><td>1,576</td>"
+            "<td>1,701</td><td>1,180</td><td>911</td><td>619</td><td>75</td>"
+            "<td>11,409</td></tr></table>")
+    r = Annotator(make_corpus([pdf]), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "r.pdf", "d.html")
+    assert [i for i in r.issues if i.kind == "column-order"], \
+        "a swapped column in a transposed table must be caught"
+
+
+def test_transposed_correct_order_not_flagged():
+    pdf = ("Segment reporting\n"
+           "Particulars Financial Services Manufacturing Energy Retail "
+           "Communication Life Sciences Hi-Tech All other Total\n"
+           "Revenue 13,463 7,668 6,452 6,172 5,791 3,842 3,710 1,113 48,211\n"
+           "Segment profit 3,662 1,685 1,576 1,701 1,180 619 911 75 11,409")
+    html = ("<table><tr><th>Particulars</th><th>Financial Services</th>"
+            "<th>Manufacturing</th><th>Energy</th><th>Retail</th>"
+            "<th>Communication</th><th>Life Sciences</th><th>Hi-Tech</th>"
+            "<th>All other</th><th>Total</th></tr>"
+            "<tr><td>Revenue</td><td>13,463</td><td>7,668</td><td>6,452</td>"
+            "<td>6,172</td><td>5,791</td><td>3,842</td><td>3,710</td>"
+            "<td>1,113</td><td>48,211</td></tr>"
+            "<tr><td>Segment profit</td><td>3,662</td><td>1,685</td><td>1,576</td>"
+            "<td>1,701</td><td>1,180</td><td>619</td><td>911</td><td>75</td>"
+            "<td>11,409</td></tr></table>")
+    r = Annotator(make_corpus([pdf]), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "r.pdf", "d.html")
+    assert [i for i in r.issues if i.kind == "column-order"] == []
