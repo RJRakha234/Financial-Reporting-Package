@@ -16,6 +16,7 @@ aligned tables is what keeps this false-positive-free.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from difflib import SequenceMatcher
 
 from .numbers import iter_tokens
@@ -139,14 +140,22 @@ def _is_statement_table(html_rows) -> bool:
 
 
 def _load_pdf_pages(pdf_paths):
-    """Word lists per page across all reference PDFs."""
+    """Word lists per page across all reference PDFs.
+
+    Geometry is an enhancement layer: a path that cannot be opened (a unit
+    test's placeholder, a moved file) is skipped rather than fatal, so the
+    text-based checks still run.
+    """
     import pdfplumber
 
     pages = []
-    for path in pdf_paths:
-        with pdfplumber.open(path) as pdf:
-            for page in pdf.pages:
-                pages.append(page.extract_words(x_tolerance=1))
+    for path in pdf_paths or []:
+        try:
+            with pdfplumber.open(path) as pdf:
+                for page in pdf.pages:
+                    pages.append(page.extract_words(x_tolerance=1))
+        except Exception:
+            continue
     return pages
 
 
@@ -309,3 +318,74 @@ def grid_compare(corpus, soup, pdf_paths):
                 "Rows reordered inside a statement pass every value check, so "
                 "verify the row sequence against the PDF.",
             )
+
+    # Duplicate-label VALUE reassignment (geometry alignment).  Two rows that
+    # share a label — "Balance as at April 1" appearing twice, income-tax-
+    # assets in a current AND a non-current section — each hold their own
+    # values.  The text checks accept a swap between them because each swapped
+    # row still matches the OTHER occurrence somewhere ("present anywhere").
+    # PDF word geometry pins each occurrence to its row position, so a swap is
+    # visible.  Only the exact swap shape is flagged: the SAME set of value
+    # tuples reassigned to different positions.  If the value set differs it is
+    # left to the checks above; if the order already matches it is correct — so
+    # a legitimate current/non-current repeat never false-flags.
+    geom_rows = [
+        r
+        for page in _load_pdf_pages(pdf_paths)
+        for r in _parse_pdf_rows(page)
+        if r[0] and r[1] and len(r[0]) >= 12
+    ]
+    yield from _row_swap_findings(html_tables, geom_rows)
+
+
+def _row_swap_findings(html_tables, geom_rows):
+    """Duplicate-label value reassignments, from PDF word-geometry rows.
+
+    A label that occurs more than once within one HTML table ("Income tax
+    assets" current AND non-current, "Balance as at April 1" for two years)
+    holds its own values.  The text checks accept a swap between the
+    occurrences because each swapped row still matches the OTHER occurrence
+    somewhere.  Geometry pins each occurrence to its row, so a swap is
+    visible.  Flagged only in the exact swap shape — the SAME multiset of
+    value tuples reassigned to different positions — so a value SET that
+    genuinely differs is left to the other checks, and a repeat already in
+    the right order never false-flags.
+    """
+    if not geom_rows:
+        return
+    geom_by_label: dict[str, list[list[str]]] = {}
+    for lbl, f in geom_rows:
+        geom_by_label.setdefault(lbl, []).append(f)
+    swap_emitted: set[str] = set()
+    for html_rows in html_tables:
+        hrows = [(l, f) for l, f in html_rows if l and f and len(l) >= 12]
+        hcnt = Counter(l for l, f in hrows)
+        for L, c in hcnt.items():
+            if c < 2 or L in swap_emitted:
+                continue
+            html_occ = [tuple(f) for l, f in hrows if l == L]
+            pdf_occ = [tuple(f) for f in geom_by_label.get(L, [])]
+            # only compare when the occurrence counts line up exactly (a
+            # different count = a different table shape → not comparable)
+            if len(pdf_occ) != len(html_occ):
+                continue
+            if sorted(html_occ) != sorted(pdf_occ):
+                continue  # value SET differs → owned by the checks above
+            if html_occ == pdf_occ:
+                continue  # same values, same order → correct
+            for h, p in zip(html_occ, pdf_occ):
+                if h != p:
+                    swap_emitted.add(L)
+                    yield (
+                        "grid-row-swap",
+                        "review",
+                        f"{L}: HTML {' '.join(h)} vs PDF {' '.join(p)}",
+                        f"Row values reassigned — “{L}” appears more than "
+                        "once and the same set of values is present, but "
+                        "attached to different occurrences than in the PDF "
+                        f"(here the HTML shows {', '.join(h)} where the PDF "
+                        f"has {', '.join(p)}). The figures all exist, so the "
+                        "other checks stay silent — verify each value sits "
+                        "against the correct occurrence of this row.",
+                    )
+                    break

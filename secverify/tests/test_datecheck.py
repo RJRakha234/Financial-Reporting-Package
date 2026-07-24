@@ -227,3 +227,71 @@ def test_transposed_correct_order_not_flagged():
     r = Annotator(make_corpus([pdf]), level="sigma", pdf_paths=["d.pdf"],
                   strict=True).run(html, "r.pdf", "d.html")
     assert [i for i in r.issues if i.kind == "column-order"] == []
+
+
+# --- geometry: duplicate-label value swaps (silent-green case #7) -----------
+
+from secverify.grid import _row_swap_findings
+
+
+def _swaps(html_tables, geom_rows):
+    return list(_row_swap_findings(html_tables, geom_rows))
+
+
+def test_duplicate_label_value_swap_is_caught():
+    # "commercial paper" appears twice in one table; the HTML has the two rows'
+    # values swapped vs the PDF (same set, reassigned).
+    html_tables = [[
+        ("commercialpaper", ["5810", "7735"]),   # swapped
+        ("otherinvestments", ["38", "60"]),
+        ("commercialpaper", ["3255", "6403"]),   # swapped
+    ]]
+    geom_rows = [
+        ("commercialpaper", ["3255", "6403"]),
+        ("otherinvestments", ["38", "60"]),
+        ("commercialpaper", ["5810", "7735"]),
+    ]
+    found = _swaps(html_tables, geom_rows)
+    assert found, "a duplicate-label value swap must be caught"
+    assert found[0][0] == "grid-row-swap"
+
+
+def test_duplicate_label_correct_order_not_flagged():
+    html_tables = [[
+        ("commercialpaper", ["3255", "6403"]),
+        ("commercialpaper", ["5810", "7735"]),
+    ]]
+    geom_rows = [
+        ("commercialpaper", ["3255", "6403"]),
+        ("commercialpaper", ["5810", "7735"]),
+    ]
+    assert _swaps(html_tables, geom_rows) == []
+
+
+def test_legitimate_distinct_repeat_not_flagged():
+    # current vs non-current income-tax-assets: different VALUES, same order —
+    # the value set differs, so it must NOT be treated as a swap.
+    html_tables = [[
+        ("incometaxassets", ["1835", "2975"]),
+        ("incometaxassets", ["666", "1622"]),
+    ]]
+    geom_rows = [
+        ("incometaxassets", ["1835", "2975"]),
+        ("incometaxassets", ["666", "1622"]),
+    ]
+    assert _swaps(html_tables, geom_rows) == []
+
+
+def test_count_mismatch_not_flagged():
+    # label appears twice in the HTML table but 3x across the PDF (another
+    # table) — not comparable, must stay silent.
+    html_tables = [[
+        ("commercialpaper", ["5810", "7735"]),
+        ("commercialpaper", ["3255", "6403"]),
+    ]]
+    geom_rows = [
+        ("commercialpaper", ["3255", "6403"]),
+        ("commercialpaper", ["5810", "7735"]),
+        ("commercialpaper", ["9999", "8888"]),
+    ]
+    assert _swaps(html_tables, geom_rows) == []
