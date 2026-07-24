@@ -504,3 +504,18 @@ def test_cross_document_leakage_is_caught():
                   strict=True).run(html, "r.pdf", "d.html")
     assert [i for i in r.issues if i.kind == "omission"], \
         "a value leaked from the other document must be caught (correct value missing)"
+
+
+def test_caption_unit_swap_is_red():
+    # a caption changed crore -> million (figures untouched) must be a hard
+    # error, not just amber — every figure under it is mis-scaled.
+    pdf = ["Consolidated Balance Sheet as at March 31 in crore reported here for the group.\n"
+           "Total assets 155,967 148,903"]
+    html = ("<p>Consolidated Balance Sheet as at March 31 in million reported here for the group.</p>"
+            "<p>Total assets 155,967 148,903</p>")
+    r = Annotator(make_corpus(pdf), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "r.pdf", "d.html")
+    hits = [i for i in r.issues if "Unit of scale" in (i.remark or "")
+            and i.severity == "error"]
+    assert hits, "a caption unit swap must be flagged red"
+    assert "million" in hits[0].remark and "crore" in hits[0].remark

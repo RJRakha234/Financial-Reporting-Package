@@ -52,6 +52,31 @@ def _dates_in(text: str) -> list[str]:
     ]
 
 
+#: a reporting unit-of-scale word — swapping one (crore ↔ million) mis-states
+#: every figure under it by orders of magnitude while the digits are untouched
+_SCALE_WORD_RE = re.compile(
+    r"\b(crores?|millions?|lakhs?|lac|billions?|thousand)\b", re.I
+)
+
+
+def _scale_unit_swap(html_sent: str, pdf_snippet: str) -> tuple[str, str] | None:
+    """``(html_unit, pdf_unit)`` if the two texts are identical APART from a
+    reporting-unit word, else ``None``.
+
+    A caption changed from "(in ₹ crore)" to "(in ₹ million)" leaves every
+    digit unchanged, so the block otherwise matches — this isolates that the
+    only difference is the scale word.
+    """
+    hu = [m.group(0).lower().rstrip("s") for m in _SCALE_WORD_RE.finditer(html_sent)]
+    pu = [m.group(0).lower().rstrip("s") for m in _SCALE_WORD_RE.finditer(pdf_snippet)]
+    if not hu or not pu or hu == pu:
+        return None
+    blank = lambda s: canonical(_SCALE_WORD_RE.sub(" unit ", s), letters_only=True)
+    if blank(html_sent) == blank(pdf_snippet):
+        return (", ".join(dict.fromkeys(hu)), ", ".join(dict.fromkeys(pu)))
+    return None
+
+
 #: a scale word that makes a small number a material amount ("8 crore")
 _SCALE_AFTER = re.compile(
     r"\s*(crore|crores|lakh|lakhs|lac|million|millions|billion|billions|"
@@ -754,6 +779,15 @@ class Annotator:
                 "words appear there) but the table arrangement/order differs — "
                 "a layout artifact; a quick glance confirms it."
             ), "layout"
+        unit_swap = _scale_unit_swap(sentence, snippet)
+        if unit_swap is not None:
+            hu, pu = unit_swap
+            return "error", (
+                f"Unit of scale — this matches the PDF except for the reporting "
+                f"unit: the HTML says “{hu}” where the PDF says “{pu}”. Every "
+                "figure under this heading would be mis-scaled by orders of "
+                f"magnitude. HTML: “{_shorten(sentence)}”; PDF {page}: “{snippet}”."
+            ), "discrepancy"
         if ratio >= FUZZY_REVIEW_RATIO:
             return "review", (
                 f"Close but not identical to the PDF (similarity {ratio:.0%}). "
