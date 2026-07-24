@@ -1101,7 +1101,7 @@ def _collect_block_index(root) -> list[dict]:
 
 _CSS = """
 .secv-num-ok { background: #52d05c; border-radius: 2px; padding: 0 1px; }
-.secv-num-minor { border-bottom: 1px dotted #9aa0a6; }
+.secv-num-minor { background: #fff200; border-radius: 2px; padding: 0 1px; }
 .secv-num-bad { background: #ff6b6b; outline: 2px solid #a00000; border-radius: 2px;
                 font-weight: bold; padding: 0 1px; }
 .secv-num-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
@@ -1416,7 +1416,7 @@ figure-bearing rows.{" The remainder:" if skip_bits else ""}</li>
         '<span class="secv-text-warn">amber = check wording</span> · '
         + ('<span class="secv-num-review">blue = check by eye</span> · '
            if zone_counts is not None else '')
-        + '<span class="secv-num-minor">underlined</span> = small/immaterial '
+        + '<span class="secv-num-minor">bright yellow</span> = small/immaterial '
           'value (list marker, year, sub-100 count) — present in the PDF but '
           'not independently verified, so never stamped green · '
         + 'hover anything coloured for the exact reason.</p>'
