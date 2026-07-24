@@ -597,6 +597,57 @@ class Annotator:
             "verify against the PDF."
         ), "discrepancy"
 
+    def _check_verbatim_block_order(self, doc_text: str) -> None:
+        """Catch a verbatim block placed where a near-identical one belongs.
+
+        Two sentences with the SAME words but DIFFERENT figures (a note copied
+        for two periods — "… year ended March 31 2026 … 34,764 …" vs "… 2025 …
+        31,998 …") both match the PDF verbatim, so each is stamped green; if
+        they are SWAPPED, nothing else notices because every word and figure
+        still exists.  Group the HTML's sentences by their words alone; within
+        a group whose members differ only in figures and each occur once in
+        the PDF, the HTML order must match the PDF order — any inversion is a
+        block sitting in the wrong period's place.  (Measured zero false
+        positives on the reference filings: only same-word/different-figure
+        pairs are compared, never the document's ordinary reordered prose.)
+        """
+        from collections import defaultdict
+
+        from .coverage import _lis_indices
+
+        pdfc = self.corpus.alnum.canon
+        groups: dict[str, list[tuple[int, str, str]]] = defaultdict(list)
+        for idx, sent in enumerate(split_sentences(doc_text)):
+            letters = canonical(sent, letters_only=True)
+            if len(letters) < 40:
+                continue
+            groups[letters].append((idx, canonical(sent), sent))
+        for items in groups.values():
+            if len({a for _i, a, _s in items}) < 2:
+                continue  # all identical → not a figures-only variation
+            located = []
+            for _i, alnum, sent in items:
+                p = pdfc.find(alnum)
+                if p >= 0 and pdfc.find(alnum, p + 1) == -1:
+                    located.append((p, sent))  # unique in the PDF
+            if len(located) < 2:
+                continue
+            keep = set(_lis_indices([p for p, _s in located]))
+            for j, (p, sent) in enumerate(located):
+                if j in keep:
+                    continue
+                self._new_issue(
+                    "block-order",
+                    "error",
+                    _shorten(sent),
+                    "Block out of place — this sentence matches the PDF "
+                    "word-for-word, but a near-identical sentence that differs "
+                    "only in its figures sits in the PDF at this position "
+                    "instead. Two period versions of a note may have been "
+                    "swapped, so the figures here belong to the wrong period. "
+                    f"Verify placement: “{_shorten(sent)}”.",
+                )
+
     def _check_sentence(self, sentence: str) -> tuple[str, str, str]:
         """Return ``(status, remark, category)``.
 
@@ -870,6 +921,7 @@ class Annotator:
         self._annotate_numbers(soup, root)
         self._sign_census()
         self._identifier_census()
+        self._check_verbatim_block_order(root.get_text(" "))
         if self._at_least("alpha"):
             self._run_phase1()
         # Phases 2/3 parse a pristine copy of the HTML: the number/block

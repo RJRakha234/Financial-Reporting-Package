@@ -451,3 +451,39 @@ def test_spurious_edge_match_not_flagged():
     html = [[("aaaaaa", ["1"]), ("eeeeee", ["5"]), ("bbbbbb", ["2"]),
              ("cccccc", ["3"]), ("dddddd", ["4"])]]
     assert list(_row_sequence_findings(html, geom)) == []
+
+
+# --- verbatim block placed where a near-identical (other-period) one belongs -
+
+def test_swapped_verbatim_blocks_are_caught():
+    pdf = [
+        "Total income for the year ended March 31 2026 was 34,764 crore reported here.",
+        "Some unrelated paragraph sitting between the two blocks for separation here now.",
+        "Total income for the year ended March 31 2025 was 31,998 crore reported here.",
+    ]
+    # the two period versions are swapped (each is verbatim-present, both green)
+    html = (
+        "<p>Total income for the year ended March 31 2025 was 31,998 crore reported here.</p>"
+        "<p>Some unrelated paragraph sitting between the two blocks for separation here now.</p>"
+        "<p>Total income for the year ended March 31 2026 was 34,764 crore reported here.</p>"
+    )
+    r = Annotator(make_corpus(pdf), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "r.pdf", "d.html")
+    assert [i for i in r.issues if i.kind == "block-order"], \
+        "two verbatim blocks swapped by period must be caught"
+
+
+def test_correctly_ordered_period_blocks_not_flagged():
+    pdf = [
+        "Total income for the year ended March 31 2026 was 34,764 crore reported here.",
+        "Some unrelated paragraph sitting between the two blocks for separation here now.",
+        "Total income for the year ended March 31 2025 was 31,998 crore reported here.",
+    ]
+    html = (
+        "<p>Total income for the year ended March 31 2026 was 34,764 crore reported here.</p>"
+        "<p>Some unrelated paragraph sitting between the two blocks for separation here now.</p>"
+        "<p>Total income for the year ended March 31 2025 was 31,998 crore reported here.</p>"
+    )
+    r = Annotator(make_corpus(pdf), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "r.pdf", "d.html")
+    assert [i for i in r.issues if i.kind == "block-order"] == []
