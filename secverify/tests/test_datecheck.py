@@ -487,3 +487,20 @@ def test_correctly_ordered_period_blocks_not_flagged():
     r = Annotator(make_corpus(pdf), level="sigma", pdf_paths=["d.pdf"],
                   strict=True).run(html, "r.pdf", "d.html")
     assert [i for i in r.issues if i.kind == "block-order"] == []
+
+
+def test_cross_document_leakage_is_caught():
+    # a condensed-section cell wrongly carries the annual value (which exists
+    # in the annual section); the correct condensed value then goes missing.
+    pdf = [
+        "Quarterly segment revenue was 5,082 for the reporting period here now.",
+        "Annual segment revenue reported was 48,211 for the full year here now.",
+    ]
+    html = (
+        "<p>Quarterly segment revenue was 48,211 for the reporting period here now.</p>"
+        "<p>Annual segment revenue reported was 48,211 for the full year here now.</p>"
+    )
+    r = Annotator(make_corpus(pdf), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "r.pdf", "d.html")
+    assert [i for i in r.issues if i.kind == "omission"], \
+        "a value leaked from the other document must be caught (correct value missing)"
