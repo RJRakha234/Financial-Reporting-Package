@@ -317,3 +317,52 @@ def test_matching_units_not_flagged():
             "<p>Total assets 1,55,967 1,48,903</p>")
     r = Annotator(corpus).run(html, "r.pdf", "d.html")
     assert [i for i in r.issues if i.kind == "unit-scale"] == []
+
+
+# --- segment table: swap where each segment appears twice (revenue+profit) ---
+
+from secverify.grid import _row_sequence_findings
+
+_SEG_GEOM = [
+    ("financialservices", ["13463", "12976"]), ("manufacturing", ["7668", "7358"]),
+    ("energy", ["6452", "6114"]), ("retail", ["6172", "5958"]),
+    ("communication", ["5791", "5752"]), ("lifesciences", ["3842", "3393"]),
+    ("hitech", ["3710", "3558"]), ("allothersegments", ["1113", "1293"]),
+    ("financialservices", ["3662", "3410"]), ("manufacturing", ["1685", "1541"]),
+    ("energy", ["1576", "1548"]), ("retail", ["1701", "1811"]),
+    ("communication", ["1180", "1027"]), ("lifesciences", ["619", "659"]),
+    ("hitech", ["911", "930"]), ("allothersegments", ["75", "241"]),
+]
+
+
+def test_segment_swap_with_repeated_labels_is_caught():
+    # Life Sciences <-> Hi-Tech swapped in the revenue section only; the labels
+    # repeat (revenue + profit) so only the (label, values) key disambiguates.
+    html = [[
+        ("financialservices", ["13463", "12976"]), ("manufacturing", ["7668", "7358"]),
+        ("energy", ["6452", "6114"]), ("retail", ["6172", "5958"]),
+        ("communication", ["5791", "5752"]),
+        ("hitech", ["3710", "3558"]), ("lifesciences", ["3842", "3393"]),
+        ("allothersegments", ["1113", "1293"]),
+        ("financialservices", ["3662", "3410"]), ("manufacturing", ["1685", "1541"]),
+        ("energy", ["1576", "1548"]), ("retail", ["1701", "1811"]),
+        ("communication", ["1180", "1027"]), ("lifesciences", ["619", "659"]),
+        ("hitech", ["911", "930"]), ("allothersegments", ["75", "241"]),
+    ]]
+    found = list(_row_sequence_findings(html, _SEG_GEOM))
+    assert found, "a swap among repeated-label segment rows must be caught"
+
+
+def test_segment_correct_order_not_flagged():
+    html = [[(l, f) for l, f in _SEG_GEOM]]
+    assert list(_row_sequence_findings(html, _SEG_GEOM)) == []
+
+
+def test_lone_outlier_row_not_flagged():
+    # one row's single PDF match lands far away (a coincidental cross-table
+    # hit): a lone spike, not an adjacent transposition — must NOT flag.
+    geom = [("aaaaaa", ["1"]), ("bbbbbb", ["2"]), ("cccccc", ["3"]),
+            ("dddddd", ["4"]), ("eeeeee", ["5"])]
+    html = [[("aaaaaa", ["1"]), ("eeeeee", ["5"]), ("bbbbbb", ["2"]),
+             ("cccccc", ["3"]), ("dddddd", ["4"])]]
+    assert list(_row_sequence_findings(html, geom)) == []

@@ -333,9 +333,113 @@ def grid_compare(corpus, soup, pdf_paths):
         r
         for page in _load_pdf_pages(pdf_paths)
         for r in _parse_pdf_rows(page)
-        if r[0] and r[1] and len(r[0]) >= 12
+        if r[0] and r[1] and len(r[0]) >= 6
     ]
     yield from _row_swap_findings(html_tables, geom_rows)
+    yield from _row_sequence_findings(html_tables, geom_rows)
+
+
+#: two matched PDF rows more than this many rows apart belong to different
+#: table regions (e.g. a combined exhibit's condensed vs annual sections)
+_REGION_GAP = 30
+
+
+def _dominant_region(sorted_positions: list[int]) -> tuple[int, int]:
+    """``(lo, hi)`` of the largest run of positions with no gap > _REGION_GAP."""
+    if not sorted_positions:
+        return (0, -1)
+    best = (sorted_positions[0], sorted_positions[0])
+    run_start = prev = sorted_positions[0]
+    best_len = 1
+    cur_len = 1
+    for p in sorted_positions[1:]:
+        if p - prev > _REGION_GAP:
+            run_start = p
+            cur_len = 1
+        else:
+            cur_len += 1
+        if cur_len > best_len:
+            best_len = cur_len
+            best = (run_start, p)
+        prev = p
+    return best
+
+
+def _row_sequence_findings(html_tables, geom_rows):
+    """Row-ORDER check keyed on (label, values), from PDF word geometry.
+
+    A segment statement lists each segment TWICE — once under "Revenue by
+    business segment", again under "Segment profit" — so the label alone
+    ("Hi-Tech") is not unique and the label-only order check skips it.  But
+    the (label, values) pair IS unique — "Hi-Tech" revenue (3,710 …) differs
+    from "Hi-Tech" profit (911 …) — so keying on the pair disambiguates the
+    occurrences, and a swap of two rows inside one sub-section (Life Sciences
+    ↔ Hi-Tech) is caught.  Each such row is located at its single matching
+    PDF position; rows out of the longest increasing subsequence are flagged.
+    Only rows whose (label, values) pair is unique in BOTH the HTML table and
+    the whole PDF take part, so a coincidental repeat never mis-pairs.
+    """
+    if not geom_rows:
+        return
+    from .coverage import _lis_indices
+
+    gpos: dict[tuple, list[int]] = {}
+    for i, (l, f) in enumerate(geom_rows):
+        gpos.setdefault((l, tuple(f)), []).append(i)
+    emitted: set[tuple] = set()
+    for html_rows in html_tables:
+        hrows = [(l, tuple(f)) for l, f in html_rows if l and f and len(l) >= 6]
+        hcnt = Counter(hrows)
+        seq: list[tuple[int, tuple]] = []
+        for key in hrows:
+            if hcnt[key] != 1:
+                continue  # identical row twice in the HTML → ambiguous
+            g = gpos.get(key)
+            if not g or len(g) != 1:
+                continue  # not uniquely locatable in the PDF
+            seq.append((g[0], key))
+        if len(seq) < 4:
+            continue
+        # Restrict to the table's DOMINANT contiguous PDF region.  In a
+        # combined exhibit one HTML table's rows can match geometry rows in
+        # two far-apart sections (condensed AND annual); those cross-section
+        # jumps are not a reordering.  Cluster the matched positions by gap
+        # and keep only the largest run, so the sequence check sees one table
+        # region, not the leap between sections.
+        lo, hi = _dominant_region(sorted(g for g, _k in seq))
+        seq = [(g, key) for g, key in seq if lo <= g <= hi]
+        if len(seq) < 4:
+            continue
+        # Flag only a CLEAN ADJACENT TRANSPOSITION: two rows that are neighbours
+        # in the PDF appear in reversed order in the HTML, with the rows around
+        # them still in order.  This is the real "two rows swapped" shape
+        # (Life Sciences ↔ Hi-Tech) and excludes a lone row whose single PDF
+        # match lands far away (a coincidental cross-sub-table hit), which is
+        # what a longest-increasing-subsequence pass would wrongly flag.
+        pos = [g for g, _k in seq]
+        n = len(pos)
+        for i in range(n - 1):
+            key = seq[i][1]
+            if key in emitted:
+                continue
+            if not (0 < pos[i] - pos[i + 1] <= 4):
+                continue  # not two near-adjacent PDF rows reversed
+            if i > 0 and pos[i - 1] >= pos[i + 1]:
+                continue  # left neighbour not in order → not a clean swap
+            if i + 2 < n and pos[i] >= pos[i + 2]:
+                continue  # right neighbour not in order → not a clean swap
+            emitted.add(key)
+            lbl, figs = key
+            yield (
+                "grid-row-order",
+                "review",
+                f"{lbl}: {' '.join(figs)} out of sequence",
+                f"Row order — the row “{lbl}” (values {', '.join(figs)}, all "
+                "correct) is swapped with an adjacent row versus the PDF; a "
+                "segment or line item may have been reordered. Rows moved "
+                "inside a statement pass every value check, so verify the "
+                "sequence against the PDF.",
+            )
 
 
 def _row_swap_findings(html_tables, geom_rows):
