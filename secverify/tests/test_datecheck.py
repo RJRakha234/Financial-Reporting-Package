@@ -107,3 +107,31 @@ def test_short_unreadable_header_is_review_not_red():
     assert particulars, "Particulars should still be surfaced"
     assert particulars[0].severity == "review", "must be review, not a red error"
     assert "could not be located" in particulars[0].remark
+
+
+# --- immaterial numbers (list markers, years) must not be stamped green ----
+
+def test_list_marker_number_is_not_green():
+    # PDF numbers its notes a) b) c); the HTML renumbers them 1. 2. 3.
+    # The enumerator "1" must NOT be green (it recurs everywhere; presence is
+    # no validation, and here the PDF marker is "a", not "1").
+    # "1" recurs in the PDF (as it does in any real document), so the presence
+    # check would otherwise stamp it green.
+    pdf = ("a) The above information is extracted from the audited report.\n"
+           "Refer to note 1 for the accounting policy.")
+    html = "<ol><li>1. The above information is extracted from the audited report.</li></ol>"
+    r = Annotator(make_corpus([pdf])).run(html, "r.pdf", "d.html")
+    one = next(s for s in __import__("bs4").BeautifulSoup(r.html_out, "html.parser")
+               .find_all("span") if s.get_text(strip=True) == "1")
+    assert "secv-num-ok" not in (one.get("class") or []), "enumerator must not be green"
+    assert "secv-num-minor" in (one.get("class") or [])
+
+
+def test_material_small_amount_with_scale_word_stays_verified():
+    # "8 crore" is material even though 8 < 100 — it must remain a real figure
+    pdf = "The Company recognised a provision of 8 crore during the quarter."
+    html = "<p>The Company recognised a provision of 8 crore during the quarter.</p>"
+    r = Annotator(make_corpus([pdf])).run(html, "r.pdf", "d.html")
+    eight = next(s for s in __import__("bs4").BeautifulSoup(r.html_out, "html.parser")
+                 .find_all("span") if s.get_text(strip=True) == "8")
+    assert "secv-num-minor" not in (eight.get("class") or []), "8 crore is material"

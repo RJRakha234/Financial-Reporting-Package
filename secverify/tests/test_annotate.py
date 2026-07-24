@@ -47,10 +47,14 @@ def run(html: str):
 def test_full_reflection_goes_green_with_no_issues():
     result = run(FULL_HTML)
     assert not result.issues
-    assert result.figures_total == result.figures_ok == 6
+    # The four table figures are significant and verified; the header date's
+    # "30" and "2025" are immaterial (a day and a year) — present in the PDF
+    # but rendered neutral, not counted as verified figures and never green.
+    assert result.figures_total == result.figures_ok == 4
     assert result.coverage.missing == 0
     assert result.coverage.ok == result.coverage.total == 4
     assert 'class="secv-num-ok"' in result.html_out
+    assert 'class="secv-num-minor"' in result.html_out
     assert "secv-text-ok" in result.html_out
 
 

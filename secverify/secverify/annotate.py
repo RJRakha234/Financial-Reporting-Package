@@ -52,6 +52,35 @@ def _dates_in(text: str) -> list[str]:
     ]
 
 
+#: a scale word that makes a small number a material amount ("8 crore")
+_SCALE_AFTER = re.compile(
+    r"\s*(crore|crores|lakh|lakhs|lac|million|millions|billion|billions|"
+    r"thousand|trillion|mn|bn)\b",
+    re.I,
+)
+
+
+def _is_minor(text: str, start: int, end: int, key: str, token: str) -> bool:
+    """Whether a number is an immaterial list marker / year / bare count.
+
+    These recur throughout a document, so finding the digit "somewhere" in
+    the PDF is not validation — they must not be stamped green.  A number is
+    NOT minor (i.e. it is a real figure) when it carries a percent sign, a
+    currency symbol, or a scale word (crore/lakh/million…) — "8 crore" and
+    "54%" are material even though "8" and "54" are below 100.
+    """
+    if is_significant(key, token):
+        return False
+    t = token.strip()
+    if "%" in t or "₹" in t or "$" in t:
+        return False
+    if "₹" in text[max(0, start - 2):start] or "$" in text[max(0, start - 2):start]:
+        return False
+    if _SCALE_AFTER.match(text[end:end + 12]):
+        return False
+    return True
+
+
 @dataclass
 class Issue:
     num: int
@@ -165,12 +194,30 @@ class Annotator:
                 if start > 0 and text[start - 1].isalpha():
                     continue
                 html_number_keys.add(key)
-                self.result.figures_total += 1
                 ok = self.corpus.has_number(key)
                 if start > cursor:
                     fragments.append(text[cursor:start])
                 span = soup.new_tag("span")
                 span.string = token
+                # A small/immaterial value — a list marker, a year, or a
+                # sub-100 count — recurs all over the document, so finding the
+                # digit "somewhere" in the PDF is not validation.  Never stamp
+                # such a number green (that reads as "verified correct" when it
+                # is not — e.g. an HTML enumerator "1" whose PDF marker is
+                # "a)"): render it neutral and leave it out of the verified
+                # tally.  Only genuinely absent values still flag.
+                if ok and _is_minor(text, start, end, key, token):
+                    span["class"] = "secv-num-minor"
+                    span["title"] = (
+                        "Small/immaterial value (below 100, a year, or a list "
+                        "marker). Present in the PDF but not independently "
+                        "verified — check by eye if it matters."
+                    )
+                    fragments.append(span)
+                    cursor = end
+                    replaced = True
+                    continue
+                self.result.figures_total += 1
                 if ok:
                     self.result.figures_ok += 1
                     pages = self.corpus.pages_for_number(key)
@@ -1054,6 +1101,7 @@ def _collect_block_index(root) -> list[dict]:
 
 _CSS = """
 .secv-num-ok { background: #52d05c; border-radius: 2px; padding: 0 1px; }
+.secv-num-minor { border-bottom: 1px dotted #9aa0a6; }
 .secv-num-bad { background: #ff6b6b; outline: 2px solid #a00000; border-radius: 2px;
                 font-weight: bold; padding: 0 1px; }
 .secv-num-review { background: #7cb8ff; outline: 1px solid #1560c0; border-radius: 2px;
@@ -1368,6 +1416,9 @@ figure-bearing rows.{" The remainder:" if skip_bits else ""}</li>
         '<span class="secv-text-warn">amber = check wording</span> · '
         + ('<span class="secv-num-review">blue = check by eye</span> · '
            if zone_counts is not None else '')
+        + '<span class="secv-num-minor">underlined</span> = small/immaterial '
+          'value (list marker, year, sub-100 count) — present in the PDF but '
+          'not independently verified, so never stamped green · '
         + 'hover anything coloured for the exact reason.</p>'
     )
 
