@@ -1,0 +1,12 @@
+pyyaml>=6.0        # config parsing (required)
+
+# Mail backend — install the one you use:
+msal>=1.28         # Microsoft Graph backend (with requests)
+requests>=2.31     # Microsoft Graph backend
+#   (the IMAP backend uses only the Python standard library — no extra install)
+
+# Portal downloader (browser automation). After installing, run:
+#   playwright install chromium
+playwright>=1.44
+
+pytest>=7.0        # only needed to run the tests

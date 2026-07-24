@@ -1,0 +1,52 @@
+# reportbot configuration — copy to config.yaml and fill in.
+# Secrets use ${ENV_VAR} and are read from the environment (see .env.example),
+# so this file is safe to commit; config.yaml (with real values) is git-ignored.
+
+poll_interval_seconds: 60          # how often to check the mailbox
+download_dir: ./downloads          # reports are saved under here, per trigger
+state_file: ./reportbot_state.json # remembers handled emails (avoids re-downloads)
+
+mail:
+  backend: graph                   # "graph" (Microsoft 365 / Outlook.com) or "imap"
+  folder: Inbox
+  lookback_days: 1                 # ignore mail older than this on the first run
+
+  # --- Microsoft Graph (backend: graph) ---
+  # Azure AD app registration with the Mail.Read *application* permission.
+  tenant_id: ${GRAPH_TENANT_ID}
+  client_id: ${GRAPH_CLIENT_ID}
+  client_secret: ${GRAPH_CLIENT_SECRET}
+  user: you@yourcompany.com        # the mailbox to read
+
+  # --- IMAP (backend: imap) ---
+  host: outlook.office365.com
+  port: 993
+  username: ${IMAP_USERNAME}       # usually your email address
+  password: ${IMAP_PASSWORD}       # an app password, not your login password
+
+# When any of these rules matches an incoming email, the portal download runs.
+# A rule fires only if ALL of its listed conditions hold.
+triggers:
+  - name: daily-report
+    from_contains:
+      - reports@portal.example.com
+    subject_contains:
+      - "Report ready"
+
+portal:
+  login_url: https://portal.example.com/login
+  reports_url: https://portal.example.com/reports
+  username: ${PORTAL_USERNAME}
+  password: ${PORTAL_PASSWORD}
+  headless: true
+  timeout_ms: 30000
+  # CSS selectors for the login form + the download control. Adjust to match
+  # the real portal (right-click element -> Inspect to find them).
+  selectors:
+    username: "#username"
+    password: "#password"
+    submit: "button[type=submit]"
+    download: "a.download-report"
+  # Optional: if the report is a direct link in the email, put a regex here with
+  # a capture group for the URL, and the bot fetches it instead of navigating.
+  # link_regex: "(https://portal\\.example\\.com/download/\\S+)"

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Never commit real secrets or downloaded reports
+.env
+config.yaml
+downloads/
+reportbot_state.json
+*.state.json
