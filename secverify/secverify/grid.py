@@ -7,10 +7,16 @@ comes straight from ``<table><tr><td>``.  The two grids are then aligned —
 rows by label *sequence* (so short/duplicate labels are disambiguated by
 position, not uniqueness) — and compared cell by cell.
 
-The whole thing is behind a **confidence gate**: a table is compared only
-when its rows align cleanly (most labels match in order); otherwise it is
-skipped and the base text checks apply.  Asserting only on confidently
-aligned tables is what keeps this false-positive-free.
+Findings are **tiered by confidence, never suppressed by it**.  A long-labelled
+row at primary-statement width is a hard ``error``; a shorter label, an unusual
+column count, or a position that could only be matched outside the table's own
+region is reported at the ``review``/``caution`` tier instead.  What a low
+confidence must never do is silence the check: a check that quietly declines is
+indistinguishable from a check that passed, and that is the one outcome able to
+hide a real error.  Rows the grid genuinely cannot compare (the PDF splits the
+columns differently, the label is too generic to locate) are therefore counted
+and named in the *unchecked ledger* emitted at the end of :func:`grid_compare`,
+so the residue needing human eyes is explicit rather than invisible.
 """
 
 from __future__ import annotations
@@ -25,18 +31,20 @@ from .textnorm import canonical
 #: a table must have at least this many figure-bearing rows to be treated as
 #: a financial statement worth grid-comparing
 MIN_STATEMENT_ROWS = 5
-#: minimum share of HTML rows that must align to a PDF row before ANY cell in
-#: the table is compared (the confidence gate)
-MIN_ALIGN_RATIO = 0.85
-#: a row pair is only compared when the labels match at least this well
+#: fuzzy-match threshold for pairing a HTML row label with a PDF one when no
+#: exact canonical match exists (tolerates parsing variation)
 MIN_ROW_LABEL_RATIO = 0.95
 #: min label length (letters) for a row to join the row-ORDER sequence.
 #: Long enough to exclude ultra-generic labels ("total") that could mis-
 #: anchor, short enough to include real line items like "Hi-Tech"/"Retail"
-#: so an adjacent-row swap (Life Sciences <-> Hi-Tech) is caught. The
-#: uniqueness guards below (unique in the HTML table AND in the PDF window)
-#: are what keep this false-positive-free.
+#: so an adjacent-row swap (Life Sciences <-> Hi-Tech) is caught.
 ROW_ORDER_MIN_LABEL = 6
+#: min label length (letters) for a row to be VALUE-compared at all.  Rows with
+#: a longer label (>= 12) are compared as hard errors; 6-11 letters are compared
+#: at the review tier.  Below this a label ("total", "net") cannot be located in
+#: the PDF with any confidence, so the row goes to the unchecked ledger — it is
+#: never dropped in silence.
+ROW_VALUE_MIN_LABEL = 6
 #: primary-statement rows — 2 periods (optionally a note-ref column already
 #: stripped).  A mismatch here is reported as a hard "error" (red).
 ALLOWED_FIG_COUNTS = (2, 3)
@@ -201,7 +209,8 @@ def grid_compare(corpus, soup, pdf_paths):
             for plbl, pf in pdf_rows:
                 if (
                     abs(len(plbl) - len(hlbl)) <= 3
-                    and SequenceMatcher(None, hlbl, plbl).ratio() >= 0.95
+                    and SequenceMatcher(None, hlbl, plbl).ratio()
+                    >= MIN_ROW_LABEL_RATIO
                 ):
                     cands.append(pf)
         return cands
@@ -216,20 +225,66 @@ def grid_compare(corpus, soup, pdf_paths):
     # false positives that per-table positional alignment produced (a coarse
     # region merges sub-tables whose same-named rows hold different figures).
     emitted: set[tuple] = set()
+    #: rows the grid check could not compare, tallied by reason so they are
+    #: reported as a visible inventory instead of vanishing (see the ledger
+    #: yielded below).  A skipped check must never be an invisible one.
+    unchecked: Counter = Counter()
+    unchecked_egs: dict[str, list[str]] = {}
+
+    def _note_unchecked(reason: str, label: str) -> None:
+        unchecked[reason] += 1
+        egs = unchecked_egs.setdefault(reason, [])
+        if len(egs) < 5 and label not in egs:
+            egs.append(label)
+
     for html_rows in html_tables:
         for hlbl, hfigs in html_rows:
             n = len(hfigs)
-            if len(hlbl) < 12 or "refertonote" in hlbl:
+            if not hlbl or not n or "refertonote" in hlbl:
                 continue
-            if n in ALLOWED_FIG_COUNTS:
+            if len(hlbl) < ROW_VALUE_MIN_LABEL:
+                # a 1-5 letter label ("total", "net") cannot be located in the
+                # PDF with any confidence — record it rather than drop it
+                _note_unchecked("label too short to locate", hlbl)
+                continue
+            # Confidence TIERING (not suppression).  A long label at primary-
+            # statement width is a hard error; a shorter label, or an unusual
+            # column count, is surfaced at the review tier.  Previously both of
+            # those were skipped outright, so a wrong value on a short-labelled
+            # row ("Hi-Tech", "Retail") produced no finding at all.
+            if len(hlbl) >= 12 and n in ALLOWED_FIG_COUNTS:
                 severity, wide = "error", False
-            elif n in WIDE_FIG_COUNTS:
+            elif len(hlbl) >= 12 and n in WIDE_FIG_COUNTS:
                 severity, wide = "caution", True
             else:
-                continue
+                severity, wide = "review", n >= min(WIDE_FIG_COUNTS)
             cands = [c for c in candidates(hlbl) if len(c) == n]
             if not cands:
-                continue  # label not locatable in the PDF → base checks apply
+                # No PDF row carries this label with this many figures.  Two
+                # very different situations, and conflating them is what made
+                # this branch silent:
+                #   * the label is nowhere in the PDF at all — the row may be
+                #     fabricated or renamed, so flag it;
+                #   * the label IS there but split across a different number of
+                #     columns — a parsing difference, not an error, so record it
+                #     in the ledger rather than raise a flag on every such row.
+                if candidates(hlbl):
+                    _note_unchecked("column count differs from the PDF", hlbl)
+                else:
+                    sig = (hlbl, ("__unlocated__",))
+                    if sig not in emitted:
+                        emitted.add(sig)
+                        yield (
+                            "grid-row-unlocated",
+                            "review",
+                            f"{hlbl}: {' '.join(hfigs)} — label not found in the PDF",
+                            f"Row not located — no line in the PDF carries the "
+                            f"label “{hlbl}”, so its figures ({', '.join(hfigs)}) "
+                            "could not be verified against a counterpart. The row "
+                            "may have been renamed, merged, or added. Confirm it "
+                            "exists in the source.",
+                        )
+                continue
             if any(c == hfigs for c in cands):
                 continue  # some PDF occurrence matches exactly → correct
             sig = (hlbl, tuple(hfigs))
@@ -269,7 +324,6 @@ def grid_compare(corpus, soup, pdf_paths):
     # PDF region by its unique-label rows; every row whose label occurs exactly
     # once in that region must then appear in the PDF's order.  Rows outside
     # the longest increasing subsequence are reported for review.
-    from collections import Counter
     from .coverage import _lis_indices
 
     hcount = Counter(l for rows in html_tables for l, f in rows if l and f)
@@ -284,6 +338,12 @@ def grid_compare(corpus, soup, pdf_paths):
             and len(pdf_pos.get(l, [])) == 1 and len(l) >= 10
         ]
         if len(anchors) < 2:
+            # the table cannot be pinned to a PDF region, so its row ORDER is
+            # not verified at all — record that rather than pass over it
+            _note_unchecked(
+                "row order unverified (table not locatable in the PDF)",
+                next((l for l, f in html_rows if l and f), "?"),
+            )
             continue
         apos = sorted(pdf_pos[l][0] for l in anchors)
         lo, hi = apos[0] - 8, apos[-1] + 8
@@ -297,12 +357,20 @@ def grid_compare(corpus, soup, pdf_paths):
                 #           SOCIE balance rows) — ambiguous, skip
             in_win = [p for p in pdf_pos.get(l, []) if lo <= p <= hi]
             if len(in_win) != 1:
-                continue  # not unambiguously locatable in this region
+                _note_unchecked("row position ambiguous in the PDF region", l)
+                continue
             seq.append((l, in_win[0], f))
         # two rows sharing one PDF position are the same ambiguity — drop both
         pos_count = Counter(p for _l, p, _f in seq)
+        for e in seq:
+            if pos_count[e[1]] != 1:
+                _note_unchecked("row position ambiguous in the PDF region", e[0])
         seq = [e for e in seq if pos_count[e[1]] == 1]
         if len(seq) < 3:
+            _note_unchecked(
+                "row order unverified (too few locatable rows)",
+                next((l for l, f in html_rows if l and f), "?"),
+            )
             continue
         keep = _lis_indices([p for _l, p, _f in seq])
         for idx, (l, p, f) in enumerate(seq):
@@ -338,6 +406,28 @@ def grid_compare(corpus, soup, pdf_paths):
     yield from _row_swap_findings(html_tables, geom_rows)
     yield from _row_sequence_findings(html_tables, geom_rows)
     yield from _transpose_order_findings(html_tables, geom_rows)
+
+    # The unchecked LEDGER.  Everything the grid checks could not compare is
+    # reported here as a single visible item, broken down by reason with
+    # examples.  A check that quietly declines is indistinguishable from a check
+    # that passed, which is the one failure mode that can hide a real error —
+    # so the declines are counted and named.
+    if unchecked:
+        total = sum(unchecked.values())
+        lines = "; ".join(
+            f"{reason}: {cnt} (e.g. {', '.join(unchecked_egs.get(reason, [])[:3])})"
+            for reason, cnt in unchecked.most_common()
+        )
+        yield (
+            "grid-unchecked-ledger",
+            "review",
+            f"{total} table rows could not be grid-verified",
+            f"Not verified by the table-grid checks — {total} rows, by reason: "
+            f"{lines}. These are neither passes nor failures: the grid check "
+            "could not compare them against the PDF, so nothing is asserted "
+            "about them. The text-level checks still apply to these rows; treat "
+            "this list as the residue that needs eyes.",
+        )
 
 
 #: two matched PDF rows more than this many rows apart belong to different
@@ -428,13 +518,17 @@ def _row_sequence_findings(html_tables, geom_rows):
         for idx, (g, key) in enumerate(seq):
             if idx in keep or key in emitted:
                 continue
+            # Confidence, not suppression.  A displaced row inside the in-order
+            # span is a clear reordering.  Beyond that span it is either a
+            # genuine move of the first/last row to the opposite end OR a
+            # spurious match in a different sub-table; the neighbours tell them
+            # apart (a row that truly belongs here has its PDF neighbour also
+            # present in this HTML table).  When the neighbours are foreign the
+            # finding is WEAKER — but it is still reported, at a lower tier,
+            # because staying silent is the one outcome that can hide a real
+            # move.  Only the wording changes, never the visibility.
+            weak = False
             if not (lo_k <= g <= hi_k):
-                # Beyond the in-order span — could be a genuine move of the
-                # first/last row to the opposite end, OR a spurious match in a
-                # different sub-table.  Tell them apart by the neighbours: a
-                # row that truly belongs here has the row directly above or
-                # below it in the PDF ALSO present in this HTML table; a
-                # cross-table coincidence sits among foreign rows.
                 nbrs = set()
                 if g > 0:
                     nl, nf = geom_rows[g - 1]
@@ -442,20 +536,33 @@ def _row_sequence_findings(html_tables, geom_rows):
                 if g + 1 < len(geom_rows):
                     nl, nf = geom_rows[g + 1]
                     nbrs.add((nl, tuple(nf)))
-                if not (nbrs & table_keys):
-                    continue  # foreign neighbours → spurious cross-table match
+                weak = not (nbrs & table_keys)
             emitted.add(key)
             lbl, figs = key
-            yield (
-                "grid-row-order",
-                "review",
-                f"{lbl}: {' '.join(figs)} out of sequence",
-                f"Row order — the row “{lbl}” (values {', '.join(figs)}, all "
-                "correct) sits in a different position within this table than "
-                "in the PDF; a segment or line item may have been reordered. "
-                "Rows moved inside a statement pass every value check, so "
-                "verify the sequence against the PDF.",
-            )
+            if weak:
+                yield (
+                    "grid-row-order-weak",
+                    "caution",
+                    f"{lbl}: {' '.join(figs)} — position could not be confirmed",
+                    f"Row order (low confidence) — the row “{lbl}” (values "
+                    f"{', '.join(figs)}) matched a PDF row that sits outside "
+                    "this table's own region, among unrelated rows. That is "
+                    "usually a coincidental match rather than a moved row, so "
+                    "this is reported as a caution rather than an error — but "
+                    "its position could not be positively confirmed, so check "
+                    "that this row sits where the PDF puts it.",
+                )
+            else:
+                yield (
+                    "grid-row-order",
+                    "review",
+                    f"{lbl}: {' '.join(figs)} out of sequence",
+                    f"Row order — the row “{lbl}” (values {', '.join(figs)}, all "
+                    "correct) sits in a different position within this table than "
+                    "in the PDF; a segment or line item may have been reordered. "
+                    "Rows moved inside a statement pass every value check, so "
+                    "verify the sequence against the PDF.",
+                )
 
 
 def _row_swap_findings(html_tables, geom_rows):

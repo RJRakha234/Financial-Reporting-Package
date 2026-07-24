@@ -14,6 +14,20 @@ def run(pages, html, level, pdf_paths=("dummy.pdf",)):
     )
 
 
+#: the unchecked LEDGER is an inventory of rows the grid check could not
+#: compare — informational, asserting neither pass nor fail — so it is not a
+#: "grid finding" for the purposes of these tests.
+_LEDGER = "grid-unchecked-ledger"
+
+
+def grid_findings(result):
+    """Grid findings that actually assert something, ledger excluded."""
+    return [
+        i for i in result.issues
+        if i.kind.startswith("grid") and i.kind != _LEDGER
+    ]
+
+
 # ---- alpha: date + identifier-association -------------------------------
 
 def test_alpha_flags_wrong_reporting_period():
@@ -79,7 +93,7 @@ def _stmt_html(pp="9868", pp2="10070"):
 
 def test_beta_clean_statement_has_no_grid_issue():
     r = run([_STMT], _stmt_html(), "beta")
-    assert not [i for i in r.issues if i.kind.startswith("grid")]
+    assert not grid_findings(r)
 
 
 def test_beta_catches_wrong_value_that_exists_elsewhere():
@@ -141,7 +155,7 @@ def _repeat_html(cur="100", cur2="200"):
 
 def test_beta_clean_repeated_label_no_issue():
     r = run([_REPEAT], _repeat_html(), "beta")
-    assert not [i for i in r.issues if i.kind.startswith("grid")]
+    assert not grid_findings(r)
 
 
 def test_beta_catches_wrong_value_on_repeated_label():
@@ -189,22 +203,22 @@ def _wide_html(p1="11", p2="22"):
 
 def test_wide_matrix_clean_no_issue():
     r = run([_WIDE], _wide_html(), "beta")
-    assert not [i for i in r.issues if i.kind.startswith("grid")]
+    assert not grid_findings(r)
 
 
 def test_wide_matrix_flagged_as_caution_not_error():
     # columns 1 and 2 of the profit row transposed inside a 5-column matrix
     r = run([_WIDE], _wide_html(p1="22", p2="11"), "beta")
-    grid = [i for i in r.issues if i.kind.startswith("grid")]
+    grid = grid_findings(r)
     assert grid, "wide-matrix mismatch should be surfaced"
     assert all(i.severity == "caution" and i.tier == "caution" for i in grid)
     # and it must NOT contaminate the red/act tier
-    assert not [i for i in r.issues if i.kind.startswith("grid") and i.severity == "error"]
+    assert not [i for i in grid_findings(r) if i.severity == "error"]
 
 
 def test_grid_off_below_beta():
     r = run([_STMT], _stmt_html(pp="47768"), "alpha")
-    assert not [i for i in r.issues if i.kind.startswith("grid")]
+    assert not grid_findings(r)
 
 
 # ---- sigma: hidden text -------------------------------------------------

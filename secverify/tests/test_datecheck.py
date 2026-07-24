@@ -358,15 +358,21 @@ def test_segment_correct_order_not_flagged():
     assert list(_row_sequence_findings(html, _SEG_GEOM)) == []
 
 
-def test_true_spurious_cross_table_match_not_flagged():
-    # a row whose single PDF match sits among FOREIGN rows (its PDF
-    # neighbours are not in this HTML table) is a coincidence, not a move.
+def test_spurious_cross_table_match_is_downgraded_not_silenced():
+    # A row whose single PDF match sits among FOREIGN rows (its PDF neighbours
+    # are not in this HTML table) is probably a coincidence rather than a move —
+    # so it is reported at the WEAKER caution tier.  It must still be reported:
+    # a guard may lower a finding's confidence but never delete it, because a
+    # silent decline is indistinguishable from a pass and can hide a real move.
     geom = [("aaaaaa", ["1"]), ("bbbbbb", ["2"]), ("cccccc", ["3"]),
             ("dddddd", ["4"]),
             ("foreignp", ["9"]), ("xrowxx", ["7"]), ("foreignq", ["8"])]
     html = [[("aaaaaa", ["1"]), ("xrowxx", ["7"]), ("bbbbbb", ["2"]),
              ("cccccc", ["3"]), ("dddddd", ["4"])]]
-    assert list(_row_sequence_findings(html, geom)) == []
+    found = list(_row_sequence_findings(html, geom))
+    assert found, "a low-confidence position must still be surfaced"
+    assert found[0][0] == "grid-row-order-weak"
+    assert found[0][1] == "caution", "weak evidence → caution, not error"
 
 
 # --- transposed matrix: segments across PDF COLUMNS, down HTML ROWS ----------
@@ -564,3 +570,65 @@ def test_caption_unit_swap_is_red():
             and i.severity == "error"]
     assert hits, "a caption unit swap must be flagged red"
     assert "million" in hits[0].remark and "crore" in hits[0].remark
+
+
+# --- a guard may downgrade a finding, never delete it ------------------------
+#
+# The tool previously abandoned a check whenever confidence was low, which is
+# indistinguishable from the check having passed — the one outcome that can hide
+# a real error.  These tests lock in the replacement rule: low confidence lowers
+# the tier or lands in the unchecked ledger, but something is always reported.
+
+_SEG_PDF_ROWS = ["Revenue by business segment\n"
+                 "Hi-Tech 3710 3558\nRetail 6172 5958\nEnergy 6452 6114\n"
+                 "Communication 5791 5752\nLife Sciences 3842 3393\n"]
+
+
+def _seg_table(rows):
+    return "<html><body><table>" + "".join(
+        "<tr><td>" + r[0] + "</td>" + "".join(f"<td>{c}</td>" for c in r[1:])
+        + "</tr>" for r in rows) + "</table></body></html>"
+
+
+_SEG_CORRECT = [("Hi-Tech", "3710", "3558"), ("Retail", "6172", "5958"),
+                ("Energy", "6452", "6114"), ("Communication", "5791", "5752"),
+                ("Life Sciences", "3842", "3393")]
+
+
+def _grid(pdf, html):
+    r = Annotator(make_corpus(pdf), level="beta", pdf_paths=["d.pdf"]).run(
+        html, "r.pdf", "d.html")
+    return [i for i in r.issues if i.kind.startswith("grid")]
+
+
+def test_short_label_row_is_value_checked():
+    # "Hi-Tech" is 6 letters.  The old `len(label) < 12` guard skipped every
+    # such row, so a wrong value on a segment line produced NO finding at all.
+    rows = [("Hi-Tech", "9999", "3558")] + _SEG_CORRECT[1:]
+    hits = [i for i in _grid(_SEG_PDF_ROWS, _seg_table(rows))
+            if i.kind == "grid-value"]
+    assert hits, "a wrong value on a short-labelled row must be flagged"
+    assert "hitech" in hits[0].excerpt
+    assert hits[0].severity == "review", "short label → review tier, not error"
+
+
+def test_clean_short_label_table_stays_silent():
+    assert _grid(_SEG_PDF_ROWS, _seg_table(_SEG_CORRECT)) == []
+
+
+def test_row_whose_label_is_absent_from_pdf_is_flagged():
+    rows = _SEG_CORRECT + [("Cloud Infrastructure", "2500", "2100")]
+    hits = [i for i in _grid(_SEG_PDF_ROWS, _seg_table(rows))
+            if i.kind == "grid-row-unlocated"]
+    assert hits, "a row whose label is nowhere in the PDF must be flagged"
+    assert "cloudinfrastructure" in hits[0].excerpt
+
+
+def test_incomparable_rows_land_in_the_unchecked_ledger():
+    # one value column vs the PDF's two — not comparable, but must not vanish
+    rows = [(l, a) for l, a, _b in _SEG_CORRECT]
+    led = [i for i in _grid(_SEG_PDF_ROWS, _seg_table(rows))
+           if i.kind == "grid-unchecked-ledger"]
+    assert led, "rows the grid cannot compare must be reported as an inventory"
+    assert "column count differs" in led[0].remark
+    assert "5 rows" in led[0].remark
