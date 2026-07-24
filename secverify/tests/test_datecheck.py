@@ -366,3 +366,63 @@ def test_lone_outlier_row_not_flagged():
     html = [[("aaaaaa", ["1"]), ("eeeeee", ["5"]), ("bbbbbb", ["2"]),
              ("cccccc", ["3"]), ("dddddd", ["4"])]]
     assert list(_row_sequence_findings(html, geom)) == []
+
+
+# --- broader structural moves: table relocation, non-adjacent row, column ----
+
+def _run_kinds(pdf, html):
+    r = Annotator(make_corpus(pdf), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(html, "r.pdf", "d.html")
+    return [i.kind for i in r.issues]
+
+
+def test_whole_table_relocated_is_caught():
+    pdf = [
+        "Note about the investments held by the group described in detail here now.",
+        "Quoted debt securities carried at amortized cost 5,000 6,000\n"
+        "Unquoted equity and preference securities held 7,000 8,000\n"
+        "Total investments carried at amortized cost 12,000 14,000",
+        "Another note about leases and their treatment described in detail here now.",
+        "A further note about deferred taxes and their treatment described in detail.",
+    ]
+    # the table is moved to AFTER the later paragraphs
+    html = (
+        "<p>Note about the investments held by the group described in detail here now.</p>"
+        "<p>Another note about leases and their treatment described in detail here now.</p>"
+        "<p>A further note about deferred taxes and their treatment described in detail.</p>"
+        "<table><tr><td>Quoted debt securities carried at amortized cost</td><td>5,000</td><td>6,000</td></tr>"
+        "<tr><td>Unquoted equity and preference securities held</td><td>7,000</td><td>8,000</td></tr>"
+        "<tr><td>Total investments carried at amortized cost</td><td>12,000</td><td>14,000</td></tr></table>"
+    )
+    assert "order" in _run_kinds(pdf, html), "a relocated table must be flagged"
+
+
+def test_non_adjacent_row_move_unique_labels_is_caught():
+    pdf = ["Big schedule\n" + "\n".join(
+        f"Line item {chr(97 + k)} long label {100 + k} {200 + k}" for k in range(16))]
+    order = list(range(16))
+    order.insert(1, order.pop(15))  # move the 16th row to 2nd
+    rows = "".join(
+        f"<tr><td>Line item {chr(97 + k)} long label</td>"
+        f"<td>{100 + k}</td><td>{200 + k}</td></tr>" for k in order)
+    assert "grid-row-order" in _run_kinds(pdf, f"<table>{rows}</table>")
+
+
+def test_column_swap_is_caught():
+    pdf = ["Movement schedule\n"
+           "Land holdings total 1,438 11,825 5,544 9,495 3,325 45 31,672\n"
+           "Additions in year 0 684 284 486 140 0 1,594\n"
+           "Deletions in year 0 2 35 402 39 1 479\n"
+           "Depreciation charge 0 113 91 279 60 0 543\n"
+           "Closing balance total 1,438 12,574 5,806 9,607 3,449 44 32,918"]
+    rows = [("Land holdings total", ["1,438", "11,825", "5,544", "9,495", "3,325", "45", "31,672"]),
+            ("Additions in year", ["0", "684", "284", "486", "140", "0", "1,594"]),
+            ("Deletions in year", ["0", "2", "35", "402", "39", "1", "479"]),
+            ("Depreciation charge", ["0", "113", "91", "279", "60", "0", "543"]),
+            ("Closing balance total", ["1,438", "12,574", "5,806", "9,607", "3,449", "44", "32,918"])]
+    def swapcol(v):
+        v = v[:]; c = v.pop(5); v.insert(1, c); return v  # move 6th col to 2nd
+    html = "<table>" + "".join(
+        "<tr><td>" + l + "</td>" + "".join(f"<td>{x}</td>" for x in swapcol(v)) + "</tr>"
+        for l, v in rows) + "</table>"
+    assert "grid-column-order" in _run_kinds(pdf, html)
