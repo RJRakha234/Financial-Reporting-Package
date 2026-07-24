@@ -135,3 +135,47 @@ def test_material_small_amount_with_scale_word_stays_verified():
     eight = next(s for s in __import__("bs4").BeautifulSoup(r.html_out, "html.parser")
                  .find_all("span") if s.get_text(strip=True) == "8")
     assert "secv-num-minor" not in (eight.get("class") or []), "8 crore is material"
+
+
+# --- adjacent row-order swap (Life Sciences <-> Hi-Tech) -------------------
+
+_SEG_PDF = (
+    "Revenue by business segment\n"
+    "Financial Services 13,463 12,976\nManufacturing 7,668 7,358\n"
+    "Energy, Utilities, Resources and Services 6,452 6,114\nRetail 6,172 5,958\n"
+    "Communication 5,791 5,752\nLife Sciences 3,842 3,393\nHi-Tech 3,710 3,558\n"
+    "All other segments 1,113 1,293\nTotal 48,211 46,402"
+)
+_ROWS = {
+    "fs": "<tr><td>Financial Services</td><td>13,463</td><td>12,976</td></tr>",
+    "mf": "<tr><td>Manufacturing</td><td>7,668</td><td>7,358</td></tr>",
+    "en": "<tr><td>Energy, Utilities, Resources and Services</td><td>6,452</td><td>6,114</td></tr>",
+    "rt": "<tr><td>Retail</td><td>6,172</td><td>5,958</td></tr>",
+    "co": "<tr><td>Communication</td><td>5,791</td><td>5,752</td></tr>",
+    "ls": "<tr><td>Life Sciences</td><td>3,842</td><td>3,393</td></tr>",
+    "ht": "<tr><td>Hi-Tech</td><td>3,710</td><td>3,558</td></tr>",
+    "ao": "<tr><td>All other segments</td><td>1,113</td><td>1,293</td></tr>",
+    "tt": "<tr><td>Total</td><td>48,211</td><td>46,402</td></tr>",
+}
+
+
+def _seg_html(order):
+    body = "<tr><td>Revenue by business segment</td></tr>" + "".join(_ROWS[k] for k in order)
+    return f"<table>{body}</table>"
+
+
+def _seg_run(order):
+    return Annotator(make_corpus([_SEG_PDF]), level="sigma", pdf_paths=["d.pdf"],
+                     strict=True).run(_seg_html(order), "r.pdf", "d.html")
+
+
+def test_row_order_swap_is_caught():
+    # Hi-Tech and Life Sciences swapped vs the PDF
+    r = _seg_run(["fs", "mf", "en", "rt", "co", "ht", "ls", "ao", "tt"])
+    assert [i for i in r.issues if i.kind == "grid-row-order"], \
+        "an adjacent row-order swap must be caught"
+
+
+def test_correct_row_order_not_flagged():
+    r = _seg_run(["fs", "mf", "en", "rt", "co", "ls", "ht", "ao", "tt"])
+    assert [i for i in r.issues if i.kind == "grid-row-order"] == []

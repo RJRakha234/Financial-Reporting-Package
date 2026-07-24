@@ -29,6 +29,13 @@ MIN_STATEMENT_ROWS = 5
 MIN_ALIGN_RATIO = 0.85
 #: a row pair is only compared when the labels match at least this well
 MIN_ROW_LABEL_RATIO = 0.95
+#: min label length (letters) for a row to join the row-ORDER sequence.
+#: Long enough to exclude ultra-generic labels ("total") that could mis-
+#: anchor, short enough to include real line items like "Hi-Tech"/"Retail"
+#: so an adjacent-row swap (Life Sciences <-> Hi-Tech) is caught. The
+#: uniqueness guards below (unique in the HTML table AND in the PDF window)
+#: are what keep this false-positive-free.
+ROW_ORDER_MIN_LABEL = 6
 #: primary-statement rows — 2 periods (optionally a note-ref column already
 #: stripped).  A mismatch here is reported as a hard "error" (red).
 ALLOWED_FIG_COUNTS = (2, 3)
@@ -274,7 +281,7 @@ def grid_compare(corpus, soup, pdf_paths):
         table_label_count = Counter(l for l, f in html_rows if l and f)
         seq: list[tuple[str, int, list[str]]] = []
         for l, f in html_rows:
-            if not (l and f) or len(l) < 10 or "refertonote" in l:
+            if not (l and f) or len(l) < ROW_ORDER_MIN_LABEL or "refertonote" in l:
                 continue
             if table_label_count[l] != 1:
                 continue  # label repeats in this table (dates strip out of
