@@ -426,3 +426,28 @@ def test_column_swap_is_caught():
         "<tr><td>" + l + "</td>" + "".join(f"<td>{x}</td>" for x in swapcol(v)) + "</tr>"
         for l, v in rows) + "</table>"
     assert "grid-column-order" in _run_kinds(pdf, html)
+
+
+def test_non_adjacent_move_in_repeated_label_table_is_caught():
+    # segment listed twice (revenue + profit); a segment moved SEVERAL places
+    # inside the revenue section — not an adjacent swap.
+    segs = ["financialservices", "manufacturing", "energy", "retail",
+            "communication", "lifesciences", "hitech", "allothersegments"]
+    rev = {s: [str(1000 + i), str(900 + i)] for i, s in enumerate(segs)}
+    prof = {s: [str(300 + i), str(200 + i)] for i, s in enumerate(segs)}
+    geom = [(s, rev[s]) for s in segs] + [(s, prof[s]) for s in segs]
+    rev_order = ["financialservices", "hitech", "manufacturing", "energy",
+                 "retail", "communication", "lifesciences", "allothersegments"]
+    html = [[(s, rev[s]) for s in rev_order] + [(s, prof[s]) for s in segs]]
+    found = list(_row_sequence_findings(html, geom))
+    assert found, "a non-adjacent move in a repeated-label table must be caught"
+
+
+def test_spurious_edge_match_not_flagged():
+    # a row whose only PDF match sits BEYOND the table's in-order span (a
+    # cross-sub-table coincidence) must not be flagged.
+    geom = [("aaaaaa", ["1"]), ("bbbbbb", ["2"]), ("cccccc", ["3"]),
+            ("dddddd", ["4"]), ("eeeeee", ["5"])]
+    html = [[("aaaaaa", ["1"]), ("eeeeee", ["5"]), ("bbbbbb", ["2"]),
+             ("cccccc", ["3"]), ("dddddd", ["4"])]]
+    assert list(_row_sequence_findings(html, geom)) == []

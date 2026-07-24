@@ -410,24 +410,24 @@ def _row_sequence_findings(html_tables, geom_rows):
         seq = [(g, key) for g, key in seq if lo <= g <= hi]
         if len(seq) < 4:
             continue
-        # Flag only a CLEAN ADJACENT TRANSPOSITION: two rows that are neighbours
-        # in the PDF appear in reversed order in the HTML, with the rows around
-        # them still in order.  This is the real "two rows swapped" shape
-        # (Life Sciences ↔ Hi-Tech) and excludes a lone row whose single PDF
-        # match lands far away (a coincidental cross-sub-table hit), which is
-        # what a longest-increasing-subsequence pass would wrongly flag.
+        # Flag rows that fall out of the longest increasing subsequence — a
+        # reordered row, at ANY distance (a full row moved from the 16th line
+        # to the 2nd).  The one shape that must NOT flag is a lone row whose
+        # single PDF match lands in a DIFFERENT sub-table beyond this one (the
+        # "service cost" coincidence): guard on the displaced row's position
+        # lying WITHIN the span of the rows that stayed in order — a genuine
+        # interior move does; a spurious edge match sits beyond the span.
         pos = [g for g, _k in seq]
-        n = len(pos)
-        for i in range(n - 1):
-            key = seq[i][1]
-            if key in emitted:
+        keep = set(_lis_indices(pos))
+        kept = [pos[i] for i in keep]
+        if not kept:
+            continue
+        lo_k, hi_k = min(kept), max(kept)
+        for idx, (g, key) in enumerate(seq):
+            if idx in keep or key in emitted:
                 continue
-            if not (0 < pos[i] - pos[i + 1] <= 4):
-                continue  # not two near-adjacent PDF rows reversed
-            if i > 0 and pos[i - 1] >= pos[i + 1]:
-                continue  # left neighbour not in order → not a clean swap
-            if i + 2 < n and pos[i] >= pos[i + 2]:
-                continue  # right neighbour not in order → not a clean swap
+            if not (lo_k <= g <= hi_k):
+                continue  # beyond the in-order span → spurious cross-table match
             emitted.add(key)
             lbl, figs = key
             yield (
@@ -435,10 +435,10 @@ def _row_sequence_findings(html_tables, geom_rows):
                 "review",
                 f"{lbl}: {' '.join(figs)} out of sequence",
                 f"Row order — the row “{lbl}” (values {', '.join(figs)}, all "
-                "correct) is swapped with an adjacent row versus the PDF; a "
-                "segment or line item may have been reordered. Rows moved "
-                "inside a statement pass every value check, so verify the "
-                "sequence against the PDF.",
+                "correct) sits in a different position within this table than "
+                "in the PDF; a segment or line item may have been reordered. "
+                "Rows moved inside a statement pass every value check, so "
+                "verify the sequence against the PDF.",
             )
 
 
