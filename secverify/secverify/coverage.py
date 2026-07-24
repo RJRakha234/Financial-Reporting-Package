@@ -994,6 +994,14 @@ _UNIT_RE = re.compile(
     r"in\s+(?:₹|rs\.?|inr|us\$|\$|usd)\s*(crore|million|lakh|thousand|billion)",
     re.I,
 )
+#: a unit-of-scale declared inside a parenthesised caption — "(in ₹ million)",
+#: "(In crore)", "(₹ crores)" — anchored on the "(" so a prose amount ("earned
+#: 8 crore") is never mistaken for a reporting-unit declaration.
+_UNIT_CAPTION_RE = re.compile(
+    r"\(\s*(?:in\s+)?(?:₹|rs\.?|inr|us\$|\$|usd)?\s*"
+    r"(crore|million|lakh|thousand|billion)s?\b",
+    re.I,
+)
 
 
 def _unit_scale_check(pages_raw, html, label_of, result: CoverageResult) -> None:
@@ -1014,8 +1022,10 @@ def _unit_scale_check(pages_raw, html, label_of, result: CoverageResult) -> None
         u.lower(): len(re.findall(rf"\b{u}\b", html_text))
         for u in ("crore", "million", "lakh", "thousand", "billion")
     }
+    forward_flagged = False
     for unit, pdf_n in pdf_units.items():
         if html_units.get(unit, 0) == 0:
+            forward_flagged = True
             other = [u for u in html_units if html_units[u] and u != unit]
             result.review += 1
             result.total += 1
@@ -1037,3 +1047,34 @@ def _unit_scale_check(pages_raw, html, label_of, result: CoverageResult) -> None
                     issue_kind="unit-scale",
                 )
             )
+
+    # Reverse direction: a unit declared in an HTML *caption* — "(in ₹
+    # million)", "(In crore)" — that appears nowhere in the PDF.  This catches
+    # a single table silently rescaled (one "(in ₹ crore)" flipped to
+    # "(… million)") in an otherwise single-unit filing, which the forward,
+    # document-wide check misses because the original unit still appears in the
+    # other tables.  Caption-anchored so a prose amount ("earned 8 crore")
+    # never triggers it, and only flags a unit *type* the PDF never uses at all
+    # — so extraction count noise cannot false-alarm.
+    all_pdf = " ".join(pages_raw).lower()
+    seen_rev: set[str] = set()
+    for m in [] if forward_flagged else _UNIT_CAPTION_RE.finditer(html.visible_text):
+        unit = m.group(1).lower().rstrip("s")
+        if unit in seen_rev or unit in all_pdf:
+            continue
+        seen_rev.add(unit)
+        result.review += 1
+        result.total += 1
+        result.lines.append(
+            CoverageLine(
+                0,
+                f"(… {unit})",
+                "missing",
+                f"Unit of scale — an HTML caption reports figures “in {unit}”, "
+                f"but “{unit}” does not appear anywhere in the PDF. A table may "
+                "have been rescaled (e.g. crore ↔ million) while its figures "
+                "were left unchanged — every value in it would then be "
+                "mis-stated. Verify the reporting unit against the PDF.",
+                issue_kind="unit-scale",
+            )
+        )

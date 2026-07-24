@@ -295,3 +295,25 @@ def test_count_mismatch_not_flagged():
         ("commercialpaper", ["9999", "8888"]),
     ]
     assert _swaps(html_tables, geom_rows) == []
+
+
+# --- unit-scale: reverse direction (a caption unit absent from the PDF) ------
+
+def test_unit_absent_from_pdf_is_caught():
+    # PDF reports in crore; the HTML caption says "lakh", which the PDF never
+    # uses — a single table silently rescaled.
+    corpus = make_corpus(["Financial statements (In crore)\nTotal assets 1,55,967 1,48,903"])
+    html = ("<p>Financial statements (In lakh)</p>"
+            "<p>Total assets 1,55,967 1,48,903</p>")
+    r = Annotator(corpus).run(html, "r.pdf", "d.html")
+    units = [i for i in r.issues if i.kind == "unit-scale"]
+    assert units, "an HTML caption unit absent from the PDF must be flagged"
+    assert "lakh" in units[0].remark
+
+
+def test_matching_units_not_flagged():
+    corpus = make_corpus(["Financial statements (In crore)\nTotal assets 1,55,967 1,48,903"])
+    html = ("<p>Financial statements (In crore)</p>"
+            "<p>Total assets 1,55,967 1,48,903</p>")
+    r = Annotator(corpus).run(html, "r.pdf", "d.html")
+    assert [i for i in r.issues if i.kind == "unit-scale"] == []
