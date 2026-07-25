@@ -632,3 +632,62 @@ def test_incomparable_rows_land_in_the_unchecked_ledger():
     assert led, "rows the grid cannot compare must be reported as an inventory"
     assert "column count differs" in led[0].remark
     assert "5 rows" in led[0].remark
+
+
+# --- a whole LINE relocated inside one table --------------------------------
+#
+# Label and values travel together, so presence, row-value integrity and footing
+# all still pass (same rows, same figures, same totals). Row ORDER is the only
+# signal there is. Verified on a real 26-row balance-sheet extract for the
+# relocation distances below; pinned here so it cannot regress.
+
+def _bs_pdf(order):
+    labels = ["Cash and cash equivalents", "Current investments",
+              "Trade receivables", "Unbilled revenue", "Other current assets",
+              "Total current assets", "Property plant and equipment",
+              "Goodwill and other intangible assets", "Non current investments",
+              "Deferred tax assets net"]
+    vals = [(3202, 2861), (887, 1460), (3780, 3645), (1588, 1503),
+            (1787, 1890), (11244, 11359), (2223, 2235), (1666, 1505),
+            (1241, 1294), (601, 497)]
+    return ["Condensed Balance Sheet extract\n" + "\n".join(
+        f"{labels[i]} {vals[i][0]:,} {vals[i][1]:,}" for i in order)], labels, vals
+
+
+def _bs_html(order, labels, vals):
+    return "<html><body><table>" + "".join(
+        f"<tr><td>{labels[i]}</td><td>{vals[i][0]:,}</td>"
+        f"<td>{vals[i][1]:,}</td></tr>" for i in order
+    ) + "</table></body></html>"
+
+
+def _moved_kinds(order):
+    pdf, labels, vals = _bs_pdf(list(range(10)))
+    r = Annotator(make_corpus(pdf), level="sigma", pdf_paths=["d.pdf"],
+                  strict=True).run(_bs_html(order, labels, vals), "r.pdf", "d.html")
+    return {i.kind for i in r.issues}
+
+
+def test_line_six_relocated_to_line_three_is_caught():
+    order = list(range(10))
+    order.insert(3, order.pop(6))
+    assert any(k.startswith(("grid-row-order", "seq-")) for k in _moved_kinds(order))
+
+
+def test_adjacent_lines_swapped_is_caught():
+    order = list(range(10))
+    order[4], order[5] = order[5], order[4]
+    assert any(k.startswith(("grid-row-order", "seq-")) for k in _moved_kinds(order))
+
+
+def test_last_line_relocated_to_the_top_is_caught():
+    order = list(range(10))
+    order.insert(0, order.pop(9))
+    assert any(k.startswith(("grid-row-order", "seq-")) for k in _moved_kinds(order))
+
+
+def test_correct_line_order_stays_clean():
+    assert not {
+        k for k in _moved_kinds(list(range(10)))
+        if k.startswith(("grid-row-order", "seq-value", "seq-missing", "seq-extra"))
+    }

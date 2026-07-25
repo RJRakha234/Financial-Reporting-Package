@@ -90,6 +90,25 @@ def _marks_for(html_out: str, probe: str) -> set[str]:
     return marks
 
 
+def _statement_rows(soup):
+    """The figure-bearing data rows of the largest statement table in *soup*."""
+    best: list = []
+    for t in soup.find_all("table"):
+        idx = []
+        for tr in t.find_all("tr"):
+            cells = tr.find_all(["td", "th"], recursive=False)
+            if len(cells) < 3:
+                continue
+            texts = [c.get_text(" ", strip=True) for c in cells]
+            figs = [t2 for t2 in texts if re.fullmatch(r"\(?[\d,]+\.?\d*\)?", t2 or "x")]
+            label = next((t2 for t2 in texts if re.search(r"[A-Za-z]{4,}", t2)), "")
+            if label and len(figs) >= 2:
+                idx.append(tr)
+        if len(idx) > len(best):
+            best = idx
+    return best
+
+
 def _discover(html: str) -> list[Mutation]:
     """Mutations built from what THIS exhibit actually contains.
 
@@ -121,15 +140,14 @@ def _discover(html: str) -> list[Mutation]:
 
     # --- two sibling table rows carrying the same number of figures ------
     rows: list[tuple[str, list[str], str]] = []
-    for tr in soup.find_all("tr"):
-        cells = tr.find_all(["td", "th"], recursive=False)
-        if len(cells) < 3:
-            continue
-        texts = [c.get_text(" ", strip=True) for c in cells]
+    for tr in _statement_rows(soup):
+        texts = [
+            c.get_text(" ", strip=True)
+            for c in tr.find_all(["td", "th"], recursive=False)
+        ]
         figs = [t for t in texts if re.fullmatch(r"\(?[\d,]+\.?\d*\)?", t or "x")]
         label = next((t for t in texts if re.search(r"[A-Za-z]{4,}", t)), "")
-        if label and len(figs) >= 2:
-            rows.append((label, figs, str(tr)))
+        rows.append((label, figs, str(tr)))
 
     if rows:
         label, figs, raw_tr = rows[0]
@@ -143,6 +161,26 @@ def _discover(html: str) -> list[Mutation]:
                 M("swap", "comparative columns transposed in a row",
                   raw_tr, swapped, b.replace(",", ""))
             )
+    # A whole LINE relocated inside one table — label and values travelling
+    # together.  Presence, row-value integrity and footing all still pass (same
+    # rows, same figures, same totals), so row ORDER is the only signal there is.
+    # Built by DOM surgery rather than string splicing: sibling <tr>s are
+    # separated by spacer rows and whitespace, so "str(a) + str(b)" is not a
+    # substring of the document and a string swap silently does nothing.
+    if len(rows) >= 8:
+        for src, dst, what in ((6, 3, "line 6 relocated to line 3"),
+                               (5, 4, "adjacent lines swapped"),
+                               (len(rows) - 1, 1, "last line relocated to the top")):
+            s2 = BeautifulSoup(html, "html.parser")
+            r2 = _statement_rows(s2)
+            if max(src, dst) >= len(r2):
+                continue
+            r2[dst].insert_before(r2[src].extract())
+            out.append(
+                M("swap", f"whole line moved: {what}", html, str(s2), "",
+                  "label and values travel together — only order changes")
+            )
+
     if len(rows) >= 2:
         (l1, f1, tr1), (l2, f2, tr2) = rows[0], rows[1]
         # two rows exchange places (values stay correct, order wrong)
