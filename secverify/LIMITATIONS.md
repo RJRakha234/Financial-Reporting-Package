@@ -40,6 +40,23 @@ deleted / duplicated paragraph, shifted dates, a renamed label, content hidden
 by CSS. **All 20 were reported.** The command is in §6 so this can be repeated
 on any filing.
 
+**Three further error classes were closed after the measurements above, each
+found by stress-testing rather than by reading reports:**
+
+* **words moved across a paragraph boundary.** Canonical comparison strips
+  whitespace and punctuation into one continuous string, so moving two words
+  from one paragraph to the next produced a **byte-identical** document — no
+  check could have seen it. Paragraph boundaries are now anchored to PDF line
+  boundaries, which survive canonicalisation.
+* **a figure hidden by a stylesheet.** The hidden-content check only inspected
+  inline `style=` attributes, so `display:none` applied through a class passed
+  as verified while the reader saw a blank. Stylesheet rules, `overflow`
+  clipping and CSS-injected text (`content:'('`, which turns a positive into a
+  negative for the reader only) are now covered.
+* **a footnote marker or a date's day-of-month leaking into a row's key**,
+  which had silently excluded every footnote-marked segment row — Financial
+  Services, Retail, Communication, Life Sciences — from the order check.
+
 ---
 
 ## 3. The most significant limitation: row-order coverage is 71%
@@ -126,6 +143,13 @@ auditor's report as well as the statements, **pass both PDFs**:
 python -m secverify.toolsigma auditorsreport.pdf statement.pdf exhibit.htm
 ```
 
+**One PDF may cover more than one exhibit.** Our own AD PDF is a single file
+serving both `exv99w03` and `exv99w06`. Paired with either exhibit alone it
+correctly reports the other exhibit's content as not reflected — on `exv99w03`
+that is 21 red "omission" findings from page 16 onward, none of which are
+errors. Check whether a block of unreflected pages sits at the start or end of
+the PDF before treating omissions as real.
+
 **Read the findings list, not only the colours.** Blue and bright-yellow marks
 are "not verified", not "verified".
 
@@ -145,7 +169,7 @@ python tools/order_coverage.py statement.pdf exhibit.htm
 # Why is one specific row not order-checked?
 python tools/diagnose_row_order.py statement.pdf exhibit.htm --label "Life Sciences"
 
-# 164 regression tests
+# 174 regression tests
 python -m pytest -q
 ```
 
@@ -153,7 +177,7 @@ python -m pytest -q
 
 ## 7. Residual risk — stated plainly
 
-During development, **eight defects of one particular kind were found and
+During development, **eleven defects of one particular kind were found and
 fixed**: a check that silently declined to run, while the review copy looked
 fully green. Examples: footnote markers excluding every marked segment row from
 the order check; a date's day-of-month leaking into a row's figure key; the
@@ -161,7 +185,11 @@ prose symbol check disabled on every real filing because it tested for
 `<table>` membership when our exhibits nest prose inside layout tables.
 
 Each was invisible from the output. Each was found only by asking "what is
-**not** being checked?" — never by reading a report.
+**not** being checked?" — never by reading a report. The last of them was not
+even a faulty check: moving words across a paragraph boundary left the two
+documents byte-identical after canonicalisation, so the comparison itself could
+not distinguish them. That is the clearest illustration of why the honest
+position is a measured scope rather than a claim of correctness.
 
 The honest conclusion: **this class of defect should be expected to recur.** The
 mitigation is not a claim of correctness but the three commands in §6, which
