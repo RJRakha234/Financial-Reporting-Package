@@ -691,3 +691,56 @@ def test_correct_line_order_stays_clean():
         k for k in _moved_kinds(list(range(10)))
         if k.startswith(("grid-row-order", "seq-value", "seq-missing", "seq-extra"))
     }
+
+
+# --- footnote markers must not exclude a row from the order check -----------
+#
+# Found on a real segment note. A marked label ("Life Sciences (4)") parses the
+# marker as the row's first FIGURE in the HTML, where it sits in the label cell.
+# In the PDF the marker is a superscript, so it lands in a different vertical
+# band and is not part of the geometry row at all. The composite (label, values)
+# key therefore never matched, and every footnote-marked segment — Financial
+# Services, Retail, Communication, Life Sciences, All other segments — was
+# silently excluded from the order check, while unmarked Hi-Tech and
+# Manufacturing matched. A swap between a marked and an unmarked segment was
+# invisible: the marked row could not be flagged, and with it missing from the
+# sequence the unmarked one still looked in order.
+
+from secverify.grid import _strip_marker
+
+
+def test_marker_is_stripped_from_the_composite_key():
+    assert _strip_marker(("4", "2745", "2765")) == ("2745", "2765")
+    assert _strip_marker(("2745", "2765")) == ("2745", "2765")
+    # only LEADING single digits go; a real figure is never touched
+    assert _strip_marker(("2745", "4")) == ("2745", "4")
+    assert _strip_marker(("12", "2745")) == ("12", "2745")
+
+
+_SEG_MARKED = [
+    ("financialservices", ["1", "11796", "11614"]),
+    ("manufacturing", ["6804", "6527", "5778"]),
+    ("retail", ["2", "5651", "5440"]),
+    ("communication", ["3", "5097", "4798"]),
+    ("hitech", ["3296", "3397", "3147"]),
+    ("lifesciences", ["4", "2745", "2765"]),
+    ("allothersegments", ["5", "1148", "1076"]),
+]
+#: the PDF's geometry rows: the superscript marker is NOT part of the row
+_SEG_GEOM_NOMARK = [(l, [f for f in fs if len(f) > 1]) for l, fs in _SEG_MARKED]
+
+
+def test_marked_row_swap_is_caught():
+    # Life Sciences (marked) moved above Hi-Tech (unmarked) — the exact shape
+    # that showed all-green on a real filing.
+    html = [[(l, f) for l, f in _SEG_MARKED]]
+    i, j = 4, 5
+    html[0][i], html[0][j] = html[0][j], html[0][i]
+    found = list(_row_sequence_findings(html, _SEG_GEOM_NOMARK))
+    assert found, "a footnote-marked segment moving must be caught"
+    assert any("lifesciences" in f[2] or "hitech" in f[2] for f in found)
+
+
+def test_marked_rows_in_correct_order_stay_clean():
+    html = [[(l, f) for l, f in _SEG_MARKED]]
+    assert list(_row_sequence_findings(html, _SEG_GEOM_NOMARK)) == []

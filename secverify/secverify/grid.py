@@ -493,6 +493,23 @@ def _dominant_region(sorted_positions: list[int]) -> tuple[int, int]:
     return best
 
 
+#: a leading footnote/reference marker on a row label — "Life Sciences (4)".
+#: In the HTML it sits in the label cell and parses as the row's first figure;
+#: in the PDF it is a SUPERSCRIPT, so it lands in a different vertical band and
+#: is not part of the geometry row at all.  The composite (label, values) key
+#: then never matches and the row drops out of the order check silently.
+#: Observed on a real segment note: every footnote-marked segment — Financial
+#: Services, Retail, Communication, Life Sciences, All other segments — was
+#: excluded, while unmarked Hi-Tech and Manufacturing matched. A swap between a
+#: marked and an unmarked segment was therefore invisible.
+def _strip_marker(figs: tuple) -> tuple:
+    """Drop a leading single-digit footnote marker from a row's figures."""
+    out = list(figs)
+    while out and re.fullmatch(r"\d", out[0]):
+        out.pop(0)
+    return tuple(out)
+
+
 def _row_sequence_findings(html_tables, geom_rows):
     """Row-ORDER check keyed on (label, values), from PDF word geometry.
 
@@ -511,12 +528,19 @@ def _row_sequence_findings(html_tables, geom_rows):
         return
     from .coverage import _lis_indices
 
+    # Key on the marker-stripped figures so a footnote superscript cannot
+    # decide whether a row is order-checked.  Stripping is applied to BOTH
+    # sides, so a collision it might create simply makes the row non-unique and
+    # the existing uniqueness guards skip it — never a mismatch.
     gpos: dict[tuple, list[int]] = {}
     for i, (l, f) in enumerate(geom_rows):
-        gpos.setdefault((l, tuple(f)), []).append(i)
+        gpos.setdefault((l, _strip_marker(tuple(f))), []).append(i)
     emitted: set[tuple] = set()
     for html_rows in html_tables:
-        hrows = [(l, tuple(f)) for l, f in html_rows if l and f and len(l) >= 6]
+        hrows = [
+            (l, _strip_marker(tuple(f)))
+            for l, f in html_rows if l and f and len(l) >= 6
+        ]
         hcnt = Counter(hrows)
         seq: list[tuple[int, tuple]] = []
         for key in hrows:
@@ -569,10 +593,10 @@ def _row_sequence_findings(html_tables, geom_rows):
                 nbrs = set()
                 if g > 0:
                     nl, nf = geom_rows[g - 1]
-                    nbrs.add((nl, tuple(nf)))
+                    nbrs.add((nl, _strip_marker(tuple(nf))))
                 if g + 1 < len(geom_rows):
                     nl, nf = geom_rows[g + 1]
-                    nbrs.add((nl, tuple(nf)))
+                    nbrs.add((nl, _strip_marker(tuple(nf))))
                 weak = not (nbrs & table_keys)
             emitted.add(key)
             lbl, figs = key
