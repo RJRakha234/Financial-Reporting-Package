@@ -1055,6 +1055,14 @@ class Annotator:
     # -- entry point -------------------------------------------------------
     def run(self, html_text: str, pdf_name: str, html_name: str) -> Result:
         html_text = strip_edgar_submission_header(html_text)
+        # Run on the RAW markup, before any parse: a conflicting pair of style
+        # attributes is resolved differently by a browser and by a text
+        # extractor, so the evidence is destroyed by parsing (see
+        # render.duplicate_style_findings).
+        from .render import duplicate_style_findings
+
+        for kind, sev, exc, rem in duplicate_style_findings(html_text):
+            self._new_issue(kind, sev, exc, rem)
         soup = BeautifulSoup(html_text, "html.parser")
         root = soup.body or soup
         # Snapshot the HTML's visible text before any highlighting is added,

@@ -449,3 +449,37 @@ def test_symbol_finding_recolours_the_changed_number():
     assert [i for i in r.issues if i.kind == "percent"], "the % change must fire"
     assert "secv-token-bad" in r.html_out, \
         "the changed value must be painted, not left green"
+
+
+# --- conflicting style attributes -------------------------------------------
+
+def test_duplicate_style_attributes_are_caught():
+    # A browser applies the FIRST style attribute, text extractors keep the
+    # LAST.  So this element renders invisibly to a reader while every automated
+    # check reads it as visible content — and the hidden-text check cannot fire,
+    # because the display:none was discarded at parse time.  Found while
+    # investigating a mutation-audit miss that turned out to be this shape.
+    from secverify.render import duplicate_style_findings
+
+    html = (
+        '<p style="display:none" style="font: 10pt Arial">Material fact</p>'
+    )
+    got = list(duplicate_style_findings(html))
+    assert got, "conflicting style attributes must be reported"
+    assert got[0][0] == "duplicate-style" and got[0][1] == "error"
+
+
+def test_single_style_attribute_is_not_flagged():
+    from secverify.render import duplicate_style_findings
+
+    assert not list(duplicate_style_findings('<p style="display:none">x</p>'))
+    assert not list(duplicate_style_findings('<p style="font: 10pt">ok</p>'))
+    assert not list(duplicate_style_findings("<p>no style at all</p>"))
+
+
+def test_properly_hidden_content_is_still_caught():
+    from secverify.render import _hidden_text
+    from bs4 import BeautifulSoup as BS
+
+    got = list(_hidden_text(BS('<p style="display:none">Secret</p>', "html.parser")))
+    assert got and got[0][0] == "hidden-text"

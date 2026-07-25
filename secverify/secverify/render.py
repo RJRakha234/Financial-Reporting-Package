@@ -80,6 +80,46 @@ def _ocr_low_text(corpus):
         )
 
 
+#: an element carrying two style attributes, e.g.
+#: <p style="display:none" style="font: 10pt Arial">
+_DUP_STYLE_RE = re.compile(
+    r'<[a-zA-Z][^<>]*?\sstyle\s*=\s*"[^"]*"[^<>]*?\sstyle\s*=\s*"[^"]*"[^<>]*>'
+)
+
+
+def duplicate_style_findings(html_text: str):
+    """Yield findings for elements carrying MORE THAN ONE style attribute.
+
+    Parsers disagree about which one wins: a browser keeps the first, while the
+    HTML parsers used for analysis (BeautifulSoup among them) keep the last.  So
+    an element written ``style="display:none" style="font: 10pt Arial"`` renders
+    INVISIBLE to a reader while every text extractor — this tool included — sees
+    it as ordinary visible content, and the hidden-text check never fires because
+    the property it looks for was discarded at parse time.
+
+    That makes it the one shape able to hide content from a human reviewer while
+    the machine reports it present and correct, so it is reported on the RAW
+    markup, before any parse can resolve the conflict away.
+    """
+    seen: set[str] = set()
+    for m in _DUP_STYLE_RE.finditer(html_text or ""):
+        tag = m.group(0)
+        if tag in seen:
+            continue
+        seen.add(tag)
+        yield (
+            "duplicate-style",
+            "error",
+            tag[:100],
+            "Conflicting style attributes — this element carries two "
+            "“style” attributes: “" + tag[:120] + "”. A browser applies the "
+            "first and text extractors keep the last, so the element can render "
+            "invisibly to a reader while every automated check, including this "
+            "one, reads it as visible content. Merge them into a single "
+            "attribute so what is checked is what is displayed.",
+        )
+
+
 def render_and_hidden_checks(corpus, soup, pdf_paths):
     """Yield ``(kind, severity, excerpt, remark)`` for Phase 3 findings."""
     yield from _hidden_text(soup)

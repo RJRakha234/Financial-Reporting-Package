@@ -185,12 +185,16 @@ def _discover(html: str) -> list[Mutation]:
             )
 
     # --- a hidden-text smuggle: real content made invisible --------------
+    # The style must REPLACE any existing one, not sit beside it.  Duplicate
+    # style attributes are resolved differently by different parsers (a browser
+    # keeps the first, BeautifulSoup the last), so appending one produced markup
+    # whose display:none was dropped before any check could see it — the harness
+    # then reported a miss that was its own doing.
     if paras:
         p1 = str(paras[0])
-        out.append(
-            M("format", "content hidden via CSS",
-              p1, p1.replace("<p", '<p style="display:none"', 1), "")
-        )
+        hidden = re.sub(r'\sstyle="[^"]*"', "", p1, count=1)
+        hidden = hidden.replace("<p", '<p style="display:none"', 1)
+        out.append(M("format", "content hidden via CSS", p1, hidden, ""))
     return out
 
 
