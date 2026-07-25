@@ -124,6 +124,100 @@ def _discover(html: str) -> list[Mutation]:
     out: list[Mutation] = []
     soup = BeautifulSoup(html, "html.parser")
 
+    # --- FIGURES, dates and wording taken from this document -------------
+    # The literal catalogue below was written against one press release, so on
+    # any other exhibit its patterns do not occur and the audit reported them
+    # SKIPPED — on a real run 20 of 28 entries skipped, which reads as though
+    # nothing was tested.  These equivalents are derived from the document, so
+    # each error class is exercised whatever exhibit is supplied.
+    body = soup.get_text(" ")
+
+    def _in_html(tok: str) -> bool:
+        return tok in html
+
+    # four distinct grouped figures -> wrong digit, transposition, extra, dropped
+    grouped = []
+    for m in re.finditer(r"\b(\d{1,3}(?:,\d{3})+)\b", body):
+        v = m.group(1)
+        if v not in grouped and _in_html(v) and html.count(v) == 1:
+            grouped.append(v)
+        if len(grouped) >= 4:
+            break
+    if len(grouped) >= 1:
+        v = grouped[0]
+        d = "9" if v[-1] != "9" else "8"
+        out.append(M("figure", "digit changed in a large figure",
+                     v, v[:-1] + d, (v[:-1] + d).replace(",", "")))
+    if len(grouped) >= 2:
+        v = grouped[1]
+        digits = [c for c in v if c.isdigit()]
+        if len(digits) >= 2 and digits[-1] != digits[-2]:
+            sw = list(v)
+            i = len(v) - 1
+            j = i - 1
+            while not sw[j].isdigit():
+                j -= 1
+            sw[i], sw[j] = sw[j], sw[i]
+            out.append(M("figure", "digits transposed",
+                         v, "".join(sw), "".join(sw).replace(",", "")))
+    if len(grouped) >= 3:
+        v = grouped[2]
+        out.append(M("figure", "extra digit inserted",
+                     v, "1" + v, ("1" + v).replace(",", "")))
+    if len(grouped) >= 4:
+        v = grouped[3]
+        short = v.replace(",", "")[1:]
+        out.append(M("figure", "digit dropped", v, short, short))
+
+    # a percentage -> decimal moved, % dropped
+    for m in re.finditer(r"\b(\d{1,2}\.\d)%", body):
+        v = m.group(1)
+        if _in_html(v + "%") and html.count(v + "%") == 1:
+            out.append(M("figure", "decimal point moved",
+                         v + "%", v.replace(".", "") + "%",
+                         v.replace(".", "")))
+            out.append(M("figure", "percent sign dropped", v + "%", v, v))
+            break
+
+    # a currency amount -> symbol swapped, scale word swapped
+    for m in re.finditer(r"([₹$])\s?(\d[\d,.]*)\s?(crore|million|billion|Bn|Mn)?", body):
+        sym, val, scale = m.group(1), m.group(2), m.group(3)
+        whole = m.group(0)
+        if not (_in_html(whole) and html.count(whole) == 1):
+            continue
+        other = "₹" if sym == "$" else "$"
+        out.append(M("figure", "currency symbol swapped",
+                     whole, whole.replace(sym, other, 1), val.replace(",", "")))
+        if scale:
+            alt = {"crore": "million", "million": "crore", "billion": "million",
+                   "Bn": "Mn", "Mn": "Bn"}[scale]
+            out.append(M("figure", "scale word swapped",
+                         whole, whole.replace(scale, alt), val.replace(",", "")))
+        break
+
+    # a full date -> year shifted, month changed
+    _MONTHS = ("January February March April May June July August September "
+               "October November December").split()
+    for m in re.finditer(r"\b(" + "|".join(_MONTHS) + r")\s+(\d{1,2}),\s*(20\d{2})\b", body):
+        mon, day, yr = m.groups()
+        whole = m.group(0)
+        if not (_in_html(whole) and html.count(whole) == 1):
+            continue
+        out.append(M("date", "year shifted", whole,
+                     whole.replace(yr, str(int(yr) - 1)), str(int(yr) - 1)))
+        nxt = _MONTHS[(_MONTHS.index(mon) + 1) % 12]
+        out.append(M("date", "month changed", whole, whole.replace(mon, nxt), ""))
+        break
+
+    # a row LABEL -> renamed (its figures then belong to a label the PDF lacks)
+    for tr in _statement_rows(soup)[:6]:
+        cells = tr.find_all(["td", "th"], recursive=False)
+        lbl = next((c.get_text(" ", strip=True) for c in cells
+                    if re.search(r"[A-Za-z]{6,}", c.get_text(" ", strip=True))), "")
+        if lbl and html.count(lbl) == 1:
+            out.append(M("text", "label changed", lbl, lbl + " (restated)", ""))
+            break
+
     # --- a parenthesised negative, for the sign check --------------------
     # Discovered from VISIBLE TEXT, never the raw markup: a stylesheet's
     # "rgb(204,238,255)" matches the same shape, and mutating a CSS colour tests
@@ -244,44 +338,11 @@ def build_catalogue(html: str) -> list[Mutation]:
     literal entries below are joined by :func:`_discover`, which reads further
     targets out of the document so every class is exercised on every exhibit.
     """
-    M = Mutation
-    cat: list[Mutation] = [
-        # ---- figures -------------------------------------------------------
-        M("figure", "digit changed in a large figure", "17,447", "17,347", "17347"),
-        M("figure", "digits transposed", "17,419", "17,491", "17491"),
-        M("figure", "extra digit inserted", "6,203", "62,203", "62203"),
-        M("figure", "digit dropped", "6,060", "606", "606"),
-        M("figure", "decimal point moved", "20.8%", "2.08%", "2.08"),
-        M("figure", "percent sign dropped", "2.6% QoQ", "2.6 QoQ", "2.6"),
-        M("figure", "small count changed", "55% Net New", "58% Net New", "58"),
-        M("figure", "currency symbol swapped", "$3.8 Billion", "₹3.8 Billion", "3.8"),
-        M("figure", "scale word swapped", "$3.8 Billion", "$3.8 Million", "3.8"),
-        M("figure", "thousands separator dropped", "4,941", "4941", "4941"),
-        # ---- signs ---------------------------------------------------------
-        M("sign", "negative shown as positive", "(422", "422", "422"),
-        # ---- values moved between rows -------------------------------------
-        M("swap", "two line items' values exchanged",
-          "Income tax expense 329 318", "Income tax expense 318 329", "318"),
-        M("swap", "comparative columns transposed",
-          "Total assets 17,447 17,419", "Total assets 17,419 17,447", "17419"),
-        M("swap", "one row's value copied onto another",
-          "Income tax expense 329", "Income tax expense 809", "809"),
-        # ---- dates / periods ----------------------------------------------
-        M("date", "year shifted", "June 30, 2025", "June 30, 2024", "2024"),
-        M("date", "month changed", "June 30, 2025", "July 30, 2025", "30"),
-        M("date", "release date changed", "July 23, 2025", "July 25, 2025", "25"),
-        # ---- wording -------------------------------------------------------
-        M("text", "negation inserted", "in CC, Driven by", "in CC, Not Driven by", ""),
-        M("text", "meaning inverted", "Sequential Growth", "Sequential Decline", ""),
-        M("text", "label changed", "Trade payables", "Trade receivables", ""),
-        M("text", "entity name changed", "Infosys Limited", "Infosys Systems", ""),
-        M("text", "guidance range altered", "20%-22%", "20%-24%", "24"),
-        # ---- structure -----------------------------------------------------
-        M("structure", "sentence deleted",
-          "Bengaluru, India", "", "", "removes the dateline"),
-        M("structure", "note reference changed", "Net New", "Net Old", ""),
-    ]
-    return cat + _discover(html)
+    # Nothing is hardcoded to one filing.  Every mutation is derived from the
+    # supplied exhibit, because a literal catalogue quietly stops testing whole
+    # error classes on any other document: on a real run 20 of 28 entries
+    # reported SKIPPED, which is indistinguishable from the tool being untested.
+    return _discover(html)
 
 
 def run_audit(pdf_paths: list[str], html_path: str) -> list[Outcome]:
@@ -317,6 +378,29 @@ def run_audit(pdf_paths: list[str], html_path: str) -> list[Outcome]:
         f"baseline issues: {len(base.issues)} "
         f"| figures {base.figures_ok}/{base.figures_total}\n"
     )
+
+    # An audit is only meaningful against a SOUND baseline.  Verdicts are
+    # computed by subtracting the baseline's findings, so if the PDF is not the
+    # exhibit's source almost nothing aligns: the row-order and sequence checks
+    # have no valid region to compare against and report nothing new, and the
+    # audit prints a wall of MISSED that measures the inputs, not the tool.
+    # Observed for real: a quarter's exhibit against the previous quarter's
+    # identically-named PDF gave 44/239 figures and 20 spurious MISSED lines.
+    if [i for i in base.issues if i.kind == "pairing"]:
+        print("!" * 72)
+        print("  ABORTING — the PDF does not match this exhibit.")
+        print(f"  Baseline validated only "
+              f"{base.figures_ok}/{base.figures_total} figures; a correct pair is")
+        print("  well above 95%. Check the PDF is the SAME PERIOD as the exhibit")
+        print("  (successive downloads are often identically named), and pass the")
+        print("  auditor's-report PDF too if the exhibit contains one.")
+        print("")
+        print("  Auditing this pair would report the tool as missing errors when")
+        print("  what is actually wrong is the input. Re-run with --force to")
+        print("  proceed anyway.")
+        print("!" * 72)
+        if "--force" not in sys.argv:
+            return []
 
     outcomes: list[Outcome] = []
     for mut in build_catalogue(raw):

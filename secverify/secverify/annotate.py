@@ -1106,6 +1106,7 @@ class Annotator:
             self._zone_counts = mark_review_zones(
                 soup, root, self.corpus, strict=self.strict, footed=self.footed
             )
+        self._pairing_sanity()
         _inject_banner(
             soup, root, self.result, pdf_name, html_name, unplaced,
             zone_counts=self._zone_counts if self.review_zones else None,
@@ -1113,6 +1114,53 @@ class Annotator:
         )
         self.result.html_out = str(soup)
         return self.result
+
+    #: below this share of figures validating, the PDF and the HTML are almost
+    #: certainly not the same document — a real pair lands well above 95%
+    PAIRING_MIN_FIGURES = 0.70
+    #: …corroborated by text blocks, so a genuinely bad conversion (which fails
+    #: on figures but still matches its wording) is not mistaken for a mispair
+    PAIRING_MIN_BLOCKS = 0.70
+
+    def _pairing_sanity(self) -> None:
+        """Warn loudly when the PDF and the HTML are not the same document.
+
+        Two files can be the right *kind* and still be the wrong pair — a
+        quarter's exhibit against the previous quarter's PDF, which is easy to do
+        when successive downloads are both called ``IFRS_USD_PR.pdf``.  Every
+        check then reports against a source that never contained these figures,
+        so the run fills with hundreds of findings that say nothing about the
+        filing's accuracy.  Worse, it reads as though the TOOL failed.
+
+        Both ratios must be low before this fires.  A genuinely bad conversion
+        breaks figures while its wording still matches the source, so requiring
+        the text blocks to fail as well distinguishes "wrong document" from
+        "right document, badly converted" — the latter must stay a normal run
+        with normal findings.
+        """
+        figs_total = self.result.figures_total
+        blocks_total = self.result.text_blocks_total
+        if figs_total < 30 or blocks_total < 20:
+            return  # too small to judge
+        fig_ratio = self.result.figures_ok / figs_total
+        blk_ratio = self.result.text_blocks_ok / blocks_total
+        if fig_ratio >= self.PAIRING_MIN_FIGURES or blk_ratio >= self.PAIRING_MIN_BLOCKS:
+            return
+        self._new_issue(
+            "pairing",
+            "error",
+            f"only {self.result.figures_ok}/{figs_total} figures and "
+            f"{self.result.text_blocks_ok}/{blocks_total} text blocks match",
+            "WRONG PDF FOR THIS EXHIBIT — read this before anything else. Only "
+            f"{fig_ratio:.0%} of the HTML's figures and {blk_ratio:.0%} of its "
+            "text blocks were found in the reference PDF(s). A correct pair "
+            "matches well above 95%. Almost certainly the PDF is not the source "
+            "of this exhibit — most often a different period's file (successive "
+            "downloads are frequently identically named), or the exhibit also "
+            "contains an auditor's report whose PDF was not supplied. Every "
+            "other finding in this run is measured against the wrong source and "
+            "should be ignored until the pairing is fixed.",
+        )
 
     def _insert_inline_omissions(
         self, soup: BeautifulSoup, anchors: dict[int, str]

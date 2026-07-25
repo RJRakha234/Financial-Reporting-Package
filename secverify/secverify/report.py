@@ -9,6 +9,26 @@ from .annotate import Result
 
 def to_console(result: Result) -> str:
     lines = []
+    # A wrong-pair warning goes FIRST and last, never in issue order.  It was
+    # emitted as issue #568 of 568 on a real mispaired run — technically present,
+    # invisible in practice, and the reader was left concluding the tool had
+    # failed rather than that the inputs were wrong.  Nothing else in the run
+    # means anything until this is resolved, so it frames the whole report.
+    pairing = [i for i in result.issues if i.kind == "pairing"]
+    if pairing:
+        bar = "!" * 72
+        lines.append(bar)
+        lines.append("  STOP — THE PDF DOES NOT MATCH THIS EXHIBIT")
+        lines.append(f"  {pairing[0].excerpt}")
+        lines.append("")
+        lines.append("  A correct pair matches well above 95%. Check that the PDF is")
+        lines.append("  the SAME PERIOD as the exhibit (successive downloads are often")
+        lines.append("  identically named), and that you passed the auditor's-report")
+        lines.append("  PDF too if the exhibit contains one.")
+        lines.append("")
+        lines.append("  Every finding below is measured against the wrong source.")
+        lines.append(bar)
+        lines.append("")
     if result.issues:
         lines.append(f"✗ Found {len(result.issues)} inconsistencies:\n")
         for issue in result.issues:
@@ -37,6 +57,15 @@ def to_console(result: Result) -> str:
             f"⚠ {len(result.pdf_figures_missing)} significant PDF figures never "
             "appear in the HTML (see report / summary panel)."
         )
+    if pairing:
+        lines.append("")
+        lines.append("!" * 72)
+        lines.append(
+            "  REMINDER: the PDF does not match this exhibit — fix the pairing "
+            "and re-run."
+        )
+        lines.append("  The counts above describe a comparison against the wrong source.")
+        lines.append("!" * 72)
     return "\n".join(lines)
 
 
