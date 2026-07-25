@@ -588,19 +588,35 @@ class Annotator:
         painted green when the words match.  Here each ``identifier`` /
         ``identifier-name`` finding's value is found in the body and wrapped in
         an amber (review) or red (error) span with its ``[n]`` marker.
+
+        Symbol findings are painted the same way, and for the same reason.  A
+        dropped ``%`` or a swapped currency leaves the MAGNITUDE correct, so the
+        number passes the presence check and is stamped green — the finding would
+        otherwise live only in the summary panel while the figure a reviewer
+        looks at still reads as verified.  An adversarial audit caught exactly
+        that: the ``percent`` issue fired, yet the changed value stayed green.
         """
-        targets: list[tuple[str, str, int]] = []
+        _WHAT = {
+            "identifier": "identifier to verify",
+            "identifier-name": "identifier to verify",
+            "percent": "percent sign differs from the PDF",
+            "currency": "currency symbol differs from the PDF",
+        }
+        targets: list[tuple[str, str, int, str]] = []
         for issue in self.result.issues:
             if issue.kind == "identifier":
                 val = issue.excerpt.split()[-1]
             elif issue.kind == "identifier-name":
                 val = issue.excerpt.split()[0]
+            elif issue.kind in ("percent", "currency"):
+                # excerpt starts with the magnitude ("2.6: PDF has % / …")
+                val = issue.excerpt.split(":")[0].strip()
             else:
                 continue
-            if len(val) >= 4:
-                targets.append((val, issue.severity, issue.num))
+            if len(val) >= 3:
+                targets.append((val, issue.severity, issue.num, _WHAT[issue.kind]))
 
-        for val, severity, num in targets:
+        for val, severity, num, what in targets:
             cls = "secv-token-bad" if severity == "error" else "secv-token-warn"
             pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(val)}(?![A-Za-z0-9])")
             marked = False
@@ -622,7 +638,7 @@ class Annotator:
                         parts.append(soup.new_string(s[last:m.start()]))
                     span = soup.new_tag("span", **{"class": cls})
                     span.string = m.group(0)
-                    span["title"] = f"#{num}: {'identifier to verify'}"
+                    span["title"] = f"#{num}: {what}"
                     parts.append(span)
                     if not marked:  # one navigable marker per finding is enough
                         marker = soup.new_tag("a", href="#secv-summary")

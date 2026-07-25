@@ -428,3 +428,24 @@ def test_prose_inside_a_layout_table_is_still_prose():
     )
     hits = [f for f in sequence_findings(_SYM_PDF, soup) if f[0] == "percent"]
     assert hits, "a dropped % in a sentence must be caught even inside a <td>"
+
+
+def test_symbol_finding_recolours_the_changed_number():
+    # A dropped % leaves the MAGNITUDE correct, so the number passes the
+    # presence check and is stamped green.  The finding must also mark the token
+    # itself, or it lives only in the summary panel while the figure a reviewer
+    # looks at still reads as verified — which is what the audit observed.
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_annotate import make_corpus
+    from secverify.annotate import Annotator
+
+    rows = [r.replace("by 2.6% QoQ", "by 2.6 QoQ") for r in _SYM_PDF]
+    html = "<html><body>" + "".join(f"<p>{r}</p>" for r in rows) + "</body></html>"
+    r = Annotator(
+        make_corpus(["\n".join(_SYM_PDF)]), level="sigma",
+        pdf_paths=["d.pdf"], strict=True,
+    ).run(html, "r.pdf", "d.html")
+    assert [i for i in r.issues if i.kind == "percent"], "the % change must fire"
+    assert "secv-token-bad" in r.html_out, \
+        "the changed value must be painted, not left green"
