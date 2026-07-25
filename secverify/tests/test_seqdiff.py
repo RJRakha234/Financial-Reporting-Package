@@ -556,3 +556,72 @@ def test_ordinary_stylesheet_rules_are_not_flagged():
         "html.parser",
     )
     assert not list(_hidden_text(soup))
+
+
+# --- words moved across a PARAGRAPH boundary --------------------------------
+#
+# Found by stress test: two words moved from the end of one paragraph to the
+# start of the next were not reported. Not a failed heuristic — canonicalisation
+# strips whitespace and punctuation into one continuous string, so the two
+# documents are BYTE-IDENTICAL to every text check:
+#
+#   original : ...onerouscontractsandlegalclaimsmanagementbelieves...
+#   moved    : ...onerouscontractsandlegalclaimsmanagementbelieves...
+#
+# The boundary that survives canonicalisation is the LINE. A paragraph break in
+# the PDF is always also a line break, so a faithful HTML block must begin where
+# a PDF line begins and end where one ends. Found mid-line, words have moved.
+
+from secverify.coverage import block_boundary_findings
+
+_BB_HTML = (
+    "<html><body>"
+    "<p>The Group has recognised a provision for onerous contracts and legal claims.</p>"
+    "<p>Management believes the amounts are adequate based on current facts today.</p>"
+    "</body></html>"
+)
+
+
+def _bb(pages):
+    return list(block_boundary_findings(pages, BeautifulSoup(_BB_HTML, "html.parser")))
+
+
+def test_faithful_paragraphs_are_silent():
+    pages = ["The Group has recognised a provision for onerous contracts and legal claims.\n"
+             "Management believes the amounts are adequate based on current facts today."]
+    assert _bb(pages) == []
+
+
+def test_words_moved_to_the_next_paragraph_are_caught():
+    pages = ["The Group has recognised a provision for onerous contracts and\n"
+             "legal claims Management believes the amounts are adequate based on "
+             "current facts today."]
+    got = _bb(pages)
+    assert got, "words moved across a paragraph boundary must be caught"
+    assert all(g[0] == "block-boundary" for g in got)
+
+
+def test_paragraphs_merged_in_the_source_are_caught():
+    pages = ["The Group has recognised a provision for onerous contracts and legal "
+             "claims. Management believes the amounts are adequate based on current "
+             "facts today."]
+    assert _bb(pages), "a merged paragraph changes both blocks' boundaries"
+
+
+def test_pdf_line_wrapping_alone_is_not_flagged():
+    # the PDF wraps a paragraph across several print lines — entirely normal,
+    # and the block still begins at a line start and ends at a line end
+    pages = ["The Group has recognised a provision\nfor onerous contracts and legal claims.\n"
+             "Management believes the amounts are\nadequate based on current facts today."]
+    assert _bb(pages) == []
+
+
+def test_headings_and_lead_ins_are_exempt():
+    # a block ending in a colon introduces what follows, and the PDF is free to
+    # continue the same line with it — boundaries carry no meaning there
+    soup = BeautifulSoup(
+        "<html><body><p>Extracted from the Condensed Consolidated Balance Sheet "
+        "under IFRS as at:</p></body></html>", "html.parser")
+    pages = ["Extracted from the Condensed Consolidated Balance Sheet under IFRS "
+             "as at: June 30, 2026"]
+    assert list(block_boundary_findings(pages, soup)) == []

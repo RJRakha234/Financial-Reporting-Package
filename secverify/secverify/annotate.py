@@ -394,6 +394,12 @@ class Annotator:
         # value exists somewhere.  This is what makes small values (list
         # markers, note references, bare counts) checkable at all — see
         # seqdiff.py.
+        from .coverage import block_boundary_findings
+
+        for kind, sev, exc, rem in block_boundary_findings(
+            self.corpus.pages_raw, clean_soup
+        ):
+            self._new_issue(kind, sev, exc, rem)
         from .seqdiff import sequence_findings
 
         for kind, sev, exc, rem in sequence_findings(

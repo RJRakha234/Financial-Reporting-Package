@@ -1106,3 +1106,90 @@ def _unit_scale_check(pages_raw, html, label_of, result: CoverageResult) -> None
                 issue_kind="unit-scale",
             )
         )
+
+
+#: a prose block must be at least this many canonical letters before its
+#: boundaries are checked — shorter text is a heading or a caption, whose line
+#: structure the PDF is free to arrange differently
+BLOCK_BOUNDARY_MIN_LEN = 60
+
+
+def block_boundary_findings(pages_raw, soup):
+    """Yield findings for a prose block whose BOUNDARIES differ from the PDF's.
+
+    Canonicalisation strips whitespace and punctuation into one continuous
+    string, so paragraph boundaries do not exist for any other text check.
+    Moving words from the end of one paragraph to the start of the next produces
+    a byte-identical canonical form:
+
+        original : ...onerouscontractsandlegalclaimsmanagementbelieves...
+        moved    : ...onerouscontractsandlegalclaimsmanagementbelieves...
+
+    Nothing fails — the two documents are indistinguishable.  The reader,
+    however, sees two different paragraphs, and in a filing the sentence a
+    statement belongs to can change its meaning.
+
+    The boundary that survives canonicalisation is the LINE.  A paragraph break
+    in the PDF is always also a line break, so an HTML prose block that faithfully
+    reproduces a PDF paragraph must begin exactly where a PDF line begins and end
+    exactly where one ends.  If its text is found mid-line, words have moved
+    across a boundary.
+
+    Only blocks that (a) are located in the PDF at all, (b) run to at least
+    BLOCK_BOUNDARY_MIN_LEN letters, and (c) end in a full stop take part: a
+    heading or a lead-in ending in a colon is followed on the same PDF line by
+    whatever it introduces, and its boundaries carry no meaning.
+    """
+    import re as _re
+
+    canon_parts: list[str] = []
+    starts: set[int] = set()
+    ends: set[int] = set()
+    pos = 0
+    for page in pages_raw:
+        for line in page.splitlines():
+            c = canonical(line, letters_only=True)
+            if not c:
+                continue
+            starts.add(pos)
+            pos += len(c)
+            ends.add(pos)
+            canon_parts.append(c)
+    canon = "".join(canon_parts)
+    if not canon:
+        return
+
+    seen: set[str] = set()
+    for el in soup.find_all(["p", "div", "li"]):
+        if el.find(["p", "div", "li", "table"]) or el.find_parent("table"):
+            continue
+        text = " ".join(el.get_text(" ").split())
+        if not _re.search(r"\.\s*[\"'\)\]]?$", text):
+            continue  # not a complete sentence — boundaries are not meaningful
+        c = canonical(text, letters_only=True)
+        if len(c) < BLOCK_BOUNDARY_MIN_LEN or c in seen:
+            continue
+        i = canon.find(c)
+        if i < 0:
+            continue  # not located — the text check owns it
+        seen.add(c)
+        at_start, at_end = i in starts, (i + len(c)) in ends
+        if at_start and at_end:
+            continue
+        where = (
+            "starts mid-line" if not at_start and at_end
+            else "ends mid-line" if at_start
+            else "starts and ends mid-line"
+        )
+        yield (
+            "block-boundary",
+            "review",
+            text[:80],
+            f"Paragraph boundary — this block's wording is present in the PDF, "
+            f"but it {where} there rather than occupying whole lines, which means "
+            "words sit in a different paragraph than the source puts them in. "
+            "Because canonical comparison strips whitespace, moving words across "
+            "a paragraph break leaves the text byte-identical to every other "
+            f"check — this is the only one that can see it. HTML block: "
+            f"“{text[:120]}”.",
+        )
