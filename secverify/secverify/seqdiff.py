@@ -47,7 +47,7 @@ import re
 from difflib import SequenceMatcher
 
 from .coverage import parse_index_line
-from .numbers import iter_tokens
+from .numbers import iter_tokens, token_attrs
 from .textnorm import canonical, running_furniture
 
 #: a line that is nothing but a page number ("12", "Page 3 of 40", "| 7 |")
@@ -64,25 +64,31 @@ _TIGHT_SPAN = 4
 _MAX_INDIVIDUAL = 40
 
 
-def _numbers_in(text: str) -> list[tuple[str, str]]:
-    """``(key, token)`` for every number in *text*, identifiers excluded.
+def _numbers_in(text: str) -> list[tuple[str, str, bool, str]]:
+    """``(key, token, is_percent, currency)`` per number, identifiers excluded.
 
     The same identifier filters the annotator applies: a leading-zero run is a
     DIN/registration number, and a digit run glued to a preceding letter is the
     numeric tail of a code ("A21918", "…BMOCJH8380").  Neither is an amount.
+
+    The ``%``/currency attributes ride along because canonicalisation strips
+    them: once the sequence diff has PAIRED a PDF token with its HTML
+    counterpart, comparing those attributes on the pair is the one place a
+    dropped "%" or a swapped symbol is visible without guessing.
     """
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, bool, str]] = []
     for start, _end, token, key in iter_tokens(text):
         t = token.strip()
         if re.match(r"^\(?0\d", t):
             continue
         if start > 0 and text[start - 1].isalpha():
             continue
-        out.append((key, t))
+        _sign, currency, is_pct = token_attrs(t)
+        out.append((key, t, is_pct, currency))
     return out
 
 
-def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str]]:
+def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str, bool, str]]:
     """``(key, context)`` for every PDF number in reading order.
 
     Page numbers and reprinted headers/footers are dropped.  A header line that
@@ -90,7 +96,7 @@ def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str]]:
     keeping only its first occurrence is what makes the two sequences
     comparable — dropping every occurrence would instead lose real content.
     """
-    seq: list[tuple[str, str]] = []
+    seq: list[tuple[str, str, bool, str]] = []
     # A running header/footer carries a page number that changes every page and
     # appears in the HTML nowhere; it is dropped outright.  A reprinted table
     # column header repeats identically and DOES appear in the HTML once, so its
@@ -118,12 +124,12 @@ def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str]]:
             entry = parse_index_line(line)
             src = entry[0] if entry else line
             ctx = " ".join(line.split())[:120]
-            for key, token in _numbers_in(src):
-                seq.append((key, ctx))
+            for key, _tok, is_pct, cur in _numbers_in(src):
+                seq.append((key, ctx, is_pct, cur))
     return seq
 
 
-def html_number_sequence(soup) -> list[tuple[str, str, bool]]:
+def html_number_sequence(soup) -> list[tuple[str, str, bool, bool, str]]:
     """``(key, context, in_table)`` for every HTML number in DOM order.
 
     ``in_table`` records whether the number sits inside a ``<table>``.  It
@@ -132,7 +138,7 @@ def html_number_sequence(soup) -> list[tuple[str, str, bool]]:
     extraction routinely runs words together ("OnApril9,2024,IASBha"), so the
     order of numbers inside a paragraph is not a reliable signal on its own.
     """
-    seq: list[tuple[str, str, bool]] = []
+    seq: list[tuple[str, str, bool, bool, str]] = []
     for node in soup.find_all(string=True):
         parent = getattr(node, "parent", None)
         if parent is not None and parent.name in ("script", "style"):
@@ -142,8 +148,8 @@ def html_number_sequence(soup) -> list[tuple[str, str, bool]]:
             continue
         in_table = parent is not None and parent.find_parent("table") is not None
         ctx = " ".join(text.split())[:120]
-        for key, _token in _numbers_in(text):
-            seq.append((key, ctx, in_table))
+        for key, _tok, is_pct, cur in _numbers_in(text):
+            seq.append((key, ctx, in_table, is_pct, cur))
     return seq
 
 
@@ -166,6 +172,57 @@ def sequence_findings(pages_raw, soup):
     # sequence as noise, which is exactly the common small numbers this check
     # exists to verify.
     sm = SequenceMatcher(None, pkeys, hkeys, autojunk=False)
+
+    # Symbols on ALIGNED occurrences.  Canonicalisation strips "%", "₹" and "$"
+    # so magnitudes match across formatting, which means a symbol change alone
+    # leaves every digit and every count intact.  The sequence diff has already
+    # paired each PDF token with its HTML counterpart, so comparing attributes on
+    # an ``equal`` pair isolates a genuine symbol change from a merely missing
+    # occurrence — the failure mode that made a document-wide COUNT census
+    # unusable (a figure rendered as an image reads as a dropped "%").
+    #
+    # Restricted to PROSE.  In a table the unit is conventionally stated once in
+    # a column header with the cells left bare, so an aligned pair legitimately
+    # differs there; inside a sentence there is no header to carry it.  Table
+    # cells are covered by the row-value check, which compares symbols per row.
+    sym_hits = 0
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag != "equal":
+            continue
+        for off in range(i2 - i1):
+            p = pdf_seq[i1 + off]
+            h = html_seq[j1 + off]
+            if h[2]:
+                continue  # in a table — owned by the row-value check
+            if p[2] != h[3]:
+                sym_hits += 1
+                gone = p[2] and not h[3]
+                yield (
+                    "percent",
+                    "error",
+                    f"{p[0]}: PDF {'has' if p[2] else 'has no'} % / HTML "
+                    f"{'has' if h[3] else 'has no'} %",
+                    f"Percent sign — at this point the PDF reads “{p[0]}%” but the "
+                    f"HTML reads “{p[0]}” without it."
+                    if gone else
+                    f"Percent sign — at this point the PDF reads “{p[0]}” but the "
+                    f"HTML reads “{p[0]}%”.",
+                )
+            elif p[3] and h[4] and p[3] != h[4]:
+                sym_hits += 1
+                yield (
+                    "currency",
+                    "error",
+                    f"{p[0]}: PDF “{p[3]}” / HTML “{h[4]}”",
+                    f"Currency — at this point the PDF shows {p[3]}{p[0]} but the "
+                    f"HTML shows {h[4]}{p[0]}. Every digit matches, so no value "
+                    f"check can see it; confirm the symbol against the PDF. PDF "
+                    f"context: “{p[1]}”.",
+                )
+            if sym_hits >= 25:
+                break
+        if sym_hits >= 25:
+            break
 
     ops = [op for op in sm.get_opcodes() if op[0] != "equal"]
 

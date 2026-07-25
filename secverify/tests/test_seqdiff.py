@@ -180,7 +180,7 @@ def test_short_documents_are_skipped():
 # --- sequence extraction ----------------------------------------------------
 
 def test_sequences_preserve_reading_order():
-    keys = [k for k, _c in pdf_number_sequence(["Alpha 1,000 2,000", "Beta 3,000"])]
+    keys = [it[0] for it in pdf_number_sequence(["Alpha 1,000 2,000", "Beta 3,000"])]
     assert keys == ["1000", "2000", "3000"]
 
 
@@ -352,3 +352,49 @@ def test_leading_zero_fragment_is_rejoined():
     # assumption the corpus already makes when it treats a leading-zero run as
     # an identifier rather than a figure.
     assert _rejoin_comma_groups("cost 5 07 here") == "cost 507 here"
+
+
+# --- symbol changes on ALIGNED occurrences ----------------------------------
+#
+# Found by tools/mutation_audit.py on a real press release: canonicalisation
+# strips "%", "₹" and "$" so a symbol change leaves every digit AND every count
+# intact.  Comparing the attributes on a pair the sequence diff has already
+# aligned isolates a real symbol change from a merely missing occurrence — the
+# failure that made a document-wide count census unusable (a figure rendered as
+# an image reads as a dropped "%").
+
+_SYM_PDF = [
+    "Revenues in CC terms grew by 3.8% YoY and by 2.6% QoQ for the quarter.",
+    "Operating margin was 20.8% and EPS rose 8.6% YoY in the same period.",
+    "Large Deal TCV was $3.8 Billion with 55% Net New during the quarter.",
+    "Free cash flow was $884 Million for the three months ended June 30, 2025.",
+    "Total assets 17,447 17,419", "Total non-current assets 6,203 6,060",
+    "Trade payables 422 415", "Income tax expense 329 318",
+    "Net profit before interest 809 764", "Other income net 1,234 2,345",
+]
+
+
+def test_dropped_percent_sign_in_prose_is_caught():
+    rows = [r.replace("by 2.6% QoQ", "by 2.6 QoQ") for r in _SYM_PDF]
+    hits = [f for f in _find(rows, _SYM_PDF) if f[0] == "percent"]
+    assert hits, "a dropped % turns a rate into a bare count — must be caught"
+    assert hits[0][1] == "error"
+
+
+def test_swapped_currency_in_prose_is_caught():
+    rows = [r.replace("$3.8 Billion", "₹3.8 Billion") for r in _SYM_PDF]
+    hits = [f for f in _find(rows, _SYM_PDF) if f[0] == "currency"]
+    assert hits, "a $ -> ₹ swap in prose must be caught"
+    assert hits[0][1] == "error"
+
+
+def test_matching_symbols_stay_silent():
+    assert _find(_SYM_PDF, _SYM_PDF) == []
+
+
+def test_table_cells_are_left_to_the_row_check():
+    # inside a table the unit is conventionally stated once in a column header
+    # with the cells bare, so an aligned pair legitimately differs there; the
+    # row-value check compares symbols per row instead.
+    rows = [r.replace("Total assets 17,447", "Total assets 17,447%") for r in _SYM_PDF]
+    assert not [f for f in _find_table(rows, _SYM_PDF) if f[0] == "percent"]

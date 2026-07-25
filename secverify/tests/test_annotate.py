@@ -519,31 +519,11 @@ def test_letter_spaced_digit_fragments_merge():
 # press-release exhibit: canonicalisation strips "%", "₹" and "$", and those
 # attributes were only compared INSIDE the gated row check — so a symbol change
 # in running text passed every check and stayed green.
-
-def test_dropped_percent_sign_in_prose_is_caught():
-    corpus = make_corpus(
-        ["Revenues in CC terms grew by 3.8% YoY and by 2.6% QoQ this quarter."]
-    )
-    html = (
-        "<html><body><p>Revenues in CC terms grew by 3.8% YoY and by "
-        "2.6 QoQ this quarter.</p></body></html>"
-    )
-    r = Annotator(corpus).run(html, "ref.pdf", "doc.html")
-    hits = [i for i in r.issues if i.kind == "percent"]
-    assert hits, "a dropped % turns a rate into a bare count — must be caught"
-    assert hits[0].severity == "error"
-
-
-def test_swapped_currency_in_prose_is_caught():
-    corpus = make_corpus(["Large Deal TCV was $3.8 Billion with 55% Net New."])
-    html = (
-        "<html><body><p>Large Deal TCV was ₹3.8 Billion with 55% Net "
-        "New.</p></body></html>"
-    )
-    r = Annotator(corpus).run(html, "ref.pdf", "doc.html")
-    hits = [i for i in r.issues if i.kind == "currency"]
-    assert hits, "a $ -> ₹ swap in prose must be caught"
-
+#
+# The prose cases live in test_seqdiff.py: they are compared per ALIGNED
+# occurrence by the sequence diff, which needs a sigma-level run and a document
+# long enough to align.  What is pinned here is the document-wide currency
+# census and the convention it must not break.
 
 def test_unit_in_header_instead_of_cell_is_not_flagged():
     # the convention the census must respect: the PDF prints the symbol inline,

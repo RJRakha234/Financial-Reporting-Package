@@ -476,28 +476,16 @@ class Annotator:
         reconciled between the PDF and the HTML.  Any difference means a symbol
         was added or dropped somewhere, whatever row or sentence it sits in.
         """
-        for key in sorted(set(self.corpus.pct_counts) | set(self.html_corpus.pct_counts)):
-            token = self.corpus.number_sample.get(key, key)
-            if not is_significant(key, token):
-                continue
-            if key not in self.html_corpus.number_keys:
-                continue  # absent entirely — owned by the presence check
-            pdf_n = self.corpus.pct_counts.get(key, 0)
-            html_n = self.html_corpus.pct_counts.get(key, 0)
-            if pdf_n == html_n:
-                continue
-            dropped = html_n < pdf_n
-            self._new_issue(
-                "percent",
-                "error",
-                token,
-                f"Percent sign — {key} carries a “%” {pdf_n}× in the PDF but "
-                f"{html_n}× in the HTML, so a percent sign appears to have been "
-                + ("dropped" if dropped else "added")
-                + ". That changes a rate into a plain number (or the reverse) "
-                "while the digits stay identical, so no value check can see it. "
-                f"Locate every {key} in the HTML and confirm the “%” matches.",
-            )
+        # NOTE on "%": a COUNT census is the wrong instrument and is not used
+        # here.  Counting "%"-bearing occurrences per magnitude is dominated by
+        # content-PRESENCE differences rather than symbol changes: on a real
+        # press release every headline metric came up short because the HTML
+        # renders that panel as a GIF, so the census re-reported four
+        # already-known image-borne figures as fresh RED errors -- and keyed on
+        # magnitude alone it also conflated "3.8%" with "$3.8".  Percent is
+        # instead compared per ALIGNED OCCURRENCE in seqdiff, where the sequence
+        # diff has already paired the PDF's token with the HTML's, so a genuine
+        # symbol change is distinguishable from a merely missing occurrence.
 
         # Currency is compared as a SWAP only, never as a drop.  A filing
         # legitimately states the unit once in a column header and leaves the
