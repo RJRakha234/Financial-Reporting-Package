@@ -44,6 +44,36 @@ _MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
 _DATE_RE = re.compile(rf"{_MONTH}\s+\d{{1,2}},?\s+\d{{4}}|{_MONTH}\s+\d{{4}}", re.I)
 
 
+#: the EDGAR SGML submission header that precedes the exhibit's real markup:
+#:   <DOCUMENT><TYPE>EX-99.1 CHARTER<SEQUENCE>2<FILENAME>exv99w01.htm
+#:   <DESCRIPTION>IFRS USD PRESS RELEASE<TEXT>
+#: These are SGML fields, not HTML elements, so a parser leaves their values as
+#: visible text — putting "EX-99.1 CHARTER 2 exv99w01.htm IFRS USD PRESS
+#: RELEASE" at the top of the document.  None of it is in the source PDF, so
+#: every exhibit picked up a handful of phantom findings (two of them red) from
+#: filing furniture alone.  It carries no financial content, so it is removed
+#: before parsing rather than reported.
+_EDGAR_HEADER_RE = re.compile(
+    r"^\s*(?:<DOCUMENT>|<TYPE>|<SEQUENCE>|<FILENAME>|<DESCRIPTION>)[^\n]*\n",
+    re.I | re.M,
+)
+_EDGAR_TEXT_OPEN_RE = re.compile(r"^\s*<TEXT>\s*$\n?", re.I | re.M)
+
+
+def strip_edgar_submission_header(html_text: str) -> str:
+    """Remove the EDGAR SGML submission header preceding an exhibit's markup.
+
+    Only the wrapper fields are dropped, and only when the document actually
+    opens with them — the exhibit's own markup is left untouched, so a plain
+    HTML file (or one already stripped) passes through unchanged.
+    """
+    head = html_text[:2000]
+    if not re.search(r"<(?:DOCUMENT|TYPE|SEQUENCE|FILENAME|DESCRIPTION)>", head, re.I):
+        return html_text
+    out = _EDGAR_HEADER_RE.sub("", html_text, count=6)
+    return _EDGAR_TEXT_OPEN_RE.sub("", out, count=1)
+
+
 def _dates_in(text: str) -> list[str]:
     """Ordered, normalised calendar dates in *text* (e.g. 'june 30 2025')."""
     return [
@@ -946,6 +976,7 @@ class Annotator:
 
     # -- entry point -------------------------------------------------------
     def run(self, html_text: str, pdf_name: str, html_name: str) -> Result:
+        html_text = strip_edgar_submission_header(html_text)
         soup = BeautifulSoup(html_text, "html.parser")
         root = soup.body or soup
         # Snapshot the HTML's visible text before any highlighting is added,

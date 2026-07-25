@@ -47,7 +47,7 @@ import re
 from difflib import SequenceMatcher
 
 from .numbers import iter_tokens
-from .textnorm import canonical
+from .textnorm import canonical, running_furniture
 
 #: a line that is nothing but a page number ("12", "Page 3 of 40", "| 7 |")
 _PAGE_ONLY_RE = re.compile(
@@ -90,6 +90,11 @@ def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str]]:
     comparable — dropping every occurrence would instead lose real content.
     """
     seq: list[tuple[str, str]] = []
+    # A running header/footer carries a page number that changes every page and
+    # appears in the HTML nowhere; it is dropped outright.  A reprinted table
+    # column header repeats identically and DOES appear in the HTML once, so its
+    # first occurrence is kept and later ones dropped.
+    furniture = running_furniture(pages_raw)
     seen_edge: set[str] = set()
     for raw in pages_raw:
         lines = [ln for ln in raw.splitlines() if ln.strip()]
@@ -98,6 +103,8 @@ def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str]]:
             if _PAGE_ONLY_RE.match(line):
                 continue
             at_edge = pos < _EDGE_LINES or pos >= n - _EDGE_LINES
+            if at_edge and canonical(line, letters_only=True) in furniture:
+                continue  # running page header/footer — print furniture
             c = canonical(line)
             if at_edge and c:
                 if c in seen_edge:
@@ -145,10 +152,49 @@ def sequence_findings(pages_raw, soup):
     # exists to verify.
     sm = SequenceMatcher(None, pkeys, hkeys, autojunk=False)
 
+    ops = [op for op in sm.get_opcodes() if op[0] != "equal"]
+
+    # Reflow of a REPEATED CAPTION DIGIT.  A print layout sets a two-line column
+    # caption as "3 months ended / 3 months ended" with the dates beneath, while
+    # the HTML pairs each caption with its own date — so one "3" shifts a few
+    # positions.  This surfaces as a delete of "3" and an insert of "3" nearby.
+    #
+    # The suppression is deliberately narrow: a SINGLE bare 1-3 digit value that
+    # already occurs more than once in the local window of BOTH sequences.  Under
+    # those conditions the move is a genuine no-op — the value is changing places
+    # only with its own identical twin, so no label ends up against a different
+    # figure and there is no error that could hide here.
+    #
+    # It must stay narrow.  A wider rule ("same values deleted and inserted
+    # nearby") also matches a real swap of two line items' figures — Hi-Tech and
+    # Retail exchanging 3,710/3,558 for 6,172/5,958 — which must always be
+    # reported, since every value is present and only the pairing is wrong.
+    _WIN = 10
+    reflow: set[int] = set()
+    for a, (tag_a, i1, i2, _j1, _j2) in enumerate(ops):
+        if tag_a != "delete" or i2 - i1 != 1 or a in reflow:
+            continue
+        val = pkeys[i1]
+        if not re.fullmatch(r"\d{1,3}", val):
+            continue  # only a bare caption digit, never a real amount
+        for b in range(max(0, a - 2), min(len(ops), a + 3)):
+            if b == a or b in reflow or ops[b][0] != "insert":
+                continue
+            _t, _bi1, _bi2, bj1, bj2 = ops[b]
+            if bj2 - bj1 != 1 or hkeys[bj1] != val:
+                continue
+            p_local = pkeys[max(0, i1 - _WIN):i1 + _WIN]
+            h_local = hkeys[max(0, bj1 - _WIN):bj1 + _WIN]
+            if p_local.count(val) > 1 and h_local.count(val) > 1:
+                reflow.update((a, b))
+                break
+
     individual = 0
     bulk = {"replace": 0, "delete": 0, "insert": 0}
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag == "equal":
+    reflowed = 0
+    for idx, (tag, i1, i2, j1, j2) in enumerate(ops):
+        if idx in reflow:
+            reflowed += max(i2 - i1, j2 - j1)
             continue
         span = max(i2 - i1, j2 - j1)
         if span > _TIGHT_SPAN or individual >= _MAX_INDIVIDUAL:

@@ -213,6 +213,8 @@ def load_pdf(path: str | list[str]) -> PdfCorpus:
         with pdfplumber.open(doc_path) as pdf:
             pages_text = [page.extract_text() or "" for page in pdf.pages]
             headers = _repeated_lines(pages_text)
+            #: running headers already emitted once — later repeats are dropped
+            seen_headers: set[str] = set()
 
             for doc_page_idx, page in enumerate(pdf.pages):
                 raw = pages_text[doc_page_idx]
@@ -258,12 +260,25 @@ def load_pdf(path: str | list[str]) -> PdfCorpus:
 
                 # The text corpus drops running headers/footers and bare
                 # page numbers so sentences spanning a page break still
-                # match.
-                page_body = "\n".join(
-                    line
-                    for line in raw.splitlines()
-                    if line.strip() not in headers
-                )
+                # match — but only from the SECOND occurrence onward.
+                #
+                # A filed exhibit normally reproduces the document's title
+                # banner once ("IFRS USD Press Release"), which the print
+                # layout then repeats atop every page.  Dropping every
+                # occurrence left that heading nowhere in the corpus, so the
+                # HTML's legitimate single copy could not be found and was
+                # reported as a red "does not match the PDF". Keeping the first
+                # occurrence satisfies both directions: the HTML's copy is
+                # locatable, and only one PDF occurrence has to be reflected.
+                kept = []
+                for line in raw.splitlines():
+                    stripped = line.strip()
+                    if stripped in headers:
+                        if stripped in seen_headers:
+                            continue
+                        seen_headers.add(stripped)
+                    kept.append(line)
+                page_body = "\n".join(kept)
                 corpus.pages_raw.append(page_body)
 
                 for view, parts, letters_only in (

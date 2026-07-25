@@ -13,7 +13,12 @@ import re
 from dataclasses import dataclass, field
 
 from .numbers import is_significant, iter_tokens
-from .textnorm import canonical, find_best_match
+from .textnorm import (
+    FURNITURE_EDGE_LINES,
+    canonical,
+    find_best_match,
+    running_furniture,
+)
 
 FUZZY_REVIEW_RATIO = 0.80
 WORD_COVERAGE_RATIO = 0.85
@@ -741,12 +746,26 @@ def check_pdf_coverage(
         if sum(1 for ln in raw.splitlines() if parse_index_line(ln)) >= 3
     }
 
+    # Running page headers/footers ("… Press Release Page 3 of 8") are print
+    # furniture: a web rendering has no pages and reproduces none of it, so each
+    # occurrence would otherwise raise a phantom "content missing from the HTML"
+    # error — one per page, in red, scaling with the document's length.
+    furniture = running_furniture(pages_raw)
+
     for page_idx, raw in enumerate(pages_raw):
         page_lines = [ln.strip() for ln in raw.splitlines()]
+        _nonblank = [i for i, ln in enumerate(page_lines) if ln]
+        _edge = set(_nonblank[:FURNITURE_EDGE_LINES] + _nonblank[-FURNITURE_EDGE_LINES:])
         page_letters_offset = 0
         for line_no, line in enumerate(page_lines):
             line_letters_offset = page_letters_offset
             page_letters_offset += len(canonical(line, letters_only=True))
+            if (
+                furniture
+                and line_no in _edge
+                and canonical(line, letters_only=True) in furniture
+            ):
+                continue  # running header/footer — not content
 
             # Strip a leading run of 1-3 identical capital letters that some
             # PDFs prepend to headings as invisible navigation anchors

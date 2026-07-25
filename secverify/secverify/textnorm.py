@@ -10,6 +10,7 @@ their original wording.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from difflib import SequenceMatcher
 
@@ -136,3 +137,65 @@ def split_sentences(text: str) -> list[str]:
 
     parts = re.split(r"(?<=[.!?;:])\s+", text)
     return [p for p in (part.strip() for part in parts) if p]
+
+
+#: how many lines at the top/bottom of a page count as header/footer territory
+FURNITURE_EDGE_LINES = 3
+#: a running header/footer must recur on at least this many pages
+FURNITURE_MIN_PAGES = 3
+
+
+def running_furniture(
+    pages_raw: list[str],
+    edge_lines: int = FURNITURE_EDGE_LINES,
+    min_pages: int = FURNITURE_MIN_PAGES,
+) -> set[str]:
+    """Letters-only canonical forms of running page headers and footers.
+
+    A print layout repeats a running header or footer in the top/bottom band of
+    every page — ``"Infosys Limited - Press Release Page 3 of 8"``.  Its wording
+    stays constant while its page number changes, so its **letters-only**
+    canonical form recurs across pages while its full canonical form (digits
+    included) differs every time.  That signature is what distinguishes it from a
+    reprinted table column header, whose digits repeat *identically* and which
+    the HTML does legitimately carry once.
+
+    A web rendering has no pages and reproduces none of this furniture, so these
+    lines must be excluded from the PDF-coverage check and from the number
+    sequence.  Left in, each page contributes a phantom "content missing from the
+    HTML" error and a phantom missing page number — noise that scales with the
+    document's length and, being red, crowds out real findings.
+
+    The varying digits must additionally be **page-number shaped** — bare 1-3
+    digit integers, no thousands separator and no decimal part.  Without that
+    condition a repeating data row whose figures change ("Schedule line 5 value
+    5,000 5,500", printed at the top of successive pages) would match the same
+    signature and be dropped as furniture, discarding real content.
+
+    Returns the letters-only forms to skip.  Callers should additionally require
+    the line to sit in the page's edge band, so a phrase that legitimately recurs
+    in body text is never dropped.
+    """
+    groups: dict[str, tuple[set[int], set[str], bool]] = {}
+    for page_idx, raw in enumerate(pages_raw):
+        lines = [ln for ln in raw.splitlines() if ln.strip()]
+        n = len(lines)
+        for pos, line in enumerate(lines):
+            if not (pos < edge_lines or pos >= n - edge_lines):
+                continue
+            letters = canonical(line, letters_only=True)
+            if len(letters) < 8:
+                continue  # too short to identify a line safely
+            pages, forms, page_shaped = groups.setdefault(
+                letters, (set(), set(), True)
+            )
+            pages.add(page_idx)
+            forms.add(canonical(line))
+            nums = re.findall(r"\d[\d,]*(?:\.\d+)?", line)
+            shaped = all(re.fullmatch(r"\d{1,3}", t) for t in nums)
+            groups[letters] = (pages, forms, page_shaped and shaped)
+    return {
+        letters
+        for letters, (pages, forms, page_shaped) in groups.items()
+        if len(pages) >= min_pages and len(forms) > 1 and page_shaped
+    }

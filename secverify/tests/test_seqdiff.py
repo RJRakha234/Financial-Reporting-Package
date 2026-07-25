@@ -167,3 +167,88 @@ def test_bulk_runs_are_summarised_not_dropped():
     hits = [f for f in _find(_ROWS, pdf) if f[0] == "seq-bulk"]
     assert hits, "a large unmatched run must still be reported, in aggregate"
     assert "numbers" in hits[0][3]
+
+
+# --- print/filing furniture found by running against a real filing ----------
+#
+# Each of these was a live false positive on a real 8-page press release exhibit
+# before the corresponding filter existed.
+
+from secverify.annotate import strip_edgar_submission_header
+from secverify.textnorm import running_furniture
+
+
+def test_running_footer_with_varying_page_number_is_furniture():
+    # "Infosys Limited - Press Release Page 3 of 8" — constant wording, varying
+    # page number, in the page's edge band.  Left in, this produced 8 phantom
+    # "content missing from the HTML" errors and 8 phantom missing numbers.
+    pages = [
+        f"IFRS - USD Press Release\nBody line {i} with 1,234 and 5,678 in it.\n"
+        f"Infosys Limited - Press Release Page {i} of 8"
+        for i in range(1, 9)
+    ]
+    assert running_furniture(pages) == {"infosyslimitedpressreleasepageof"}
+
+
+def test_repeating_data_row_is_not_furniture():
+    # same signature — constant wording, varying digits, top of each page — but
+    # the digits are real amounts, not page numbers.  Must be kept as content.
+    pages = [f"Schedule line value {i},000 {i},500\nmore body text here" for i in range(1, 6)]
+    assert running_furniture(pages) == set()
+
+
+def test_constant_header_is_not_furniture():
+    # identical every page (no varying page number): it is a title banner the
+    # HTML carries once, handled by keeping the first occurrence instead
+    pages = ["IFRS - USD Press Release\nbody text on this page" for _ in range(5)]
+    assert running_furniture(pages) == set()
+
+
+def test_edgar_submission_header_is_stripped():
+    raw = (
+        "<DOCUMENT>\n<TYPE>EX-99.1 CHARTER\n<SEQUENCE>2\n"
+        "<FILENAME>exv99w01.htm\n<DESCRIPTION>IFRS USD PRESS RELEASE\n<TEXT>\n"
+        "<HTML><BODY><P>Real content 1,234</P></BODY></HTML>\n"
+    )
+    out = strip_edgar_submission_header(raw)
+    for gone in ("EX-99.1", "SEQUENCE", "exv99w01.htm", "IFRS USD PRESS RELEASE"):
+        assert gone not in out, f"{gone} is EDGAR furniture, not exhibit content"
+    assert "Real content 1,234" in out
+
+
+def test_plain_html_passes_through_unchanged():
+    raw = "<html><body><p>Total 1,234</p></body></html>"
+    assert strip_edgar_submission_header(raw) == raw
+
+
+def test_caption_digit_reflow_is_not_reported():
+    # PDF sets the caption as "3 months ended 3 months ended" then the dates
+    # beneath; the HTML pairs each caption with its date, moving one "3" a few
+    # places.  A value swapping with its own identical twin is a no-op.
+    pdf = ["\n".join(
+        ["Extracted from the Condensed Consolidated Balance Sheet",
+         "3 months ended 3 months ended",
+         "June 30, 2025 June 30, 2024"]
+        + [f"Line item {chr(97+i)} balance {1000+i} {2000+i}" for i in range(12)]
+    )]
+    rows = (
+        ["Extracted from the Condensed Consolidated Balance Sheet",
+         "3 months ended June 30, 2025", "3 months ended June 30, 2024"]
+        + [f"Line item {chr(97+i)} balance {1000+i} {2000+i}" for i in range(12)]
+    )
+    assert _find(rows, pdf) == [], "a caption digit moving among its twins is a no-op"
+
+
+def test_real_value_swap_survives_the_reflow_rule():
+    # the reflow rule must stay narrow: two line items exchanging their figures
+    # is the classic silent error and must always be reported
+    pdf = ["\n".join(
+        [f"Line item {chr(97+i)} balance {1000+i} {2000+i}" for i in range(12)]
+        + ["Hi-Tech 3,710 3,558", "Retail 6,172 5,958"]
+    )]
+    rows = (
+        [f"Line item {chr(97+i)} balance {1000+i} {2000+i}" for i in range(12)]
+        + ["Hi-Tech 6,172 5,958", "Retail 3,710 3,558"]
+    )
+    assert any(k.startswith("seq-") for k in _kinds(rows, pdf)), \
+        "a genuine swap of two items' figures must not be suppressed as reflow"

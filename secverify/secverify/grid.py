@@ -69,6 +69,30 @@ _PER_SHARE_RE = re.compile(
     re.I,
 )
 
+#: a table's PERIOD-HEADER row, matched against the canonical letters-only label.
+#: "3 months ended June 30, 2025" canonicalises to "monthsendedjune" and its only
+#: figure is the "3" of "3 months" — a column caption, not a data row.  Comparing
+#: it as data invents a row whose label is nowhere in the PDF.  Period headers are
+#: owned by the DATE check (see annotate._date_mismatch), which compares the
+#: calendar dates properly, so skipping them here loses no coverage.
+_PERIOD_HEADER_RE = re.compile(
+    r"^(?:three|six|nine|twelve|half)?"
+    r"(?:months?|quarters?|years?|periods?|halfyears?)ended"
+    r"|^as(?:at|of)|^particulars$",
+)
+
+
+def _is_period_header(label: str, figs: list[str]) -> bool:
+    """Whether a row is a period/column caption rather than a data row.
+
+    Requires BOTH the caption wording and figures that are bare 1-3 digit
+    integers (the "3" of "3 months ended"), so a real data row is never mistaken
+    for a header just because its label begins with a period phrase.
+    """
+    if not _PERIOD_HEADER_RE.match(label):
+        return False
+    return all(re.fullmatch(r"\d{1,3}", f) for f in figs)
+
 
 def _fig_keys(text: str, strip_note_refs: bool = True) -> list[str]:
     """Significant figure keys in *text*, in order, minus ids and dates.
@@ -242,6 +266,8 @@ def grid_compare(corpus, soup, pdf_paths):
             n = len(hfigs)
             if not hlbl or not n or "refertonote" in hlbl:
                 continue
+            if _is_period_header(hlbl, hfigs):
+                continue  # a column caption — owned by the date check
             if len(hlbl) < ROW_VALUE_MIN_LABEL:
                 # a 1-5 letter label ("total", "net") cannot be located in the
                 # PDF with any confidence — record it rather than drop it
@@ -352,6 +378,8 @@ def grid_compare(corpus, soup, pdf_paths):
         for l, f in html_rows:
             if not (l and f) or len(l) < ROW_ORDER_MIN_LABEL or "refertonote" in l:
                 continue
+            if _is_period_header(l, f):
+                continue  # a column caption, not a row in the sequence
             if table_label_count[l] != 1:
                 continue  # label repeats in this table (dates strip out of
                 #           SOCIE balance rows) — ambiguous, skip
