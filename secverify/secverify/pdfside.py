@@ -162,6 +162,38 @@ def _repeated_lines(pages_text: list[str]) -> set[str]:
     }
 
 
+#: a thousands group split off from its number by letter-spacing: "1 ,812"
+_SPLIT_COMMA_GROUP_RE = re.compile(r"(\d)[ \t]+(,\d{3})(?!\d)")
+#: a fragment beginning with a leading zero, split off by letter-spacing:
+#: "5 07" is 507, because no standalone amount starts with 0 (the same
+#: assumption the corpus already makes when it treats leading-zero runs as
+#: identifiers rather than figures)
+_SPLIT_ZERO_GROUP_RE = re.compile(r"(?<![\d.,])(\d{1,3})[ \t]+(0\d{1,2})(?![\d.,])")
+
+
+def _rejoin_comma_groups(text: str) -> str:
+    """Rejoin a thousands group letter-spacing split from its number.
+
+    Some renderers space table figures so a number arrives as ``"5 ,192"`` or
+    ``"1 ,812"``.  :func:`_merged_numeric_words` repairs this for the corpus
+    using word geometry, but the *line* text keeps the spacing — so the
+    line-based checks (PDF coverage, number sequence) read ``"1 ,812"`` as the
+    two values ``1`` and ``812`` and then report the phantom ``812`` as a figure
+    missing from the HTML.
+
+    Joining is unambiguous here and needs no geometry: a comma-thousands group
+    can never begin a number, so ``,812`` must belong to the digits before it.
+    Only that shape is touched — a genuinely separate figure never starts with a
+    comma, and ambiguous spacing ("8 3 5 7", which may be 83/57 or 8357) is left
+    to the geometry pass, which can see the column gaps.
+    """
+    prev = None
+    while prev != text:  # repeat for "1 ,234 ,567"
+        prev = text
+        text = _SPLIT_COMMA_GROUP_RE.sub(r"\1\2", text)
+    return _SPLIT_ZERO_GROUP_RE.sub(r"\1\2", text)
+
+
 def _merged_numeric_words(words: list[dict]) -> list[str]:
     """Glue letter-spaced figure fragments ("3 0 2 8" → "30", "28").
 
@@ -211,7 +243,9 @@ def load_pdf(path: str | list[str]) -> PdfCorpus:
     for doc_path in paths:
         stem = Path(doc_path).stem
         with pdfplumber.open(doc_path) as pdf:
-            pages_text = [page.extract_text() or "" for page in pdf.pages]
+            pages_text = [
+                _rejoin_comma_groups(page.extract_text() or "") for page in pdf.pages
+            ]
             headers = _repeated_lines(pages_text)
             #: running headers already emitted once — later repeats are dropped
             seen_headers: set[str] = set()

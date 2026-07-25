@@ -7,6 +7,8 @@ reference, a bare count — checkable at all; a presence-only test cannot confir
 one, because the digit occurs on nearly every page.
 """
 
+import re
+
 from bs4 import BeautifulSoup
 
 from secverify.seqdiff import (
@@ -51,6 +53,30 @@ def _soup(rows):
     )
 
 
+def _row_cells(line):
+    """Split "Label 1,234 5,678" into a label cell plus one cell per figure."""
+    m = re.match(r"^(.*?)((?:\s+[\d,]+)+)$", line)
+    if not m:
+        return [line]
+    return [m.group(1).strip()] + m.group(2).split()
+
+
+def _soup_table(rows):
+    """The same content as a real <table> — where cell order IS reliable, so
+    insertions and deletions are itemised rather than counted as prose reflow."""
+    trs = "".join(
+        "<tr>" + "".join(f"<td>{c}</td>" for c in _row_cells(r)) + "</tr>"
+        for r in rows
+    )
+    return BeautifulSoup(
+        f"<html><body><table>{trs}</table></body></html>", "html.parser"
+    )
+
+
+def _find_table(rows, pdf=None):
+    return list(sequence_findings(pdf or _PDF, _soup_table(rows)))
+
+
 def _find(rows, pdf=None):
     return list(sequence_findings(pdf or _PDF, _soup(rows)))
 
@@ -87,19 +113,22 @@ def test_changed_list_enumerators_are_caught():
     rows = list(_ROWS)
     for i, (old, new) in enumerate((("a)", "1)"), ("b)", "2)"), ("c)", "3)"))):
         rows[7 + i] = rows[7 + i].replace(old, new, 1)
-    assert "seq-extra" in _kinds(rows)
+    # prose insert/delete is counted rather than itemised (paragraph rewrapping
+    # and PDF word-run-together noise live here), so the enumerator change shows
+    # up in the prose-order count — visible, but not 3 separate items.
+    assert "seq-prose-order" in _kinds(rows)
 
 
-def test_dropped_row_is_caught():
+def test_dropped_table_row_is_caught():
     rows = [r for r in _ROWS if "Capital work in progress" not in r]
-    hits = [f for f in _find(rows) if f[0] == "seq-missing"]
+    hits = [f for f in _find_table(rows) if f[0] == "seq-missing"]
     assert hits and "891" in hits[0][2]
 
 
-def test_added_row_is_caught():
+def test_added_table_row_is_caught():
     rows = list(_ROWS)
     rows.insert(5, "Goodwill on consolidation 7,777 8,888")
-    hits = [f for f in _find(rows) if f[0] == "seq-extra"]
+    hits = [f for f in _find_table(rows) if f[0] == "seq-extra"]
     assert hits and "7777" in hits[0][2]
 
 
@@ -157,14 +186,20 @@ def test_sequences_preserve_reading_order():
 
 def test_html_sequence_preserves_dom_order():
     soup = _soup(["Alpha 1,000 2,000", "Beta 3,000"])
-    assert [k for k, _c in html_number_sequence(soup)] == ["1000", "2000", "3000"]
+    assert [it[0] for it in html_number_sequence(soup)] == ["1000", "2000", "3000"]
+
+
+def test_html_sequence_marks_table_membership():
+    seq = html_number_sequence(_soup_table(["Alpha 1,000"]))
+    assert all(it[2] for it in seq), "table figures must be marked in_table"
+    assert not any(it[2] for it in html_number_sequence(_soup(["Alpha 1,000"])))
 
 
 def test_bulk_runs_are_summarised_not_dropped():
     # a long run of unmatched numbers is aggregated into one finding, so the
     # report stays readable while the count remains visible
     pdf = _PDF + [f"Schedule line {i} value {i * 1000} {i * 1100}" for i in range(30)]
-    hits = [f for f in _find(_ROWS, pdf) if f[0] == "seq-bulk"]
+    hits = [f for f in _find_table(_ROWS, pdf) if f[0] == "seq-bulk"]
     assert hits, "a large unmatched run must still be reported, in aggregate"
     assert "numbers" in hits[0][3]
 
@@ -252,3 +287,68 @@ def test_real_value_swap_survives_the_reflow_rule():
     )
     assert any(k.startswith("seq-") for k in _kinds(rows, pdf)), \
         "a genuine swap of two items' figures must not be suppressed as reflow"
+
+
+def test_prose_reflow_is_counted_not_itemised():
+    # Prose numbers that merely change position (nothing substituted) are
+    # aggregated: paragraph rewrapping and PDF extraction that runs words
+    # together ("OnApril9,2024,IASBha") reorder a paragraph's numbers while every
+    # value is still present.  On a real 38-page filing this one rule turned 37
+    # individual review items into a single visible count.
+    rows = list(_ROWS)
+    rows[7] = "1) Revenue is recognised on transfer of control 1,234 2,345"
+    got = _find(rows)
+    assert [f[0] for f in got] == ["seq-prose-order"]
+    assert "counted here rather than listed one by one" in got[0][3]
+
+
+def test_prose_substitution_is_still_itemised():
+    # The tiering must not weaken the flagship case: a SUBSTITUTED value is
+    # itemised wherever it sits, prose included.
+    rows = [r.replace("has 3 wholly", "has 8 wholly") for r in _ROWS]
+    hits = [f for f in _find(rows) if f[0] == "seq-value"]
+    assert hits and hits[0][1] == "error"
+
+
+def test_table_insertions_are_still_itemised():
+    # inside a table, cell order IS preserved by both renderings, so an added
+    # or dropped figure stays an individual finding
+    rows = list(_ROWS)
+    rows.insert(5, "Goodwill on consolidation 7,777 8,888")
+    assert [f for f in _find_table(rows) if f[0] == "seq-extra"]
+
+
+# --- letter-spaced PDF figures ("1 ,812") -----------------------------------
+
+from secverify.pdfside import _rejoin_comma_groups
+
+
+def test_split_comma_group_is_rejoined():
+    # A real fair-value table extracted as "5 07 1 ,812": the line-based checks
+    # read "1 ,812" as the two values 1 and 812, then reported the phantom 812 as
+    # a figure missing from the HTML — a red error on a correct filing.
+    assert _rejoin_comma_groups("carried at amortized cost 5 07 1 ,812") \
+        == "carried at amortized cost 507 1,812"
+    assert _rejoin_comma_groups("Quoted price 5 ,192 1 ,957") == "Quoted price 5,192 1,957"
+    assert _rejoin_comma_groups("Total 1 ,234 ,567") == "Total 1,234,567"
+
+
+def test_unambiguous_only_nothing_else_touched():
+    # already correct text is untouched
+    assert _rejoin_comma_groups("normal 1,812 here") == "normal 1,812 here"
+    # a 2-digit group is not a thousands group — left alone
+    assert _rejoin_comma_groups("note 2 ,15") == "note 2 ,15"
+    # ambiguous digit-by-digit spacing needs column geometry, not text rules:
+    # "8 3 5 7" may be 83/57 (two columns) or 8357 (one figure); likewise
+    # "4 83 4 65" (483/465) has no leading zero to disambiguate it
+    assert _rejoin_comma_groups("col 8 3 5 7") == "col 8 3 5 7"
+    assert _rejoin_comma_groups("Quoted price 4 83 4 65") == "Quoted price 4 83 4 65"
+    # an identifier is never rejoined into a neighbouring figure
+    assert _rejoin_comma_groups("DIN 00041245 stays") == "DIN 00041245 stays"
+
+
+def test_leading_zero_fragment_is_rejoined():
+    # "5 07" is 507: no standalone amount begins with 0, which is the same
+    # assumption the corpus already makes when it treats a leading-zero run as
+    # an identifier rather than a figure.
+    assert _rejoin_comma_groups("cost 5 07 here") == "cost 507 here"

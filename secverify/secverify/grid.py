@@ -296,6 +296,15 @@ def grid_compare(corpus, soup, pdf_paths):
                 #     in the ledger rather than raise a flag on every such row.
                 if candidates(hlbl):
                     _note_unchecked("column count differs from the PDF", hlbl)
+                elif hlbl in corpus.letters.canon:
+                    # The label IS in the PDF, just not on any single print
+                    # line: a long row label ("Liquid mutual fund units carried
+                    # at fair value through profit or loss") wraps across two or
+                    # three lines, so the per-line PDF grid never holds it
+                    # whole.  That is a layout difference, not a missing row —
+                    # flagging it would put a red-adjacent finding on every long
+                    # label in the document.
+                    _note_unchecked("label wraps across PDF lines", hlbl)
                 else:
                     sig = (hlbl, ("__unlocated__",))
                     if sig not in emitted:

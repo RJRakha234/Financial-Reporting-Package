@@ -46,6 +46,7 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 
+from .coverage import parse_index_line
 from .numbers import iter_tokens
 from .textnorm import canonical, running_furniture
 
@@ -110,15 +111,28 @@ def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str]]:
                 if c in seen_edge:
                     continue  # a header/footer reprint — counted once already
                 seen_edge.add(c)
+            # A print index/TOC entry ("2.7 Property, plant and equipment ……… 19")
+            # ends in a page number that an unpaginated HTML has no way to carry.
+            # Only the label's own numbers (the "2.7") take part — the same rule
+            # the PDF-coverage check applies to index lines.
+            entry = parse_index_line(line)
+            src = entry[0] if entry else line
             ctx = " ".join(line.split())[:120]
-            for key, token in _numbers_in(line):
+            for key, token in _numbers_in(src):
                 seq.append((key, ctx))
     return seq
 
 
-def html_number_sequence(soup) -> list[tuple[str, str]]:
-    """``(key, context)`` for every HTML number in DOM (reading) order."""
-    seq: list[tuple[str, str]] = []
+def html_number_sequence(soup) -> list[tuple[str, str, bool]]:
+    """``(key, context, in_table)`` for every HTML number in DOM order.
+
+    ``in_table`` records whether the number sits inside a ``<table>``.  It
+    decides how confidently a sequence break can be reported: a table's cell
+    order is preserved by both renderings, whereas prose is reflowed and its PDF
+    extraction routinely runs words together ("OnApril9,2024,IASBha"), so the
+    order of numbers inside a paragraph is not a reliable signal on its own.
+    """
+    seq: list[tuple[str, str, bool]] = []
     for node in soup.find_all(string=True):
         parent = getattr(node, "parent", None)
         if parent is not None and parent.name in ("script", "style"):
@@ -126,14 +140,15 @@ def html_number_sequence(soup) -> list[tuple[str, str]]:
         text = str(node)
         if not text.strip() or not re.search(r"\d", text):
             continue
+        in_table = parent is not None and parent.find_parent("table") is not None
         ctx = " ".join(text.split())[:120]
         for key, _token in _numbers_in(text):
-            seq.append((key, ctx))
+            seq.append((key, ctx, in_table))
     return seq
 
 
-def _fmt(items: list[tuple[str, str]], lo: int, hi: int, limit: int = 6) -> str:
-    vals = [k for k, _c in items[lo:hi]]
+def _fmt(items, lo: int, hi: int, limit: int = 6) -> str:
+    vals = [it[0] for it in items[lo:hi]]
     shown = ", ".join(vals[:limit])
     return shown + (f" … (+{len(vals) - limit} more)" if len(vals) > limit else "")
 
@@ -145,8 +160,8 @@ def sequence_findings(pages_raw, soup):
     if len(pdf_seq) < 20 or len(html_seq) < 20:
         return  # too little to align meaningfully
 
-    pkeys = [k for k, _c in pdf_seq]
-    hkeys = [k for k, _c in html_seq]
+    pkeys = [it[0] for it in pdf_seq]
+    hkeys = [it[0] for it in html_seq]
     # autojunk MUST be off: it treats elements appearing in >1% of a long
     # sequence as noise, which is exactly the common small numbers this check
     # exists to verify.
@@ -189,14 +204,37 @@ def sequence_findings(pages_raw, soup):
                 reflow.update((a, b))
                 break
 
+    def _in_table(j: int) -> bool:
+        """Whether HTML position *j* sits inside a table (nearest known side)."""
+        if not html_seq:
+            return False
+        k = min(max(j, 0), len(html_seq) - 1)
+        return html_seq[k][2]
+
     individual = 0
     bulk = {"replace": 0, "delete": 0, "insert": 0}
     reflowed = 0
+    prose_moves = 0
     for idx, (tag, i1, i2, j1, j2) in enumerate(ops):
         if idx in reflow:
             reflowed += max(i2 - i1, j2 - j1)
             continue
         span = max(i2 - i1, j2 - j1)
+        # A pure insertion or deletion inside PROSE is usually reflow or PDF
+        # extraction damage rather than a changed value: paragraphs are rewrapped
+        # between the two renderings, and pdfplumber routinely runs a sentence's
+        # words together ("OnApril9,2024,IASBha") or interleaves a two-column
+        # standards table, either of which reorders the paragraph's numbers while
+        # every value is still present.  Those are counted in the summary instead
+        # of itemised, so the itemised list stays about values rather than layout.
+        #
+        # A SUBSTITUTION is itemised wherever it occurs — that is the "PDF reads
+        # 3, HTML reads 8" case this module exists for, and it is meaningful in
+        # prose as much as in a table.  Table cell order IS preserved by both
+        # renderings, so inserts and deletes are itemised there too.
+        if tag != "replace" and not _in_table(j1):
+            prose_moves += span
+            continue
         if span > _TIGHT_SPAN or individual >= _MAX_INDIVIDUAL:
             bulk[tag] += span
             continue
@@ -250,4 +288,20 @@ def sequence_findings(pages_raw, soup):
             "ordered differently, omitted, or added, rather than individual "
             "values being wrong — the content-ordering and PDF-coverage checks "
             "name those sections. Reported here so the count is never invisible.",
+        )
+
+    if prose_moves:
+        yield (
+            "seq-prose-order",
+            "review",
+            f"{prose_moves} numbers in prose sit at a different sequence position",
+            f"Number sequence in prose — {prose_moves} numbers inside paragraphs "
+            "appear at a different point in the HTML's number sequence than in the "
+            "PDF's, with no value substituted (every value is still present). In "
+            "running text this is usually rewrapping, or PDF extraction that ran a "
+            "sentence's words together or interleaved a two-column table, rather "
+            "than a changed figure — so these are counted here rather than listed "
+            "one by one. The count is shown so the residue stays visible: if it is "
+            "large relative to the document, the prose sections deserve a read "
+            "against the PDF. Substituted values are always itemised separately.",
         )
