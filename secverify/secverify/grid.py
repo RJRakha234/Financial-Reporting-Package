@@ -510,6 +510,39 @@ def _strip_marker(figs: tuple) -> tuple:
     return tuple(out)
 
 
+#: a row label ending in a month name — "Gross carrying value as at September"
+#: (the day and year are stripped out of the canonical label).
+_MONTH_TAIL_RE = re.compile(
+    r"(?:january|february|march|april|may|june|july|august|september|october"
+    r"|november|december)$"
+)
+
+
+def _row_key(label: str, figs) -> tuple:
+    """The ``(label, values)`` key used to pair a HTML row with a PDF row.
+
+    Two artefacts of how each side is parsed have to be normalised away first,
+    or the pair never matches and the row silently drops out of the ORDER check —
+    the only check that can see a line moved with its values.
+
+    *footnote marker* — "Life Sciences (4)" carries its marker in the label cell,
+    so the HTML row parses it as a leading figure; in the PDF it is a superscript
+    in a different vertical band and is absent from the row.
+
+    *day of month* — a movement-schedule row reads "Carrying value as at
+    September 30" and the PDF's geometry row keeps that ``30`` as its first
+    figure, while the HTML strips it with the rest of the date.  Measured across
+    26 real filings this was the single largest reason rows went unchecked, so
+    a leading day-of-month value is dropped when the label ends in a month name —
+    a condition narrow enough that a real figure of 1-31 on any other row is
+    untouched.
+    """
+    out = _strip_marker(tuple(str(x) for x in figs))
+    if out and _MONTH_TAIL_RE.search(label) and re.fullmatch(r"[1-9]|[12]\d|3[01]", out[0]):
+        out = out[1:]
+    return (label, out)
+
+
 def _row_sequence_findings(html_tables, geom_rows):
     """Row-ORDER check keyed on (label, values), from PDF word geometry.
 
@@ -534,12 +567,11 @@ def _row_sequence_findings(html_tables, geom_rows):
     # the existing uniqueness guards skip it — never a mismatch.
     gpos: dict[tuple, list[int]] = {}
     for i, (l, f) in enumerate(geom_rows):
-        gpos.setdefault((l, _strip_marker(tuple(f))), []).append(i)
+        gpos.setdefault(_row_key(l, f), []).append(i)
     emitted: set[tuple] = set()
     for html_rows in html_tables:
         hrows = [
-            (l, _strip_marker(tuple(f)))
-            for l, f in html_rows if l and f and len(l) >= 6
+            _row_key(l, f) for l, f in html_rows if l and f and len(l) >= 6
         ]
         hcnt = Counter(hrows)
         seq: list[tuple[int, tuple]] = []
@@ -593,10 +625,10 @@ def _row_sequence_findings(html_tables, geom_rows):
                 nbrs = set()
                 if g > 0:
                     nl, nf = geom_rows[g - 1]
-                    nbrs.add((nl, _strip_marker(tuple(nf))))
+                    nbrs.add(_row_key(nl, nf))
                 if g + 1 < len(geom_rows):
                     nl, nf = geom_rows[g + 1]
-                    nbrs.add((nl, _strip_marker(tuple(nf))))
+                    nbrs.add(_row_key(nl, nf))
                 weak = not (nbrs & table_keys)
             emitted.add(key)
             lbl, figs = key

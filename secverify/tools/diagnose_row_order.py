@@ -64,7 +64,7 @@ def main(argv: list[str]) -> int:
     ]
     gpos: dict[tuple, list[int]] = {}
     for i, (l, f) in enumerate(geom):
-        gpos.setdefault((l, grid._strip_marker(tuple(f))), []).append(i)
+        gpos.setdefault(grid._row_key(l, f), []).append(i)
     print(f"PDF: {len(pdf_rows)} text rows, {len(geom)} geometry rows\n")
 
     tables = [
@@ -84,7 +84,7 @@ def main(argv: list[str]) -> int:
                   f"— no order check runs on it at all")
             continue
         hcnt = Counter(l for l, _f in rows)
-        keys = Counter((l, grid._strip_marker(tuple(f))) for l, f in rows)
+        keys = Counter(grid._row_key(l, f) for l, f in rows)
         print(f"table {n}: {len(rows)} figure rows")
         print(f"  {'row label':38} {'figs':22} label-order?  (label,values)-order?")
         for l, f in rows:
@@ -99,7 +99,7 @@ def main(argv: list[str]) -> int:
             elif len(pdf_pos.get(l, [])) != 1:
                 why_a = f"no: {len(pdf_pos.get(l, []))} PDF lines carry it"
             # why the (label,values) GEOMETRY check would skip it
-            key = (l, grid._strip_marker(tuple(f)))
+            key = grid._row_key(l, f)
             why_b = "yes"
             if not geom:
                 why_b = "no: no PDF geometry (unreadable/scanned?)"
