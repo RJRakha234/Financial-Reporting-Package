@@ -147,10 +147,19 @@ class HtmlCorpus:
 
         self.number_counts: Counter = Counter()
         self.neg_counts: Counter = Counter()
+        #: mirror the PDF corpus's symbol censuses — "%" and currency are
+        #: stripped by canonicalisation, so they need their own reconciliation
+        self.pct_counts: Counter = Counter()
+        self.cur_counts: Counter = Counter()
         for _s, _e, tok, key in iter_tokens(visible_text):
             self.number_counts[key] += 1
-            if token_attrs(tok)[0] < 0:
+            sign, currency, is_pct = token_attrs(tok)
+            if sign < 0:
                 self.neg_counts[key] += 1
+            if is_pct:
+                self.pct_counts[key] += 1
+            if currency:
+                self.cur_counts[(key, currency)] += 1
         self.number_keys = set(self.number_counts)
 
         # Whole-block occurrence counts.  Counting a phrase by substring in

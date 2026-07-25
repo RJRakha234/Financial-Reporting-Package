@@ -460,6 +460,80 @@ class Annotator:
                 "and confirm its sign matches the PDF.",
             )
 
+    def _symbol_census(self) -> None:
+        """Document-wide ``%`` and currency check, independent of row labels.
+
+        Canonicalisation strips ``%``, ``₹`` and ``$`` so magnitudes still match
+        across formatting differences.  Those attributes were then only compared
+        *within* the (gated) row check, which meant a symbol change in PROSE
+        passed everything: an adversarial audit confirmed that ``2.6% QoQ`` →
+        ``2.6 QoQ`` and ``$3.8 Billion`` → ``₹3.8 Billion`` both stayed green.
+        Both change the meaning completely — a growth rate becomes a bare count,
+        a dollar amount becomes a rupee amount.
+
+        This mirrors :meth:`_sign_census`: for every significant magnitude the
+        number of ``%``-bearing occurrences, and of each currency symbol, is
+        reconciled between the PDF and the HTML.  Any difference means a symbol
+        was added or dropped somewhere, whatever row or sentence it sits in.
+        """
+        for key in sorted(set(self.corpus.pct_counts) | set(self.html_corpus.pct_counts)):
+            token = self.corpus.number_sample.get(key, key)
+            if not is_significant(key, token):
+                continue
+            if key not in self.html_corpus.number_keys:
+                continue  # absent entirely — owned by the presence check
+            pdf_n = self.corpus.pct_counts.get(key, 0)
+            html_n = self.html_corpus.pct_counts.get(key, 0)
+            if pdf_n == html_n:
+                continue
+            dropped = html_n < pdf_n
+            self._new_issue(
+                "percent",
+                "error",
+                token,
+                f"Percent sign — {key} carries a “%” {pdf_n}× in the PDF but "
+                f"{html_n}× in the HTML, so a percent sign appears to have been "
+                + ("dropped" if dropped else "added")
+                + ". That changes a rate into a plain number (or the reverse) "
+                "while the digits stay identical, so no value check can see it. "
+                f"Locate every {key} in the HTML and confirm the “%” matches.",
+            )
+
+        # Currency is compared as a SWAP only, never as a drop.  A filing
+        # legitimately states the unit once in a column header and leaves the
+        # cells bare, so "₹34.75" in the PDF against "34.75" in the HTML is
+        # correct and must not be flagged.  What cannot be right is the HTML
+        # using a symbol the PDF never uses for that magnitude — ₹ where the
+        # source says $ — which changes the amount while every digit matches.
+        pdf_syms: dict[str, set[str]] = {}
+        html_syms: dict[str, set[str]] = {}
+        for (key, sym), n in self.corpus.cur_counts.items():
+            if n:
+                pdf_syms.setdefault(key, set()).add(sym)
+        for (key, sym), n in self.html_corpus.cur_counts.items():
+            if n:
+                html_syms.setdefault(key, set()).add(sym)
+        for key in sorted(html_syms):
+            token = self.corpus.number_sample.get(key, key)
+            if not is_significant(key, token):
+                continue
+            if key not in self.html_corpus.number_keys:
+                continue
+            added = html_syms[key] - pdf_syms.get(key, set())
+            if not added:
+                continue
+            was = ", ".join(sorted(pdf_syms.get(key, set()))) or "no symbol"
+            self._new_issue(
+                "currency",
+                "error",
+                token,
+                f"Currency — the HTML shows {key} with “{', '.join(sorted(added))}” "
+                f"but the PDF shows that figure with {was}. A swapped currency "
+                "symbol leaves every digit unchanged, so the value checks stay "
+                f"silent while the amount means something different. Confirm each "
+                f"{key} in the HTML carries the same symbol as the PDF.",
+            )
+
     def _identifier_census(self) -> None:
         """Verify statutory identifiers match between the PDF(s) and HTML.
 
@@ -996,6 +1070,7 @@ class Annotator:
         self._annotate_blocks(soup, root)
         self._annotate_numbers(soup, root)
         self._sign_census()
+        self._symbol_census()
         self._identifier_census()
         self._check_verbatim_block_order(root.get_text(" "))
         if self._at_least("alpha"):

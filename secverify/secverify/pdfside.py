@@ -52,6 +52,10 @@ class PdfCorpus:
     number_counts: Counter = field(default_factory=Counter)
     #: canonical number key -> how many times it appeared NEGATIVE
     neg_counts: Counter = field(default_factory=Counter)
+    #: how many times each magnitude carries a trailing "%"
+    pct_counts: Counter = field(default_factory=Counter)
+    #: how many times each (magnitude, currency symbol) pair occurs
+    cur_counts: Counter = field(default_factory=Counter)
     #: page labels whose text extraction was suspiciously sparse
     #: (possible scanned / image content the tool cannot read)
     low_text_pages: list[str] = field(default_factory=list)
@@ -126,8 +130,13 @@ class PdfCorpus:
         self.number_counts[key] += 1
         self.number_pages.setdefault(key, Counter())[page_no] += 1
         self.number_sample.setdefault(key, token)
-        if token_attrs(token)[0] < 0:
+        sign, currency, is_pct = token_attrs(token)
+        if sign < 0:
             self.neg_counts[key] += 1
+        if is_pct:
+            self.pct_counts[key] += 1
+        if currency:
+            self.cur_counts[(key, currency)] += 1
 
     def _remove_number(self, key: str, page_no: int) -> None:
         if self.number_counts.get(key, 0) <= 0:

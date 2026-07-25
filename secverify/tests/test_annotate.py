@@ -311,7 +311,12 @@ def test_currency_symbol_swap_is_caught():
     )
     result = Annotator(corpus).run(html, "ref.pdf", "doc.html")
     cur = [i for i in result.issues if i.kind == "currency"]
-    assert len(cur) == 1 and "₹" in cur[0].remark and "$" in cur[0].remark
+    # The row check reports the row; the document-wide symbol census also reports
+    # each swapped magnitude (that census is what catches a swap in PROSE, where
+    # no row exists to compare).  So the count is not pinned — what matters is
+    # that the swap is caught and the remark names both symbols.
+    assert cur, "a currency swap must be caught"
+    assert any("₹" in i.remark and "$" in i.remark for i in cur)
 
 
 def test_currency_symbol_absent_on_one_side_is_not_flagged():
@@ -506,3 +511,58 @@ def test_letter_spaced_digit_fragments_merge():
         {"text": "8", "x0": 543.7, "x1": 547.2, "top": 100.0},
     ]
     assert _merged_numeric_words(words) == ["30", "28"]
+
+
+# --- symbol census: % and currency changes in PROSE -------------------------
+#
+# Found by the adversarial mutation audit (tools/mutation_audit.py) on a real
+# press-release exhibit: canonicalisation strips "%", "₹" and "$", and those
+# attributes were only compared INSIDE the gated row check — so a symbol change
+# in running text passed every check and stayed green.
+
+def test_dropped_percent_sign_in_prose_is_caught():
+    corpus = make_corpus(
+        ["Revenues in CC terms grew by 3.8% YoY and by 2.6% QoQ this quarter."]
+    )
+    html = (
+        "<html><body><p>Revenues in CC terms grew by 3.8% YoY and by "
+        "2.6 QoQ this quarter.</p></body></html>"
+    )
+    r = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    hits = [i for i in r.issues if i.kind == "percent"]
+    assert hits, "a dropped % turns a rate into a bare count — must be caught"
+    assert hits[0].severity == "error"
+
+
+def test_swapped_currency_in_prose_is_caught():
+    corpus = make_corpus(["Large Deal TCV was $3.8 Billion with 55% Net New."])
+    html = (
+        "<html><body><p>Large Deal TCV was ₹3.8 Billion with 55% Net "
+        "New.</p></body></html>"
+    )
+    r = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    hits = [i for i in r.issues if i.kind == "currency"]
+    assert hits, "a $ -> ₹ swap in prose must be caught"
+
+
+def test_unit_in_header_instead_of_cell_is_not_flagged():
+    # the convention the census must respect: the PDF prints the symbol inline,
+    # the HTML states the unit once in a header and leaves the figures bare
+    corpus = make_corpus(["Grant date fair value per tranche ₹34.75 ₹34.20"])
+    html = (
+        "<html><body><table><tr><th>Particulars</th><th>in ₹</th><th>in ₹</th></tr>"
+        "<tr><td>Grant date fair value per tranche</td>"
+        "<td>34.75</td><td>34.20</td></tr></table></body></html>"
+    )
+    r = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    assert not [i for i in r.issues if i.kind == "currency"]
+
+
+def test_matching_percent_and_currency_stay_silent():
+    corpus = make_corpus(["Operating margin was 20.8% and TCV was $3.8 Billion."])
+    html = (
+        "<html><body><p>Operating margin was 20.8% and TCV was $3.8 "
+        "Billion.</p></body></html>"
+    )
+    r = Annotator(corpus).run(html, "ref.pdf", "doc.html")
+    assert not [i for i in r.issues if i.kind in ("percent", "currency")]
