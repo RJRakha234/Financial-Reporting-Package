@@ -359,6 +359,17 @@ class Annotator:
             self.corpus, clean_soup, self.pdf_paths
         ):
             self._new_issue(kind, sev, exc, rem)
+        # Ordered number-sequence alignment: verifies each number by its
+        # POSITION in the document's number sequence rather than by whether the
+        # value exists somewhere.  This is what makes small values (list
+        # markers, note references, bare counts) checkable at all — see
+        # seqdiff.py.
+        from .seqdiff import sequence_findings
+
+        for kind, sev, exc, rem in sequence_findings(
+            self.corpus.pages_raw, clean_soup
+        ):
+            self._new_issue(kind, sev, exc, rem)
         from .style import style_checks
         for kind, sev, exc, rem in style_checks(self.corpus, clean_soup, self.pdf_paths):
             issue = self._new_issue(kind, sev, exc, rem)

@@ -81,6 +81,22 @@ The structural detectors run:
 * **unit of scale** — every "in ₹ crore / million / lakh" declaration the
   PDF makes must appear in the HTML; a silently rescaled table (digits
   unchanged, unit word altered) is flagged;
+* **ordered number-sequence alignment** — the base number check asks only
+  *"does this value exist anywhere in the PDF?"*, which proves a distinctive
+  figure (`1,78,650` occurs once) but nothing at all about a common one (the
+  digit `3` occurs on every page). So every number is also collected in **PDF
+  reading order** and in **HTML DOM order**, and the two sequences are aligned
+  with a longest-common-subsequence diff. A number is then verified by its
+  **position** rather than its value — which is what makes **small values
+  checkable at all**: a bare `3` is element *n*, and its counterpart is
+  whatever sits at the aligned position. A one-for-one substitution (`3
+  subsidiaries` → `8 subsidiaries`) is a hard **error**; a number the HTML
+  never reproduces, one with no PDF source, and changed list enumerators
+  (`a) b) c)` → `1) 2) 3)`) are **review** items. Page numbers, per-page
+  header/footer reprints and identifier digits (DIN, UDIN, membership numbers)
+  are excluded first so layout differences cannot read as substitutions; large
+  unmatched runs are aggregated into one summary so a reordered section cannot
+  bury the report;
 * **segment / row sequence (geometry)** — even when every figure is present
   and correct, two rows can be **swapped** inside a statement (Life Sciences ↔
   Hi-Tech) with no value check firing. From PDF word geometry the tool pins
