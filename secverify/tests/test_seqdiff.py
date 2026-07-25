@@ -483,3 +483,76 @@ def test_properly_hidden_content_is_still_caught():
 
     got = list(_hidden_text(BS('<p style="display:none">Secret</p>', "html.parser")))
     assert got and got[0][0] == "hidden-text"
+
+
+# --- content hidden by a STYLESHEET, not an inline attribute ----------------
+#
+# Found while evaluating a PDF-vs-PDF corroboration mode: rendering exposed
+# figures the DOM-based checks reported as green. The gap turned out to be in
+# the HTML path itself and needed no rendering to fix — the hidden-content check
+# only inspected inline style attributes, so a class, an id, or a tag selector
+# in a <style> block passed straight through.
+#
+# This is the more dangerous direction of hidden content. Hidden EXTRA text adds
+# something a reader cannot see; a hidden REQUIRED figure means the filing is
+# missing a number it must show — and because the value is still in the markup,
+# every other check finds it and reports it verified.
+
+def test_figure_hidden_by_a_stylesheet_class_is_caught():
+    from secverify.render import _hidden_text
+
+    soup = BeautifulSoup(
+        "<html><head><style>.h{display:none}</style></head><body>"
+        "<table><tr><td>Trade receivables</td>"
+        '<td class="h">33,968</td><td>31,158</td></tr></table></body></html>',
+        "html.parser",
+    )
+    got = [g for g in _hidden_text(soup) if "33,968" in g[2]]
+    assert got, "a figure hidden by a stylesheet rule must be caught"
+    assert got[0][1] == "error"
+
+
+def test_figure_clipped_by_overflow_is_caught():
+    from secverify.render import _hidden_text
+
+    soup = BeautifulSoup(
+        '<p style="max-height:0;overflow:hidden;display:block">33,968</p>',
+        "html.parser",
+    )
+    assert list(_hidden_text(soup)), "content clipped out of view must be caught"
+
+
+def test_overflow_alone_is_not_hidden():
+    # clipping needs BOTH no room AND hidden overflow; either alone is ordinary
+    # layout and must not be flagged
+    from secverify.render import _hidden_text
+
+    for style in ("overflow:hidden", "height:0", "overflow:auto;height:40pt"):
+        soup = BeautifulSoup(f'<p style="{style}">33,968</p>', "html.parser")
+        assert not list(_hidden_text(soup)), f"{style} is not concealment"
+
+
+def test_css_injected_content_is_caught():
+    # content:'(' turns a positive into a negative FOR THE READER ONLY — the
+    # parentheses are not in the DOM, so no text or sign check can ever see them
+    from secverify.render import _hidden_text
+
+    soup = BeautifulSoup(
+        "<html><head><style>.neg::before{content:'('}</style></head>"
+        '<body><td class="neg">31,832</td></body></html>',
+        "html.parser",
+    )
+    got = list(_hidden_text(soup))
+    assert got and "31,832" in got[0][2]
+
+
+def test_ordinary_stylesheet_rules_are_not_flagged():
+    from secverify.render import _hidden_text
+
+    soup = BeautifulSoup(
+        "<html><head><style>td{font: 10pt Arial} .r{text-align:right}"
+        "@media print{.x{display:none}}</style></head>"
+        '<body><td class="r">33,968</td></body></html>',
+        "html.parser",
+    )
+    assert not list(_hidden_text(soup))
