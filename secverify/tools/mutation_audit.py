@@ -106,13 +106,18 @@ def _discover(html: str) -> list[Mutation]:
     soup = BeautifulSoup(html, "html.parser")
 
     # --- a parenthesised negative, for the sign check --------------------
-    for m in re.finditer(r"\(([\d,]{3,})\)", html):
+    # Discovered from VISIBLE TEXT, never the raw markup: a stylesheet's
+    # "rgb(204,238,255)" matches the same shape, and mutating a CSS colour tests
+    # nothing while reporting a comfortable miss.
+    visible = soup.get_text(" ")
+    for m in re.finditer(r"\((\d{1,3}(?:,\d{3})+)\)", visible):
         val = m.group(1)
-        out.append(
-            M("sign", "negative shown as positive",
-              m.group(0), val, val.replace(",", ""))
-        )
-        break
+        if m.group(0) in html:
+            out.append(
+                M("sign", "negative shown as positive",
+                  m.group(0), val, val.replace(",", ""))
+            )
+            break
 
     # --- two sibling table rows carrying the same number of figures ------
     rows: list[tuple[str, list[str], str]] = []
@@ -238,7 +243,17 @@ def build_catalogue(html: str) -> list[Mutation]:
 
 
 def run_audit(pdf_paths: list[str], html_path: str) -> list[Outcome]:
-    raw = open(html_path, encoding="utf-8", errors="replace").read()
+    from bs4 import BeautifulSoup
+
+    original = open(html_path, encoding="utf-8", errors="replace").read()
+    # Normalise through the parser ONCE and audit that form.  Discovery reads
+    # targets via BeautifulSoup, whose serialisation lower-cases tags and
+    # re-orders attributes, so a `str(tr)` pattern never matched the exhibit's
+    # raw uppercase <TR> markup — every structural mutation reported SKIPPED and
+    # whole error classes went untested while the score looked fine.  Parsing
+    # the same DOM twice is what the tool itself does, so this does not change
+    # what is being checked.
+    raw = str(BeautifulSoup(original, "html.parser"))
     ordered, _changed = order_pdfs_to_html(pdf_paths, raw)
     corpus = load_pdf(ordered)
 

@@ -122,6 +122,42 @@ The structural detectors run:
   reading order. Table rows are excluded (digit-heavy), so print-vs-web cell
   jitter cannot flood this.
 
+## Adversarial audit (does a wrong document actually fail?)
+
+A checker is only worth its green marks if a wrong document reliably fails it.
+`tools/mutation_audit.py` takes a **real** exhibit and its source PDF, applies
+one deliberate conversion error at a time, re-runs the whole tool, and reports
+whether that error surfaced as anything other than green:
+
+```bash
+python tools/mutation_audit.py statement.pdf [auditorsreport.pdf ...] exhibit.htm
+```
+
+Two independent signals decide each verdict, because either alone can mislead:
+
+* **new findings** — issues absent from the baseline run, so a filing's own
+  pre-existing findings (an exhibit label, an image-borne figure) cannot be
+  mistaken for detection;
+* **the mark on the changed token** — the highlight class the review copy
+  actually paints on the mutated value. A mutation that raises an issue
+  *somewhere* while still painting the changed number green is reported as a
+  **miss**, not a catch, because that is what a reviewer would see.
+
+The catalogue covers wrong/transposed/extra/dropped digits, a moved decimal, a
+dropped `%`, a swapped currency symbol or scale word, a sign flip, values
+exchanged between rows, transposed comparative columns, one row's values copied
+onto another, shifted dates, inserted negations, inverted wording, changed
+labels and note references, deleted/duplicated/reordered rows and paragraphs,
+and content hidden via CSS. Targets that depend on the document's own shape
+(which rows exist, which paragraphs are long enough) are **discovered from the
+exhibit** rather than hardcoded, so no error class silently stops being tested
+on a filing that happens not to contain a literal pattern — and any mutation
+that cannot be applied is reported `SKIPPED` rather than counted as a pass.
+
+Running this is what found the symbol-census gap: `%` and currency are stripped
+by canonicalisation, so `2.6% QoQ` → `2.6 QoQ` and `$3.8 Billion` → `₹3.8
+Billion` both passed every check and stayed green until the audit exposed them.
+
 ## Install
 
 ```bash

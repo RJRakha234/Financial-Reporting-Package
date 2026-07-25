@@ -392,9 +392,39 @@ def test_matching_symbols_stay_silent():
     assert _find(_SYM_PDF, _SYM_PDF) == []
 
 
-def test_table_cells_are_left_to_the_row_check():
-    # inside a table the unit is conventionally stated once in a column header
-    # with the cells bare, so an aligned pair legitimately differs there; the
-    # row-value check compares symbols per row instead.
-    rows = [r.replace("Total assets 17,447", "Total assets 17,447%") for r in _SYM_PDF]
-    assert not [f for f in _find_table(rows, _SYM_PDF) if f[0] == "percent"]
+def test_bare_grid_figures_are_left_to_the_row_check():
+    # A figure alone in a grid cell takes its unit from the column header, so an
+    # aligned pair legitimately differs there; the row-value check compares
+    # symbols per row instead.  Built explicitly so the figure really is a bare
+    # cell (no words), which is what marks it as grid data.
+    pdf = ["Schedule of ratios and balances for the period then ended"] + [
+        f"Line item {chr(97+i)} ratio {10 + i}.{i}% and balance {1000+i}"
+        for i in range(12)
+    ]
+    cells = "".join(
+        f"<tr><td>Line item {chr(97+i)} ratio</td><td>{10+i}.{i}</td>"
+        f"<td>{1000+i}</td></tr>" for i in range(12)
+    )
+    soup = BeautifulSoup(
+        "<html><body><p>Schedule of ratios and balances for the period then "
+        f"ended</p><table><tr><th>Particulars</th><th>%</th><th>Amount</th></tr>"
+        f"{cells}</table></body></html>",
+        "html.parser",
+    )
+    got = [f for f in sequence_findings(pdf, soup) if f[0] == "percent"]
+    assert not got, f"bare grid figures must not raise percent findings: {got[:2]}"
+
+
+def test_prose_inside_a_layout_table_is_still_prose():
+    # SEC exhibits nest whole sentences inside <td>.  Keying the prose-only
+    # checks on table MEMBERSHIP disabled them on every real filing, so a
+    # sentence in a cell must still be treated as prose.
+    rows = [r.replace("by 2.6% QoQ", "by 2.6 QoQ") for r in _SYM_PDF]
+    soup = BeautifulSoup(
+        "<html><body><table><tr><td>"
+        + "".join(f"<p>{r}</p>" for r in rows)
+        + "</td></tr></table></body></html>",
+        "html.parser",
+    )
+    hits = [f for f in sequence_findings(_SYM_PDF, soup) if f[0] == "percent"]
+    assert hits, "a dropped % in a sentence must be caught even inside a <td>"

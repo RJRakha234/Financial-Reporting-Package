@@ -132,11 +132,19 @@ def pdf_number_sequence(pages_raw: list[str]) -> list[tuple[str, str, bool, str]
 def html_number_sequence(soup) -> list[tuple[str, str, bool, bool, str]]:
     """``(key, context, in_table)`` for every HTML number in DOM order.
 
-    ``in_table`` records whether the number sits inside a ``<table>``.  It
-    decides how confidently a sequence break can be reported: a table's cell
-    order is preserved by both renderings, whereas prose is reflowed and its PDF
+    ``is_data_cell`` marks a figure sitting alone in a grid cell — a short,
+    essentially letter-free cell such as ``17,447`` or ``20.8%``.  It decides how
+    confidently a sequence break can be reported: a data grid's cell order is
+    preserved by both renderings, whereas prose is reflowed and its PDF
     extraction routinely runs words together ("OnApril9,2024,IASBha"), so the
-    order of numbers inside a paragraph is not a reliable signal on its own.
+    order of numbers inside a sentence is not a reliable signal on its own.
+
+    Table MEMBERSHIP is deliberately not the test.  SEC exhibit HTML nests
+    everything — headings, bullets, whole paragraphs — inside layout tables, so
+    keying on ``<table>`` classified running prose as grid data and silently
+    disabled the prose-only checks on every real filing.  What matters is
+    whether the text node is a bare figure or a sentence, which is what this
+    measures.
     """
     seq: list[tuple[str, str, bool, bool, str]] = []
     for node in soup.find_all(string=True):
@@ -146,10 +154,13 @@ def html_number_sequence(soup) -> list[tuple[str, str, bool, bool, str]]:
         text = str(node)
         if not text.strip() or not re.search(r"\d", text):
             continue
+        stripped = text.strip()
         in_table = parent is not None and parent.find_parent("table") is not None
+        # a data cell: inside a grid AND holding essentially no words
+        is_data_cell = in_table and len(re.findall(r"[A-Za-z]", stripped)) <= 3
         ctx = " ".join(text.split())[:120]
         for key, _tok, is_pct, cur in _numbers_in(text):
-            seq.append((key, ctx, in_table, is_pct, cur))
+            seq.append((key, ctx, is_data_cell, is_pct, cur))
     return seq
 
 
@@ -181,10 +192,12 @@ def sequence_findings(pages_raw, soup):
     # occurrence — the failure mode that made a document-wide COUNT census
     # unusable (a figure rendered as an image reads as a dropped "%").
     #
-    # Restricted to PROSE.  In a table the unit is conventionally stated once in
-    # a column header with the cells left bare, so an aligned pair legitimately
-    # differs there; inside a sentence there is no header to carry it.  Table
-    # cells are covered by the row-value check, which compares symbols per row.
+    # Restricted to PROSE — meaning a sentence, NOT merely "outside a <table>".
+    # A grid cell conventionally leaves the unit to its column header, so an
+    # aligned pair legitimately differs there and the row-value check owns it.
+    # But SEC exhibits nest prose inside layout tables, so testing table
+    # membership disabled this on every real filing; the test is whether the
+    # text node is a bare figure or running text.
     sym_hits = 0
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag != "equal":
@@ -193,7 +206,7 @@ def sequence_findings(pages_raw, soup):
             p = pdf_seq[i1 + off]
             h = html_seq[j1 + off]
             if h[2]:
-                continue  # in a table — owned by the row-value check
+                continue  # a bare grid figure — owned by the row-value check
             if p[2] != h[3]:
                 sym_hits += 1
                 gone = p[2] and not h[3]
@@ -262,7 +275,7 @@ def sequence_findings(pages_raw, soup):
                 break
 
     def _in_table(j: int) -> bool:
-        """Whether HTML position *j* sits inside a table (nearest known side)."""
+        """Whether HTML position *j* is a bare figure in a grid cell."""
         if not html_seq:
             return False
         k = min(max(j, 0), len(html_seq) - 1)
