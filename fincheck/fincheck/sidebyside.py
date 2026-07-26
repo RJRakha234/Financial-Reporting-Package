@@ -32,6 +32,14 @@ class Meta:
     marked_sections: int = 0
 
     @property
+    def made_a(self) -> str:
+        return produced_by(self.producer_a)
+
+    @property
+    def made_b(self) -> str:
+        return produced_by(self.producer_b)
+
+    @property
     def tags(self) -> "Tags":
         return Tags(
             short_a=_short_tag(self.label_a),
@@ -74,8 +82,10 @@ def _short_tag(label: str) -> str:
     return (words[0][:4] if words else label[:4]).upper()
 
 
-# How a PDF was made is usually the most useful thing to call it: "the Excel
-# one" and "the HTML one" is how people actually refer to these two files.
+# How a PDF was made, kept as a subtitle under the filename. It is genuinely
+# useful — "the Excel one" and "the Word one" is how people talk about two
+# renderings of the same content — but it is not what anyone recognises a file
+# by, so it does not get to be the heading.
 _PRODUCERS = (
     ("excel", "Excel export"),
     ("skia", "HTML print"),
@@ -89,14 +99,19 @@ _PRODUCERS = (
 )
 
 
-def default_label(path: str, producer: str, creator: str = "") -> str:
-    """Name a document by how it was produced, falling back to its filename."""
+def default_label(path: str, producer: str = "", creator: str = "") -> str:
+    """Name a column after the file, which is what the reader recognises."""
+    stem = path.rsplit("/", 1)[-1]
+    return stem[:-4] if stem.lower().endswith(".pdf") else stem
+
+
+def produced_by(producer: str, creator: str = "") -> str:
+    """A short description of how the PDF was made, or ``""``."""
     haystack = f"{producer} {creator}".lower()
     for needle, label in _PRODUCERS:
         if needle in haystack:
             return label
-    stem = path.rsplit("/", 1)[-1]
-    return stem[:-4] if stem.lower().endswith(".pdf") else stem
+    return producer.strip()
 
 
 
@@ -454,8 +469,11 @@ td.stack{width:auto}
   grid-template-columns:2.4rem 1fr 1fr 2.4rem;gap:.55rem;
   background:var(--paper);border-bottom:2px solid var(--ink);
   padding:.5rem 0 .45rem;margin-bottom:.2rem}
-.ch{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;font-weight:600;
+.ch{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;font-weight:600;
   color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch i{font-style:normal;font-weight:400;letter-spacing:.02em;text-transform:none;
+  color:var(--muted);font-size:.68rem}
+.ch i:before{content:" · "}
 .cgut{font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
   text-align:right}
 /* Two real columns when the table is narrow enough for them to fit. */
@@ -606,8 +624,8 @@ def write_side_by_side(
 {toc}
   <div class="colhead">
     <span class="cgut">pg</span>
-    <span class="ch">{_e(meta.label_a)}</span>
-    <span class="ch">{_e(meta.label_b)}</span>
+    <span class="ch">{_e(meta.label_a)}<i>{_e(meta.made_a)}</i></span>
+    <span class="ch">{_e(meta.label_b)}<i>{_e(meta.made_b)}</i></span>
     <span class="cgut">pg</span>
   </div>
 {body}

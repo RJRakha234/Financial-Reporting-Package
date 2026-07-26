@@ -237,6 +237,19 @@ def test_a_table_is_titled_from_the_heading_above_it(tmp_path):
 # --------------------------------------------------------------------------
 
 
+def test_the_column_header_names_the_file_and_how_it_was_made(tmp_path):
+    a = make_pdf(tmp_path / "quarterly.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "filed.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    assert ">quarterly<" in html and ">filed<" in html
+    # PyMuPDF stamps its own producer, so the subtitle is populated.
+    assert "<i>" in html
+
+
 def test_html_is_written_and_shows_both_documents(tmp_path):
     a = make_pdf(tmp_path / "a.pdf", STATEMENT)
     changed = [l.replace("54,613      51,804", "54,613      51,900") for l in STATEMENT]
@@ -397,16 +410,22 @@ def test_a_page_with_no_text_layer_yields_nothing_to_align(tmp_path):
     assert sections == []
 
 
-def test_columns_are_named_after_how_each_pdf_was_produced(tmp_path):
-    """"the Excel one" and "the HTML one" is how people refer to these files."""
-    from fincheck.sidebyside import default_label
+def test_columns_are_named_after_the_file(tmp_path):
+    """The filename is what a reader recognises, so it is the heading.
 
-    assert default_label("/x/q2.pdf", "Microsoft® Excel® for Microsoft 365") == (
-        "Excel export"
-    )
-    assert default_label("/x/q2.pdf", "Skia/PDF m150", "Chrome/150") == "HTML print"
-    # No recognisable producer falls back to the filename, without the suffix.
-    assert default_label("/x/statements_q2.pdf", "", "") == "statements_q2"
+    Naming the columns after the producer instead ("HTML print", "Word export")
+    is real information but nobody recognises their own file by it, and it left
+    readers wondering which document they were looking at.
+    """
+    from fincheck.sidebyside import default_label, produced_by
+
+    assert default_label("/x/statements_q2.pdf") == "statements_q2"
+    assert default_label("/x/q2.pdf", "Microsoft® Excel® for Microsoft 365") == "q2"
+
+    # How it was made is kept, as a subtitle rather than a heading.
+    assert produced_by("Microsoft® Excel® for Microsoft 365") == "Excel export"
+    assert produced_by("Skia/PDF m150", "Chrome/150") == "HTML print"
+    assert produced_by("") == ""
 
 
 def test_the_page_labels_its_two_columns(tmp_path):
@@ -420,8 +439,8 @@ def test_the_page_labels_its_two_columns(tmp_path):
     side_by_side(a, b, output_html=str(out), label_a="Source PDF", label_b="HTML PDF")
     html = out.read_text()
 
-    assert '<span class="ch">Source PDF</span>' in html
-    assert '<span class="ch">HTML PDF</span>' in html
+    assert ">Source PDF<" in html
+    assert ">HTML PDF<" in html
     assert "colhead" in html, "the column names should be a sticky header"
 
 
