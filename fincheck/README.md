@@ -371,6 +371,32 @@ anything unmarked falls back to content matching. `--ignore-marks` turns it off.
 is the feature working, not failing. If a section reports text present on one
 side only, check the highlight actually covers the whole passage on both.
 
+### Finding a point back on the page
+
+The report says what differs. `--marked-pdfs` says where it came from:
+
+```bash
+fincheck compare exhibit.pdf original.pdf \
+    --side-by-side review.html --marked-pdfs
+#   Numbered copy written to: exhibit.marked.pdf
+#   Numbered copy written to: original.marked.pdf
+```
+
+Every section in the report carries a **serial number**, and the same number is
+stamped onto the passage it was drawn from in a copy of *each* source PDF. Read
+a point in the report, note its number, and it is outlined and labelled on the
+page in both copies.
+
+The copies stand on their own too — the outlines are coloured by verdict, so a
+page can be skimmed without the report: **green** where the two documents
+agree, **amber** where they differ, **red** where the section exists on one side
+only. Where you numbered a section yourself, the badge shows `§n` under the
+serial, so your numbering and the report's line up.
+
+Page numbers throughout the report are **links into those copies at that page** —
+the section headers, and every row's page in the gutter. Paths are written
+relative, so the report and its two copies can be moved or shared as a set.
+
 ### What it infers, and why that matters
 
 Each of these rules can misfire, and none of them is evidence:

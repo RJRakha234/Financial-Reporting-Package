@@ -100,6 +100,14 @@ def build_compare_parser() -> argparse.ArgumentParser:
         "--label-b", metavar="NAME", help="column heading for the second PDF"
     )
     parser.add_argument(
+        "--marked-pdfs",
+        action="store_true",
+        help="also write a numbered copy of each input PDF beside the "
+        "side-by-side page, with every compared section outlined and stamped "
+        "with its number from the report; page references in the report then "
+        "link into them",
+    )
+    parser.add_argument(
         "--ignore-marks",
         action="store_true",
         help="ignore section numbers written into the PDFs' highlight comments; "
@@ -144,10 +152,18 @@ def compare_main(argv: list[str]) -> int:
 
     aligned = None
     if args.side_by_side:
+        copies = (None, None)
+        if args.marked_pdfs:
+            beside = Path(args.side_by_side).parent
+            copies = tuple(
+                str(beside / f"{p.stem}.marked.pdf") for p in paths
+            )
         aligned = side_by_side(
             str(paths[0]),
             str(paths[1]),
             output_html=args.side_by_side,
+            marked_pdf_a=copies[0],
+            marked_pdf_b=copies[1],
             label_a=args.label_a,
             label_b=args.label_b,
             use_marks=not args.ignore_marks,
@@ -180,6 +196,8 @@ def compare_main(argv: list[str]) -> int:
                 f"  {s.only_in_a:,} only in A, {s.only_in_b:,} only in B. "
                 "This view infers paragraphs and tables — treat it as a worksheet."
             )
+            for path in aligned.marked_pdfs:
+                print(f"  Numbered copy written to: {path}")
             if aligned.marked_sections:
                 blanks = sum(
                     1

@@ -493,3 +493,103 @@ def test_a_short_labelled_year_column_still_reads_as_a_table(tmp_path):
 
     assert [b.kind for b in blocks] == ["table"]
     assert blocks[0].values == [2025.0]
+
+
+# --------------------------------------------------------------------------
+# Numbered copies of the source PDFs, and links back to them
+# --------------------------------------------------------------------------
+
+
+def test_each_section_is_numbered_and_stamped_onto_both_sources(tmp_path):
+    """The report says what differs; the copies say where it came from."""
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "b.pdf",
+        [l.replace("11,502      10,106", "11,502      10,999") for l in STATEMENT],
+    )
+    out_a, out_b = tmp_path / "a.marked.pdf", tmp_path / "b.marked.pdf"
+
+    result = side_by_side(
+        a, b, output_html=str(tmp_path / "sbs.html"),
+        marked_pdf_a=str(out_a), marked_pdf_b=str(out_b),
+    )
+
+    assert result.marked_pdfs == [str(out_a), str(out_b)]
+    assert out_a.is_file() and out_b.is_file()
+    # Serials run 1..N in report order, so a number in the report finds a
+    # number on the page.
+    serials = [s.serial for s in result.sections]
+    assert serials == list(range(1, len(result.sections) + 1))
+    for path in (out_a, out_b):
+        doc = fitz.open(str(path))
+        try:
+            assert "1" in doc[0].get_text(), "the serial should be stamped on the page"
+        finally:
+            doc.close()
+
+
+def test_a_section_knows_its_region_on_each_side(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+
+    result = side_by_side(a, b)
+    table = next(s for s in result.sections if s.kind == "table")
+
+    regions = table.regions("a")
+    assert regions, "the section must know where it sits"
+    assert table.first_page("a") == 1
+    x0, y0, x1, y1 = regions[1]
+    assert x1 > x0 and y1 > y0
+
+
+def test_page_numbers_link_into_the_numbered_copy(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(
+        a, b, output_html=str(out),
+        marked_pdf_a=str(tmp_path / "a.marked.pdf"),
+        marked_pdf_b=str(tmp_path / "b.marked.pdf"),
+    )
+    html = out.read_text()
+
+    # Relative, so the report and its copies can be moved together.
+    assert 'href="a.marked.pdf#page=1"' in html
+    assert 'href="b.marked.pdf#page=1"' in html
+    assert "numbered and located" in html
+
+
+def test_no_links_are_written_when_no_copies_were_asked_for(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    result = side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    assert result.marked_pdfs == []
+    assert "#page=" not in html
+    assert "numbered and located" not in html
+
+
+def test_the_cli_writes_both_copies_beside_the_report(tmp_path, capsys):
+    from fincheck.cli import main
+
+    a = make_pdf(tmp_path / "quarterly.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "filed.pdf",
+        [l.replace("54,613      51,804", "54,613      51,900") for l in STATEMENT],
+    )
+    out = tmp_path / "sbs.html"
+
+    code = main(
+        ["compare", a, b, "-o", "none", "--no-render",
+         "--side-by-side", str(out), "--marked-pdfs"]
+    )
+    printed = capsys.readouterr().out
+
+    assert code == 1
+    assert (tmp_path / "quarterly.marked.pdf").is_file()
+    assert (tmp_path / "filed.marked.pdf").is_file()
+    assert "Numbered copy written to" in printed

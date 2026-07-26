@@ -30,6 +30,10 @@ class Meta:
     producer_a: str = ""
     producer_b: str = ""
     marked_sections: int = 0
+    # Relative hrefs to the numbered copies, so every page reference in the
+    # report can open the page it was drawn from.
+    marked_href_a: str = ""
+    marked_href_b: str = ""
 
     @property
     def made_a(self) -> str:
@@ -46,6 +50,8 @@ class Meta:
             short_b=_short_tag(self.label_b),
             full_a=self.label_a,
             full_b=self.label_b,
+            href_a=self.marked_href_a,
+            href_b=self.marked_href_b,
         )
 
 
@@ -61,6 +67,8 @@ class Tags(NamedTuple):
     short_b: str
     full_a: str
     full_b: str
+    href_a: str = ""
+    href_b: str = ""
 
 
 _SHORT = (
@@ -120,6 +128,20 @@ def _e(text) -> str:
     return html.escape(str(text))
 
 
+def _page_link(page: str, href: str, css: str = "") -> str:
+    """A page number that opens the marked-up PDF at that page."""
+    text = _e(page)
+    if not href or not page or page == "—":
+        return text
+    first = str(page).split("\u2013")[0].split("-")[0].strip()
+    if not first.isdigit():
+        return text
+    return (
+        f'<a class="pl {css}" href="{_e(href)}#page={first}" target="_blank" '
+        f'rel="noopener" title="open page {_e(first)} of the marked-up PDF">{text}</a>'
+    )
+
+
 def _figure_cells(values, changed: set, missing: int = 0) -> str:
     cells = "".join(
         f'<span class="fig{" fig--changed" if i in changed else ""}">'
@@ -165,12 +187,12 @@ def _stacked_row_html(pair: Pair, tags: Tags) -> str:
 
     return (
         f'<tr class="r r--{status}">'
-        f'<td class="gut">{_e(a.page) if a else ""}</td>'
+        f'<td class="gut">{_page_link(a.page, tags.href_a) if a else ""}</td>'
         f'<td class="stack">'
         f'<span class="{label_cls}">{_e(label) or "&nbsp;"}</span>{alt}'
         f"{line(a, b, tags.short_a)}{line(b, a, tags.short_b)}"
         f"</td>"
-        f'<td class="gut">{_e(b.page) if b else ""}</td>'
+        f'<td class="gut">{_page_link(b.page, tags.href_b) if b else ""}</td>'
         f"</tr>"
     )
 
@@ -198,10 +220,10 @@ def _row_pair_html(pair: Pair, tags: Tags) -> str:
 
     return (
         f'<tr class="r r--{status}">'
-        f'<td class="gut">{_e(a.page) if a else ""}</td>'
+        f'<td class="gut">{_page_link(a.page, tags.href_a) if a else ""}</td>'
         f"{side(a, b, True)}"
         f"{side(b, a, False)}"
-        f'<td class="gut">{_e(b.page) if b else ""}</td>'
+        f'<td class="gut">{_page_link(b.page, tags.href_b) if b else ""}</td>'
         f"</tr>"
     )
 
@@ -309,17 +331,16 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
         else ""
     )
 
-    badge = (
-        f'<span class="snum">&sect;{_e(section.marked)}</span>'
-        if section.marked is not None
-        else ""
-    )
+    badge = f'<span class="serial">{section.serial}</span>'
+    if section.marked is not None:
+        badge += f'<span class="snum">&sect;{_e(section.marked)}</span>'
     head = (
         f'<div class="shead">'
         f'{badge}'
         f'<span class="skind">{kind}</span>'
         f'<h3>{_e(section.title) or "&nbsp;"}</h3>'
-        f'<span class="spages">A&nbsp;{_e(pages_a)} &middot; B&nbsp;{_e(pages_b)}</span>'
+        f'<span class="spages">{_page_link(pages_a, tags.href_a)}'
+        f' &middot; {_page_link(pages_b, tags.href_b)}</span>'
         f'<span class="chip chip--{status}">{label}</span>'
         f'{f"<span class=sdetail>{detail}</span>" if detail else ""}'
         f"</div>"
@@ -390,6 +411,7 @@ h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem)
   color:var(--ink-soft)}
 .caution strong{color:var(--ink)}
 .caution--marks{border-left-color:var(--same)}
+.caution--copies{border-left-color:var(--differs)}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));
   border-top:2px solid var(--ink);border-bottom:1px solid var(--rule);margin:0 0 1.5rem}
 .stat{padding:.9rem 1rem 1rem}
@@ -416,8 +438,13 @@ h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem)
 .shead{display:flex;flex-wrap:wrap;gap:.6rem;align-items:baseline;margin-bottom:.6rem}
 .shead h3{font-family:var(--serif);font-weight:400;font-size:1.02rem;margin:0;
   flex:1 1 20rem;min-width:0}
+.serial{font-family:var(--mono);font-size:.74rem;font-weight:600;color:var(--paper);
+  background:var(--ink);padding:.1rem .42rem;border-radius:2px;white-space:nowrap}
 .snum{font-family:var(--mono);font-size:.74rem;font-weight:600;color:var(--paper);
   background:var(--accent);padding:.1rem .4rem;border-radius:2px;white-space:nowrap}
+.pl{color:var(--accent);text-decoration:none;border-bottom:1px dotted currentColor}
+.pl:hover,.pl:focus-visible{background:var(--panel)}
+.gut .pl{border-bottom:0}
 body.hide-unmarked .sec--unmarked{display:none}
 .skind{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;
   color:var(--muted);border:1px solid var(--rule);padding:.12rem .38rem;border-radius:2px}
@@ -495,8 +522,11 @@ body.hide-oneside .sec--added,body.hide-oneside .sec--removed{display:none}
   grid-template-columns:repeat(auto-fill,minmax(24rem,1fr))}
 .toc a{color:var(--ink-soft);text-decoration:none;font-size:.82rem;display:flex;gap:.5rem}
 .toc a:hover,.toc a:focus-visible{color:var(--accent);text-decoration:underline}
+.toc .s{font-family:var(--mono);font-size:.7rem;color:var(--paper);
+  background:var(--ink);border-radius:2px;padding:0 .3rem;min-width:1.6rem;
+  text-align:center;flex:none}
 .toc .n{font-family:var(--mono);font-size:.7rem;color:var(--differs);
-  min-width:3.4rem;text-align:right;flex:none}
+  min-width:2.6rem;text-align:right;flex:none}
 .toc .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 summary:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);
   outline-offset:2px}
@@ -535,6 +565,23 @@ def write_side_by_side(
     blanks_in_numbered = sum(
         1 for x in numbered for p in x.pairs if p.a is None or p.b is None
     )
+    copies_note = ""
+    if meta.marked_href_a or meta.marked_href_b:
+        copies_note = (
+            '<div class="caution caution--copies">'
+            "<strong>Every point here is numbered and located.</strong> The number "
+            "on each section is stamped onto the same passage in a copy of each "
+            "source PDF — "
+            f'<a class="pl" href="{_e(meta.marked_href_a)}" target="_blank" '
+            f'rel="noopener">{_e(meta.marked_href_a)}</a> and '
+            f'<a class="pl" href="{_e(meta.marked_href_b)}" target="_blank" '
+            f'rel="noopener">{_e(meta.marked_href_b)}</a>. '
+            "Page numbers throughout open those copies at the page the content "
+            "was drawn from. In them, green outlines agree, amber differ, red "
+            "appear on one side only."
+            "</div>"
+        )
+
     marks_note = ""
     unmarked_filter = ""
     if numbered:
@@ -563,8 +610,8 @@ def write_side_by_side(
     # has to look at. 700 sections is too many to scroll hunting for them.
     differing = [(i, x) for i, x in enumerate(sections) if x.status == "changed"]
     toc_items = "".join(
-        f'<li><a href="#s{i}"><span class="n">'
-        f'{x.changed}/{len(x.pairs)}</span>'
+        f'<li><a href="#s{i}"><span class="s">{x.serial}</span>'
+        f'<span class="n">{x.changed}/{len(x.pairs)}</span>'
         f'<span class="t">{_e(x.title) or "&nbsp;"}</span></a></li>'
         for i, x in differing
     )
@@ -610,6 +657,7 @@ def write_side_by_side(
   </div>
 
   {marks_note}
+  {copies_note}
 
   <div class="bar">
     <label><input type="checkbox" id="hide-same"> Hide {identical_sections:,} identical</label>

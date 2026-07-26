@@ -90,6 +90,9 @@ class Unit:
     tokens: set
     values: tuple
     section: str | None = None
+    # The rows this unit was built from, so its place on the page can be found
+    # again when marking up the source PDF.
+    rows: tuple = ()
 
     @property
     def page(self) -> str:
@@ -156,6 +159,7 @@ def units_of(blocks: list[Block], marks=None) -> list[Unit]:
                         tokens=set(_norm(text).split()),
                         values=(),
                         section=label,
+                        rows=tuple(rows),
                     )
                 )
         else:
@@ -170,6 +174,7 @@ def units_of(blocks: list[Block], marks=None) -> list[Unit]:
                         tokens=set(_norm(row.label).split()),
                         values=tuple(f.value for f in row.figures),
                         section=section_of([row]),
+                        rows=(row,),
                     )
                 )
     return out
@@ -419,6 +424,7 @@ def _merge_paragraphs(units: list[Unit]) -> Unit:
         tokens=set(_norm(text).split()),
         values=(),
         section=first.section,
+        rows=tuple(r for u in units for r in u.rows),
     )
 
 
@@ -532,6 +538,9 @@ class Section:
     pairs: list[Pair] = field(default_factory=list)
     # The number a reviewer marked on this content, if any.
     marked: str | None = None
+    # Position in the report, stamped onto the marked-up PDFs so a point here
+    # can be found on the page it came from.
+    serial: int = 0
 
     @property
     def changed(self) -> int:
@@ -578,6 +587,35 @@ class Section:
             self.a_block.pages if self.a_block else "—",
             self.b_block.pages if self.b_block else "—",
         )
+
+    def regions(self, side: str) -> dict:
+        """Bounding box per page of this section's content on one side.
+
+        Used to draw the section's outline and serial number onto that
+        document, so the report and the marked-up PDF point at each other.
+        """
+        boxes: dict = {}
+        for pair in self.pairs:
+            unit = pair.a if side == "a" else pair.b
+            if unit is None:
+                continue
+            for row in unit.rows:
+                box = boxes.get(row.page)
+                boxes[row.page] = (
+                    row.bbox
+                    if box is None
+                    else (
+                        min(box[0], row.x0),
+                        min(box[1], row.y0),
+                        max(box[2], row.x1),
+                        max(box[3], row.y1),
+                    )
+                )
+        return boxes
+
+    def first_page(self, side: str) -> int | None:
+        pages = self.regions(side)
+        return min(pages) if pages else None
 
 
 def group(pairs: list[Pair]) -> list[Section]:
@@ -645,6 +683,7 @@ def group(pairs: list[Pair]) -> list[Section]:
             marked=marked,
         )
         section._key = key
+        section.serial = len(sections) + 1
         sections.append(section)
 
         # Remember the heading the following tables sit under, so they can be

@@ -22,6 +22,7 @@ from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 from .sidebyside import Meta, default_label, write_side_by_side
+from .sidemarks import write_marked_copies
 
 __all__ = [
     "analyze",
@@ -137,6 +138,7 @@ class SideBySideResult:
     summary: object
     output_html: str | None = None
     marked_sections: list = field(default_factory=list)
+    marked_pdfs: list = field(default_factory=list)
 
     @property
     def changed_sections(self) -> list:
@@ -152,6 +154,16 @@ class SideBySideResult:
         ]
 
 
+def _relative_to(target: str, html_path: str) -> str:
+    """Link the report to a copy beside it, so the pair can be moved together."""
+    import os
+
+    try:
+        return os.path.relpath(target, os.path.dirname(os.path.abspath(html_path)))
+    except ValueError:  # different drives on Windows
+        return target
+
+
 def side_by_side(
     pdf_a: str,
     pdf_b: str,
@@ -159,6 +171,8 @@ def side_by_side(
     label_a: str | None = None,
     label_b: str | None = None,
     use_marks: bool = True,
+    marked_pdf_a: str | None = None,
+    marked_pdf_b: str | None = None,
 ) -> SideBySideResult:
     """Match two documents paragraph by paragraph and row by row.
 
@@ -178,6 +192,9 @@ def side_by_side(
             comments, matching content marked ``5`` against content marked ``5``
             rather than trusting similarity. On by default; it does nothing to a
             document with no such marks.
+        marked_pdf_a: if given, write a copy of ``pdf_a`` with every compared
+            section outlined and stamped with its number from the report.
+        marked_pdf_b: the same for ``pdf_b``.
     """
     marks_a = read_marks(pdf_a) if use_marks else None
     marks_b = read_marks(pdf_b) if use_marks else None
@@ -191,6 +208,12 @@ def side_by_side(
     shared_marks = (
         sorted(set(marks_a.labels) & set(marks_b.labels), key=len) if sectioned else []
     )
+
+    copies = None
+    if marked_pdf_a and marked_pdf_b:
+        copies = write_marked_copies(
+            pdf_a, pdf_b, sections, marked_pdf_a, marked_pdf_b
+        )
 
     written = None
     if output_html is not None:
@@ -213,6 +236,8 @@ def side_by_side(
                 producer_a=producer_a,
                 producer_b=producer_b,
                 marked_sections=len(shared_marks),
+                marked_href_a=_relative_to(copies[0], output_html) if copies else "",
+                marked_href_b=_relative_to(copies[1], output_html) if copies else "",
             )
         finally:
             doc_a.close()
@@ -227,4 +252,5 @@ def side_by_side(
         summary=summary,
         output_html=written,
         marked_sections=shared_marks,
+        marked_pdfs=list(copies) if copies else [],
     )
