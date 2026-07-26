@@ -214,22 +214,34 @@ def comparison_to_console(result: ComparisonResult, max_changes: int = 40) -> st
     )
 
     if result.pixels_compared:
-        pixel_pages = [
+        differing = [
             p for p in result.pages if p.pixels is not None and not p.pixels.identical
         ]
-        changed_px = sum(p.pixels.changed_pixels for p in pixel_pages)
+        # A page whose two renderings come out different sizes was never
+        # measured. Folding those into the percentage produced "0.000% of
+        # pixels", which reads as "differs by almost nothing" — the opposite of
+        # "could not be compared at all".
+        measured = [p for p in differing if p.pixels.comparable]
+        unmeasured = [p for p in differing if not p.pixels.comparable]
         total_px = sum(
-            p.pixels.total_pixels for p in result.pages if p.pixels is not None
+            p.pixels.total_pixels
+            for p in result.pages
+            if p.pixels is not None and p.pixels.comparable
         )
-        detail = ""
-        if pixel_pages:
+        parts = []
+        if measured:
+            changed_px = sum(p.pixels.changed_pixels for p in measured)
             share = 100.0 * changed_px / total_px if total_px else 0.0
-            detail = f"({len(pixel_pages)} page(s), {share:.3f}% of pixels)"
+            parts.append(f"{len(measured)} page(s), {share:.3f}% of pixels")
+        if unmeasured:
+            parts.append(
+                f"{len(unmeasured)} page(s) not comparable, different rendered size"
+            )
         lines.append(
             _verdict_line(
                 f"rendered pixels at {result.dpi} dpi",
                 result.visually_identical,
-                detail,
+                f"({'; '.join(parts)})" if parts else "",
             )
         )
     else:

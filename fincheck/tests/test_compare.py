@@ -453,3 +453,28 @@ def test_cli_reports_a_missing_file_without_a_traceback(tmp_path, capsys):
 
     assert main(["compare", a, str(tmp_path / "nope.pdf"), "-o", "none"]) == 2
     assert "file not found" in capsys.readouterr().err
+
+
+def test_pages_of_different_size_are_reported_as_not_comparable(tmp_path):
+    """A page-width difference of a fraction of a point makes pixels unmeasurable.
+
+    Folding those pages into the changed-pixel percentage produced "0.000% of
+    pixels", which reads as "differs by almost nothing" rather than "could not
+    be compared".
+    """
+    a = make_pdf(tmp_path / "a.pdf")
+    doc = fitz.open()
+    page = doc.new_page(width=595.32, height=842)  # 0.32pt wider than A
+    for x, y, text in ROWS:
+        page.insert_text((x, y), text, fontsize=11, fontname="helv")
+    b = tmp_path / "b.pdf"
+    doc.save(str(b))
+    doc.close()
+
+    result = compare_pdfs(a, str(b), dpi=150)
+    pixels = result.pages[0].pixels
+    console = comparison_to_console(result)
+
+    assert pixels.comparable is False
+    assert "different rendered size" in console
+    assert "0.000% of pixels" not in console

@@ -446,3 +446,31 @@ def test_identical_documents_produce_no_differences(tmp_path):
     assert summary.only_in_b == 0
     assert all(s.status == "same" for s in sections)
     assert summary.matched == summary.unchanged
+
+
+def test_a_sentence_ending_on_a_year_is_not_a_one_column_table(tmp_path):
+    """Two documents wrapping the same sentence differently must still agree.
+
+    "...PEAK Matrix Assessment 2025" ended on a bare year, so it read as a
+    one-column table row; the other document wrapped the sentence elsewhere, so
+    the same year was mid-line and stayed prose — and the figure then looked
+    like it had disappeared.
+    """
+    sentence = "Positioned as a leader in the Everest Group PEAK Matrix Assessment 2025"
+    wrapped = ["Positioned as a leader in the Everest Group PEAK Matrix",
+               "Assessment 2025 and again the following year"]
+
+    a = segment(make_pdf(tmp_path / "a.pdf", [sentence], width=842))
+    b = segment(make_pdf(tmp_path / "b.pdf", wrapped, width=420))
+
+    assert all(x.kind == "paragraph" for x in a)
+    assert all(x.kind == "paragraph" for x in b)
+    assert not any(r.figures for x in a for r in x.rows)
+
+
+def test_a_short_labelled_year_column_still_reads_as_a_table(tmp_path):
+    """The guard must not swallow a genuine period column."""
+    blocks = segment(make_pdf(tmp_path / "a.pdf", ["Year ended           2025"]))
+
+    assert [b.kind for b in blocks] == ["table"]
+    assert blocks[0].values == [2025.0]

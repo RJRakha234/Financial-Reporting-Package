@@ -40,6 +40,9 @@ _BASELINE_TOLERANCE = 2.0
 _TRAILING_MARKER = 2
 # Labels longer than this are prose, however many numbers they contain.
 _MAX_LABEL_WORDS = 16
+# Past this many words, a line whose only figure is a bare year is a sentence
+# that happens to end on a date, not a one-column table row.
+_PROSE_WORDS = 4
 # A baseline gap this many times the page's usual line pitch starts a new block.
 _PARAGRAPH_GAP = 1.6
 # Tables carry deliberate internal spacing around their sections, so they need a
@@ -156,6 +159,15 @@ def _is_number(word) -> bool:
     return parse_number(word[4].strip()) is not None
 
 
+def _is_bare_year(text: str) -> bool:
+    stripped = text.strip()
+    return (
+        len(stripped) == 4
+        and stripped.isdigit()
+        and 1900 <= int(stripped) <= 2099
+    )
+
+
 def _figures_trail_the_label(bucket) -> bool:
     """Do this line's numbers form a run at its end, after any label text?
 
@@ -234,6 +246,17 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
     for row in candidates:
         if row["figures"] and len(row["label"].split()) <= _MAX_LABEL_WORDS:
             row["tabular"] = _figures_trail_the_label(row["bucket"])
+            # A sentence ending on a year ("...PEAK Matrix Assessment 2025") is
+            # still a sentence. Left alone it became a one-column table row, and
+            # because the other document wrapped the same sentence differently it
+            # then read as a figure that had disappeared.
+            if (
+                row["tabular"]
+                and len(row["figures"]) == 1
+                and _is_bare_year(row["figures"][0].text)
+                and len(row["label"].split()) > _PROSE_WORDS
+            ):
+                row["tabular"] = False
 
     rows: list[Row] = []
     for row in candidates:
