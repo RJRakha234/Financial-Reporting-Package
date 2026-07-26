@@ -208,11 +208,20 @@ class Pair:
             if self.a.values != self.b.values:
                 return "figures-differ"
             return "same" if _norm(self.a.text) == _norm(self.b.text) else "label-differs"
-        return "same" if all(op == "=" for op, _ in self.words) else "changed"
+        if all(op == "=" for op, _ in self.words):
+            return "same"
+        if all(op in ("=", "~-", "~+") for op, _ in self.words):
+            return "formatting"
+        return "changed"
 
     @property
     def changed(self) -> bool:
-        return self.status != "same"
+        """A difference in content. Formatting alone does not count."""
+        return self.status not in ("same", "formatting")
+
+    @property
+    def formatting_only(self) -> bool:
+        return self.status == "formatting"
 
     @property
     def changed_figures(self) -> list[tuple[int, float | None, float | None]]:
@@ -651,22 +660,44 @@ def align_by_section(units_a: list[Unit], units_b: list[Unit]) -> list[Pair]:
     return pairs
 
 
+def _alnum(text: str) -> str:
+    """A run reduced to its letters and digits, for telling wording from typing."""
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
 def diff_words(a: str, b: str) -> list[tuple[str, str]]:
-    """Word-level diff of two paragraphs, as ``(op, text)`` runs."""
+    """Word-level diff of two paragraphs, as ``(op, text)`` runs.
+
+    Ops are ``=`` unchanged, ``-`` only on the left, ``+`` only on the right,
+    and ``~-`` / ``~+`` the same words set differently on each side.
+
+    That last one matters. Words are split on whitespace, so "FY26 :" and
+    "FY26:" are different tokens and the whole of FY26 was being reported as
+    deleted and re-added — alarming, and wrong, since nothing about the content
+    changed. Where a replaced run holds the same letters and digits on both
+    sides, only the punctuation, spacing or bullet glyph moved, and it is
+    reported as such rather than as an edit.
+    """
     wa, wb = a.split(), b.split()
     out: list[tuple[str, str]] = []
     for op, i1, i2, j1, j2 in difflib.SequenceMatcher(
         None, [w.lower() for w in wa], [w.lower() for w in wb], autojunk=False
     ).get_opcodes():
+        left, right = " ".join(wa[i1:i2]), " ".join(wb[j1:j2])
         if op == "equal":
-            out.append(("=", " ".join(wb[j1:j2])))
+            out.append(("=", right))
         elif op == "delete":
-            out.append(("-", " ".join(wa[i1:i2])))
+            out.append(("~-", left) if not _alnum(left) else ("-", left))
         elif op == "insert":
-            out.append(("+", " ".join(wb[j1:j2])))
+            out.append(("~+", right) if not _alnum(right) else ("+", right))
+        elif _alnum(left) == _alnum(right):
+            # Each side keeps its own text, so the reviewer can see what the
+            # typographic difference actually is.
+            out.append(("~-", left))
+            out.append(("~+", right))
         else:
-            out.append(("-", " ".join(wa[i1:i2])))
-            out.append(("+", " ".join(wb[j1:j2])))
+            out.append(("-", left))
+            out.append(("+", right))
     return out
 
 
@@ -699,7 +730,9 @@ class Section:
             return "added"
         if all(p.b is None for p in self.pairs):
             return "removed"
-        return "changed" if self.changed else "same"
+        if self.changed:
+            return "changed"
+        return "formatting" if any(p.formatting_only for p in self.pairs) else "same"
 
     # Nearest preceding short paragraph, which in a financial statement is the
     # heading the table belongs under. A wide table's own first rows are wrapped
@@ -858,6 +891,7 @@ class Summary:
     rows_matched: int
     changed_figures: int
     unchanged: int
+    formatting: int
 
 
 def summarise(pairs: list[Pair], units_a, units_b) -> Summary:
@@ -867,6 +901,7 @@ def summarise(pairs: list[Pair], units_a, units_b) -> Summary:
         units_b=len(units_b),
         matched=len(both),
         changed=sum(1 for p in both if p.changed),
+        formatting=sum(1 for p in both if p.formatting_only),
         only_in_a=sum(1 for p in pairs if p.b is None),
         only_in_b=sum(1 for p in pairs if p.a is None),
         paragraphs_matched=sum(1 for p in both if p.kind == "paragraph"),

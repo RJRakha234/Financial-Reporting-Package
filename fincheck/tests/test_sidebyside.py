@@ -633,3 +633,52 @@ def test_each_copy_carries_the_report_numbering_in_its_bookmarks(tmp_path):
         assert toc[0][1].startswith("1."), "bookmarks are numbered as the report is"
     finally:
         doc.close()
+
+
+def test_the_same_words_punctuated_differently_are_not_an_edit(tmp_path):
+    """"FY26 :" and "FY26:" split into different tokens, but nothing changed.
+
+    Reported as a deletion and an insertion, the whole of FY26 appeared to have
+    been cut — alarming, and wrong.
+    """
+    from fincheck.align import diff_words
+
+    ops = diff_words(
+        "Guidance for FY26 : · Revenue growth of 1%-3%",
+        "Guidance for FY26: • Revenue growth of 1%-3%",
+    )
+
+    assert not any(op in ("-", "+") for op, _ in ops), "nothing added or removed"
+    assert any(op.startswith("~") for op, _ in ops), "the difference is still shown"
+    # Each side keeps its own text, so the typographic difference is visible.
+    assert ("~-", "FY26 : ·") in ops
+    assert ("~+", "FY26: •") in ops
+    # The word itself survives intact on both sides.
+    assert "FY26" in " ".join(t for _, t in ops)
+
+
+def test_a_formatting_difference_is_not_counted_as_a_change(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", ["Guidance for FY26 : Revenue growth of 1%-3%"])
+    b = make_pdf(tmp_path / "b.pdf", ["Guidance for FY26: Revenue growth of 1%-3%"])
+
+    result = side_by_side(a, b)
+    pair = next(p for s in result.sections for p in s.pairs if p.a and p.b)
+
+    assert pair.status == "formatting"
+    assert pair.formatting_only
+    assert not pair.changed
+    assert result.summary.changed == 0
+    assert result.summary.formatting == 1
+
+
+def test_a_real_wording_change_is_still_a_change(tmp_path):
+    """The quieter treatment must not swallow an actual edit."""
+    a = make_pdf(tmp_path / "a.pdf", ["Revenue growth of 1%-3% in constant currency"])
+    b = make_pdf(tmp_path / "b.pdf", ["Revenue growth of 2%-4% in constant currency"])
+
+    result = side_by_side(a, b)
+    pair = next(p for s in result.sections for p in s.pairs if p.a and p.b)
+
+    assert pair.status == "changed"
+    assert pair.changed
+    assert any(op == "-" for op, _ in pair.words)

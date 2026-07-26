@@ -22,6 +22,7 @@ _ONLY = (0.72, 0.20, 0.14)
 # Tints are pale enough to read the text straight through.
 _TINT = {
     "same": (0.87, 0.94, 0.90),
+    "formatting": (0.87, 0.93, 0.95),
     "changed": (0.99, 0.92, 0.82),
     "added": (0.98, 0.88, 0.85),
     "removed": (0.98, 0.88, 0.85),
@@ -29,8 +30,10 @@ _TINT = {
     "figures-differ": (0.99, 0.86, 0.84),
     "columns-differ": (0.99, 0.86, 0.84),
 }
+_FORMATTING = (0.20, 0.42, 0.52)
 _EDGE = {
     "same": _SAME,
+    "formatting": _FORMATTING,
     "changed": _CHANGED,
     "added": _ONLY,
     "removed": _ONLY,

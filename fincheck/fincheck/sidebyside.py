@@ -265,6 +265,12 @@ def _paragraph_html(pair: Pair) -> str:
         if op == "=":
             left_parts.append(_e(text))
             right_parts.append(_e(text))
+        elif op == "~-":
+            # Same words, set differently — punctuation, spacing, a bullet
+            # glyph. Marked quietly, and each side keeps its own text.
+            left_parts.append(f'<u class="fmt">{_e(text)}</u>')
+        elif op == "~+":
+            right_parts.append(f'<u class="fmt">{_e(text)}</u>')
         elif op == "-":
             left_parts.append(f"<del>{_e(text)}</del>")
         else:
@@ -316,6 +322,7 @@ def _collapse_wrapping(pairs: list[Pair], render, tags: Tags) -> list[str]:
 
 _STATUS_LABEL = {
     "same": "identical",
+    "formatting": "formatting only",
     "changed": "differs",
     "added": "only in B",
     "removed": "only in A",
@@ -457,6 +464,7 @@ body.hide-unmarked .sec--unmarked{display:none}
 .chip{font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;font-weight:600;
   padding:.14rem .42rem;border:1px solid currentColor;border-radius:2px;white-space:nowrap}
 .chip--same{color:var(--muted)} .chip--changed{color:var(--differs)}
+.chip--formatting{color:var(--accent)}
 .chip--added{color:var(--add)} .chip--removed{color:var(--del)}
 
 .scroll{overflow-x:auto}
@@ -515,6 +523,7 @@ td.stack{width:auto}
 .prose .side{width:auto;min-width:0}
 .para{margin:0;font-size:.87rem;max-width:68ch}
 del{background:var(--del-bg);color:var(--del);text-decoration:line-through}
+u.fmt{text-decoration:none;border-bottom:1px dotted var(--muted);color:var(--ink-soft)}
 ins{background:var(--add-bg);color:var(--add);text-decoration:none}
 
 /* ---- executive verdict ---- */
@@ -539,6 +548,7 @@ ins{background:var(--add-bg);color:var(--add);text-decoration:none}
 .register td{padding:.42rem .8rem .42rem 0;border-bottom:1px solid var(--rule-soft);
   vertical-align:top}
 .reg--changed{background:linear-gradient(90deg,var(--differs-bg),transparent 42%)}
+.reg--formatting .rn{background:var(--accent)}
 .rn{font-family:var(--mono);font-size:.74rem;color:var(--paper);width:1.9rem}
 .reg .rn{background:var(--ink);text-align:center;border-radius:2px;padding:.1rem 0;
   height:1.1rem;line-height:1.1rem}
@@ -617,8 +627,19 @@ def write_side_by_side(
         headline = "Every figure agrees; the wording differs in places"
         standfirst = (
             f"All {s.rows_matched:,} compared table rows carry the same values in both "
-            f"documents. {s.changed:,} passage(s) differ in wording or formatting, "
-            "set out below."
+            f"documents. {s.changed:,} passage(s) differ in wording"
+            + (
+                f", and {s.formatting:,} differ only in punctuation or spacing."
+                if s.formatting
+                else "."
+            )
+        )
+    elif s.formatting:
+        headline = "The two documents agree; only the typesetting differs"
+        standfirst = (
+            f"All {s.matched:,} compared passages, including {s.rows_matched:,} table "
+            f"rows, carry the same content. {s.formatting:,} differ in punctuation, "
+            "spacing or bullet style alone."
         )
     else:
         headline = "The two documents agree"
@@ -628,8 +649,9 @@ def write_side_by_side(
         )
 
     def _pill(status: str) -> str:
-        word = {"same": "agrees", "changed": "differs",
-                "added": "right only", "removed": "left only"}.get(status, status)
+        word = {"same": "agrees", "formatting": "formatting only",
+                "changed": "differs", "added": "right only",
+                "removed": "left only"}.get(status, status)
         return f'<span class="chip chip--{status}">{word}</span>'
 
     register_rows = "".join(
@@ -743,7 +765,7 @@ def write_side_by_side(
     <div class="v v--{text_state}">
       <b>{s.changed:,}</b>
       <span>passages differing</span>
-      <i>of {s.matched:,} compared</i>
+      <i>of {s.matched:,} compared{f"; {s.formatting:,} formatting only" if s.formatting else ""}</i>
     </div>
     <div class="v">
       <b>{s.only_in_a + s.only_in_b:,}</b>
