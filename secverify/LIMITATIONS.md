@@ -211,7 +211,8 @@ are "not verified", not "verified".
 Nothing here needs to be taken on trust:
 
 ```bash
-# Does a wrong document actually fail? Injects ~20 real conversion errors.
+# Does a wrong document actually fail? Injects ~20 real conversion errors
+# one at a time, including a reworded designation.
 python tools/mutation_audit.py statement.pdf exhibit.htm
 
 # What share of this exhibit's rows are order-checked, and why not the rest?
@@ -222,7 +223,16 @@ python tools/diagnose_row_order.py statement.pdf exhibit.htm --label "Life Scien
 
 # 187 regression tests
 python -m pytest -q
+
+# Rebuild the delivery package. Refuses unless the suite passes, then
+# extracts what it built and runs THAT copy's tests before reporting success.
+python tools/build_installer.py
 ```
+
+**Check you are running the newest build.** Every fix in §2 was invisible in the
+output before it was made, so an older extraction looks exactly like a working
+tool. `python -m pytest -q` should report **187 passed**; fewer means the copy
+predates these fixes.
 
 ---
 
@@ -238,16 +248,43 @@ reworded designation matching the document's *other* copy of the same line; and
 the wrong-period-PDF banner that five of eight mispairs walked straight past.
 
 Each was invisible from the output. Each was found only by asking "what is
-**not** being checked?" — never by reading a report. The last of them was not
-even a faulty check: moving words across a paragraph boundary left the two
-documents byte-identical after canonicalisation, so the comparison itself could
-not distinguish them. That is the clearest illustration of why the honest
-position is a measured scope rather than a claim of correctness.
+**not** being checked?" — never by reading a report. One of them was not even a
+faulty check: moving words across a paragraph boundary left the two documents
+byte-identical after canonicalisation, so the comparison itself could not
+distinguish them. That is the clearest illustration of why the honest position is
+a measured scope rather than a claim of correctness.
+
+Two are worth stating in full, because they were the last two found and both
+came from a reviewer stress-testing the tool rather than from any report:
+
+* **A reworded designation passed as green** — the exhibit's *other* copy of the
+  same line matched the PDF, so the text a reviewer was looking at said
+  verified. The obvious fix, pairing a missing line with the HTML block sharing
+  most of its words, produced **189 false positives** across 14 filings: adjacent
+  statement rows differing by one word ("Deferred tax assets (net)" against
+  "Income tax assets (net)") overlap above any usable threshold, and both are
+  correct. Tightening the ratio would only have traded false alarms for misses.
+  What separates them is *occurrence excess* — a rewording makes the HTML state
+  something more often than the PDF does. That is zero false positives across 16
+  filings with both designation cases still caught.
+* **The wrong-period-PDF banner was itself defective**, and this is the more
+  sobering of the two: the check management would most rely on — "the tool tells
+  you when the PDF is wrong" — was silent for five of eight mispairs. Its
+  successor tests presence of the exhibit's reporting period rather than a
+  ratio, so it has no threshold to drift (§5).
+
+The pattern in both: **the first fix that suggests itself is usually a
+threshold, and a threshold is usually the wrong instrument.** In each case the
+measurement showed the correct and incorrect populations overlapping, and a
+different question — how *often* does each side say this, does the PDF state
+this period at all — separated them exactly.
 
 The honest conclusion: **this class of defect should be expected to recur.** The
-mitigation is not a claim of correctness but the three commands in §6, which
-measure coverage instead of assuming it. They should be run on a new exhibit
-type before the tool's output is relied on for it.
+mitigation is not a claim of correctness but the commands in §6, which measure
+coverage instead of assuming it. They should be run on a new exhibit type before
+the tool's output is relied on for it. Every fix above was prompted by a reviewer
+trying to break the tool, so that stress-testing is not optional polish — it is
+the only method that has ever found this class of defect.
 
 **Recommended positioning:** an effective first-pass filter that reliably catches
 value, sign, symbol, date and structural errors, materially reducing what a
