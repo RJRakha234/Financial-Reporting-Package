@@ -56,6 +56,12 @@ found by stress-testing rather than by reading reports:**
 * **a footnote marker or a date's day-of-month leaking into a row's key**,
   which had silently excluded every footnote-marked segment row — Financial
   Services, Retail, Communication, Life Sciences — from the order check.
+* **a run of words moved to a different paragraph.** The destination paragraph
+  is flagged by the boundary check above; the source paragraph previously got
+  only a generic amber "close wording match", which reads as probably-fine. The
+  moved words are now named explicitly as an error — *"in individual segments"
+  sits at the end of this block in the HTML, but in the PDF those words appear
+  in a DIFFERENT paragraph*.
 
 ---
 
@@ -169,7 +175,7 @@ python tools/order_coverage.py statement.pdf exhibit.htm
 # Why is one specific row not order-checked?
 python tools/diagnose_row_order.py statement.pdf exhibit.htm --label "Life Sciences"
 
-# 174 regression tests
+# 178 regression tests
 python -m pytest -q
 ```
 
@@ -177,7 +183,7 @@ python -m pytest -q
 
 ## 7. Residual risk — stated plainly
 
-During development, **eleven defects of one particular kind were found and
+During development, **twelve defects of one particular kind were found and
 fixed**: a check that silently declined to run, while the review copy looked
 fully green. Examples: footnote markers excluding every marked segment row from
 the order check; a date's day-of-month leaking into a row's figure key; the
