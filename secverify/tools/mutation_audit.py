@@ -316,6 +316,44 @@ def _discover(html: str) -> list[Mutation]:
                   txt[: w.end()], txt[: w.end()] + " not", "")
             )
 
+    # --- a role/designation reworded, not mistyped -----------------------
+    # The words are all still present and correctly spelled, only rearranged:
+    # "Chief Executive Officer and Managing Director" becomes "Chief Managing
+    # Officer and Executive Director".  Every figure check is untouched and
+    # every word of the phrase still exists in the PDF, so this was found
+    # passing as GREEN on a real exhibit.  Worse, where the document carries
+    # two signature blocks the HTML's other, unaltered copy matched the PDF and
+    # the block was stamped verified outright.
+    _ROLE_RE = re.compile(
+        r"\b(Chief|Managing|Executive|Whole[- ]time|Independent|Non[- ]Executive)\b"
+        r"[^<>]{0,60}?\b(Officer|Director)\b", re.I
+    )
+    for block in soup.find_all(["p", "td", "div", "span", "b", "font"]):
+        if block.find(["p", "td", "div"]) is not None:
+            continue
+        text = block.get_text(" ", strip=True)
+        if not (12 <= len(text) <= 90) or not _ROLE_RE.search(text):
+            continue
+        words = text.split()
+        # swap the two role-defining adjectives, keeping every word present
+        idx = [
+            i for i, w in enumerate(words)
+            if re.fullmatch(r"(?i)(executive|managing|financial|operating)", w)
+        ]
+        if len(idx) < 2:
+            continue
+        a, b = idx[0], idx[1]
+        swapped = list(words)
+        swapped[a], swapped[b] = swapped[b], swapped[a]
+        new_text = " ".join(swapped)
+        if new_text == text or text not in html:
+            continue
+        out.append(
+            M("text", "designation reworded (same words, reordered)",
+              text, new_text, "")
+        )
+        break
+
     # --- a hidden-text smuggle: real content made invisible --------------
     # The style must REPLACE any existing one, not sit beside it.  Duplicate
     # style attributes are resolved differently by different parsers (a browser

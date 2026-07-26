@@ -1,0 +1,96 @@
+SECVERIFY — validate an SEC-filing HTML exhibit against its source PDF(s)
+========================================================================
+
+INSTALL (once)
+--------------
+    pip install -r requirements.txt
+
+
+RUN — strictest level (recommended)
+-----------------------------------
+    python -m secverify.toolsigma  auditorsreport.pdf  statement.pdf  exhibit.htm
+
+  Writes exhibit.checked.html next to the input: a highlighted review copy.
+
+
+THE THREE THINGS THAT MATTER MOST
+---------------------------------
+1. PASS EVERY SOURCE PDF.
+   If the exhibit contains an auditor's report as well as the financial
+   statements, pass BOTH. Otherwise the whole auditor's report has no source
+   and the report fills with red. Order does not matter — the tool sorts the
+   PDFs into the HTML's own section order automatically.
+
+2. CHECK THE PAIRING BANNER.
+   If the PDF is not this exhibit's source you will see
+
+       !!!!! STOP — THE PDF DOES NOT MATCH THIS EXHIBIT !!!!!
+
+   at the very top. Fix the pairing; nothing below it means anything. Two real
+   causes seen: a different quarter's PDF (successive downloads are often
+   identically named), and passing only the auditor's report.
+
+   THE BANNER ALSO FIRES ON THE WRONG *PERIOD* OF THE RIGHT DOCUMENT — last
+   quarter's file, or the annual one. That case is invisible to figure-match
+   ratios (consecutive filings share almost all their wording), so it is
+   detected from the reporting period the exhibit states. Measured on our own
+   filings: 8 of 8 period mispairs flagged, 0 of 16 correct pairs disturbed.
+
+   ONE PDF CAN ALSO COVER TWO EXHIBITS (our AD PDF serves both exv99w03 and
+   exv99w06). Pairing it with one exhibit correctly reports the other's
+   content as unreflected — check whether a block of unreflected pages sits at
+   the start or end of the PDF before treating omissions as real.
+
+3. RUN THE NEWEST COPY.
+   Keep one install folder. Running an older extraction is the one way to see
+   a defect that has already been fixed.
+   Confirm with:  python -m pytest -q     (expect 187 passed)
+
+
+OTHER OPTIONS
+-------------
+    -o reviewed.html        choose the output path
+    --json report.json      machine-readable report as well
+    --footed                you have already footed the HTML
+    --no-strict             turn off the blue manual-review overlay
+
+
+COLOURS IN THE REVIEW COPY
+--------------------------
+    green         verified against the PDF
+    BRIGHT YELLOW small/immaterial value (below 100, a year, a list marker):
+                  present in the PDF but NOT independently verified — the
+                  digit occurs everywhere, so finding it proves nothing
+    blue          manual-review zone — a location to check, not an error
+    amber         close wording match — verify
+    red (text)    WORDING DIFFERS — the PDF says one thing and the HTML another.
+                  Both versions are quoted in the finding. Where the exhibit
+                  repeats the line, EVERY copy is marked, because only one
+                  corresponds to the PDF occurrence that differs.
+    red           inconsistent with the PDF, or not found in it
+    brown         wide movement matrix — lower-confidence check
+
+  Read the FINDINGS LIST, not only the colours. Blue and yellow mean
+  "not verified", not "verified".
+
+
+MEASURE THE TOOL RATHER THAN TRUST IT
+-------------------------------------
+    python tools/mutation_audit.py statement.pdf exhibit.htm
+        Injects ~20 real conversion errors one at a time and reports whether
+        each surfaced as anything other than green.
+
+    python tools/order_coverage.py statement.pdf exhibit.htm
+        What share of this exhibit's rows are order-checked, and why not the
+        rest. Across 26 of our filings the answer is 71%.
+
+    python tools/diagnose_row_order.py statement.pdf exhibit.htm --label "Life Sciences"
+        Why one specific row is not order-checked.
+
+    python -m pytest -q          (187 tests; run from this folder)
+
+
+READ LIMITATIONS.md BEFORE RELYING ON THIS
+------------------------------------------
+  It states what is measured, what is not covered, and the residual risk,
+  with the commands to reproduce every figure.
