@@ -30,7 +30,7 @@ from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 from .sidebyside import Meta, default_label, write_side_by_side
-from .sidemarks import write_marked_copies
+from .sidemarks import coverage, write_marked_copies
 
 __all__ = [
     "analyze",
@@ -286,6 +286,8 @@ def side_by_side(
                 marked_sections=len(shared_marks),
                 marked_href_a=_relative_to(copies[0], output_html) if copies else "",
                 marked_href_b=_relative_to(copies[1], output_html) if copies else "",
+                coverage_a=coverage(sections, "a"),
+                coverage_b=coverage(sections, "b"),
             )
         finally:
             doc_a.close()

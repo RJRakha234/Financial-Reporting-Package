@@ -34,6 +34,10 @@ class Meta:
     # report can open the page it was drawn from.
     marked_href_a: str = ""
     marked_href_b: str = ""
+    # Passages and figures marked on each copy, so the report can state its
+    # own coverage rather than leave it to be taken on trust.
+    coverage_a: tuple = (0, 0)
+    coverage_b: tuple = (0, 0)
 
     @property
     def made_a(self) -> str:
@@ -668,8 +672,13 @@ def write_side_by_side(
             f'<a class="pl" href="{_e(meta.marked_href_b)}" target="_blank" '
             f'rel="noopener">{_e(meta.marked_href_b)}</a>. '
             "Page numbers throughout open those copies at the page the content "
-            "was drawn from. In them, green outlines agree, amber differ, red "
-            "appear on one side only."
+            "was drawn from, and each copy carries the same numbers in its "
+            "bookmarks. "
+            f"Everything compared is tinted there — {meta.coverage_a[0]:,} "
+            f"passages and {meta.coverage_a[1]:,} figures on the left, "
+            f"{meta.coverage_b[0]:,} and {meta.coverage_b[1]:,} on the right — "
+            "so anything left untinted was <em>not</em> covered by this report "
+            "and can be checked rather than assumed."
             "</div>"
         )
 

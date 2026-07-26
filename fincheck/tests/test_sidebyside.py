@@ -593,3 +593,43 @@ def test_the_cli_writes_both_copies_beside_the_report(tmp_path, capsys):
     assert (tmp_path / "quarterly.marked.pdf").is_file()
     assert (tmp_path / "filed.marked.pdf").is_file()
     assert "Numbered copy written to" in printed
+
+
+def test_the_copies_show_what_the_report_covered(tmp_path):
+    """Untinted content is content the report did not compare — visibly so."""
+    from fincheck.sidemarks import coverage
+
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+
+    result = side_by_side(
+        a, b, output_html=str(tmp_path / "sbs.html"),
+        marked_pdf_a=str(tmp_path / "a.marked.pdf"),
+        marked_pdf_b=str(tmp_path / "b.marked.pdf"),
+    )
+
+    passages, figures = coverage(result.sections, "a")
+    assert passages > 0
+    assert figures == 6, "both figures on each of the three money rows"
+
+    html = (tmp_path / "sbs.html").read_text()
+    assert "not</em> covered by this report" in html
+
+
+def test_each_copy_carries_the_report_numbering_in_its_bookmarks(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+
+    side_by_side(
+        a, b,
+        marked_pdf_a=str(tmp_path / "a.marked.pdf"),
+        marked_pdf_b=str(tmp_path / "b.marked.pdf"),
+    )
+
+    doc = fitz.open(str(tmp_path / "a.marked.pdf"))
+    try:
+        toc = doc.get_toc()
+        assert toc, "a reader should be able to jump to a serial"
+        assert toc[0][1].startswith("1."), "bookmarks are numbered as the report is"
+    finally:
+        doc.close()
