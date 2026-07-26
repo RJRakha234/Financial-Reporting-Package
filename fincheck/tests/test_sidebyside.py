@@ -555,9 +555,52 @@ def test_page_numbers_link_into_the_numbered_copy(tmp_path):
     html = out.read_text()
 
     # Relative, so the report and its copies can be moved together.
-    assert 'href="a.marked.pdf#page=1"' in html
-    assert 'href="b.marked.pdf#page=1"' in html
+    assert 'href="a.marked.pdf#page=1' in html
+    assert 'href="b.marked.pdf#page=1' in html
     assert "numbered and located" in html
+
+
+def test_cells_link_to_the_exact_spot_in_the_marked_copy(tmp_path):
+    """Not just the page: the copy opens scrolled to the passage itself.
+
+    ``#page=N&zoom=scale,left,top`` is the PDF open-parameter syntax; ``top``
+    is in PDF coordinates, so it must come out of the page height, not the
+    extraction's top-down y.
+    """
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(
+        a, b, output_html=str(out),
+        marked_pdf_a=str(tmp_path / "a.marked.pdf"),
+        marked_pdf_b=str(tmp_path / "b.marked.pdf"),
+    )
+    html = out.read_text()
+
+    assert "&amp;zoom=100,0," in html, "links carry the exact spot, not just the page"
+    assert 'class="loc"' in html, "the cell content itself is the link"
+    # The first table row sits near the top of an 842pt page, so its
+    # destination must be near the top in PDF coordinates too (y up).
+    import re
+
+    tops = [int(m) for m in re.findall(r"zoom=100,0,(\d+)", html)]
+    assert tops and all(0 <= t <= 842 for t in tops)
+    assert max(tops) > 700, "content near the page top lands near height in PDF coords"
+
+
+def test_the_left_document_is_presented_as_the_benchmark(tmp_path):
+    a = make_pdf(tmp_path / "source.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "filed.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    assert 'class="btag"' in html, "the benchmark column is tagged"
+    assert "benchmark" in html
+    assert 'class="seal' in html, "the agreement seal is drawn"
+    assert "Faithful to the benchmark" in html
 
 
 def test_no_links_are_written_when_no_copies_were_asked_for(tmp_path):

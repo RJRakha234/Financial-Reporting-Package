@@ -217,8 +217,10 @@ def side_by_side(
     worksheet rather than proof. Use :func:`compare` when you need certainty.
 
     Args:
-        pdf_a: the reference PDF, shown on the left.
-        pdf_b: the PDF compared against it, shown on the right.
+        pdf_a: the benchmark — the document treated as the source of truth.
+            Shown on the left and named as the benchmark throughout the report;
+            every deviation is stated relative to it.
+        pdf_b: the PDF verified against the benchmark, shown on the right.
         output_html: if given, write the side-by-side page here.
         label_a: column heading for the first document. Defaults to how the PDF
             was produced ("Excel export", "HTML print"), which is usually how
@@ -288,6 +290,8 @@ def side_by_side(
                 marked_href_b=_relative_to(copies[1], output_html) if copies else "",
                 coverage_a=coverage(sections, "a"),
                 coverage_b=coverage(sections, "b"),
+                heights_a={i + 1: doc_a[i].rect.height for i in range(doc_a.page_count)},
+                heights_b={i + 1: doc_b[i].rect.height for i in range(doc_b.page_count)},
             )
         finally:
             doc_a.close()

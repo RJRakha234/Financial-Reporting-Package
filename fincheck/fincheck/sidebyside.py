@@ -11,7 +11,7 @@ page states that plainly. It is a reviewer's worksheet, not evidence.
 """
 
 import html
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from .align import Pair, Section, Summary
@@ -38,6 +38,11 @@ class Meta:
     # own coverage rather than leave it to be taken on trust.
     coverage_a: tuple = (0, 0)
     coverage_b: tuple = (0, 0)
+    # Page heights in points, page number -> height. PDF view coordinates run
+    # bottom-up, the extraction's run top-down; the heights convert between
+    # them so a link can open a copy scrolled to the exact passage.
+    heights_a: dict = field(default_factory=dict)
+    heights_b: dict = field(default_factory=dict)
 
     @property
     def made_a(self) -> str:
@@ -56,6 +61,8 @@ class Meta:
             full_b=self.label_b,
             href_a=self.marked_href_a,
             href_b=self.marked_href_b,
+            heights_a=self.heights_a,
+            heights_b=self.heights_b,
         )
 
 
@@ -73,6 +80,8 @@ class Tags(NamedTuple):
     full_b: str
     href_a: str = ""
     href_b: str = ""
+    heights_a: dict = {}
+    heights_b: dict = {}
 
 
 _SHORT = (
@@ -132,7 +141,46 @@ def _e(text) -> str:
     return html.escape(str(text))
 
 
-def _page_link(page: str, href: str, css: str = "") -> str:
+# A destination sits this many points above the passage it opens, so the
+# passage lands just under the top of the window rather than glued to it.
+_SPOT_LEAD = 28
+
+
+def _url(href: str, page, top=None) -> str:
+    """A link into the marked copy: the page, and the exact spot when known.
+
+    ``#page=N&zoom=100,left,top`` is the PDF open-parameter syntax understood
+    by Acrobat, Chromium and pdf.js alike; ``top`` is in PDF coordinates
+    (bottom-up), which is what the heights in :class:`Meta` are for.
+    """
+    fragment = f"{href}#page={page}"
+    if top is not None:
+        fragment += f"&zoom=100,0,{int(top)}"
+    return _e(fragment)
+
+
+def _unit_spot(unit, heights: dict):
+    """(page, top) for the first line of a unit, or ``None``."""
+    if unit is None or not unit.rows:
+        return None
+    row = unit.rows[0]
+    height = heights.get(row.page)
+    top = max(0, int(height - row.y0 + _SPOT_LEAD)) if height else None
+    return (row.page, top)
+
+
+def _section_spot(section, side: str, heights: dict):
+    """(page, top) for the first marked region of a section, or ``None``."""
+    regions = section.regions(side)
+    if not regions:
+        return None
+    page, box = sorted(regions.items())[0]
+    height = heights.get(page)
+    top = max(0, int(height - box[1] + _SPOT_LEAD)) if height else None
+    return (page, top)
+
+
+def _page_link(page: str, href: str, css: str = "", top=None) -> str:
     """A page number that opens the marked-up PDF at that page."""
     text = _e(page)
     if not href or not page or page == "—":
@@ -141,8 +189,34 @@ def _page_link(page: str, href: str, css: str = "") -> str:
     if not first.isdigit():
         return text
     return (
-        f'<a class="pl {css}" href="{_e(href)}#page={first}" target="_blank" '
+        f'<a class="pl {css}" href="{_url(href, first, top)}" target="_blank" '
         f'rel="noopener" title="open page {_e(first)} of the marked-up PDF">{text}</a>'
+    )
+
+
+def _spot_link(unit, href: str, heights: dict, css: str = "") -> str:
+    """The unit's page number, linking to its exact spot in the marked copy."""
+    if unit is None:
+        return ""
+    spot = _unit_spot(unit, heights)
+    if spot is None or not href:
+        return _e(unit.page)
+    page, top = spot
+    return _page_link(str(page), href, css=css, top=top)
+
+
+def _loc(text_html: str, unit, href: str, heights: dict) -> str:
+    """Wrap rendered cell content so it opens its own highlighted source."""
+    if not href:
+        return text_html
+    spot = _unit_spot(unit, heights)
+    if spot is None:
+        return text_html
+    page, top = spot
+    return (
+        f'<a class="loc" href="{_url(href, page, top)}" target="_blank" '
+        f'rel="noopener" title="open this passage in the marked-up PDF">'
+        f"{text_html}</a>"
     )
 
 
@@ -191,12 +265,14 @@ def _stacked_row_html(pair: Pair, tags: Tags) -> str:
 
     return (
         f'<tr class="r r--{status}">'
-        f'<td class="gut">{_page_link(a.page, tags.href_a) if a else ""}</td>'
+        f'<td class="gut">{_spot_link(a, tags.href_a, tags.heights_a)}</td>'
         f'<td class="stack">'
-        f'<span class="{label_cls}">{_e(label) or "&nbsp;"}</span>{alt}'
+        f'<span class="{label_cls}">'
+        f'{_loc(_e(label) or "&nbsp;", a or b, tags.href_a if a else tags.href_b, tags.heights_a if a else tags.heights_b)}'
+        f"</span>{alt}"
         f"{line(a, b, tags.short_a)}{line(b, a, tags.short_b)}"
         f"</td>"
-        f'<td class="gut">{_page_link(b.page, tags.href_b) if b else ""}</td>'
+        f'<td class="gut">{_spot_link(b, tags.href_b, tags.heights_b)}</td>'
         f"</tr>"
     )
 
@@ -206,7 +282,7 @@ def _row_pair_html(pair: Pair, tags: Tags) -> str:
     status = pair.status
     a, b = pair.a, pair.b
 
-    def side(unit, other, is_a: bool) -> str:
+    def side(unit, other, href: str, heights: dict) -> str:
         if unit is None:
             return '<td class="side side--empty"><span class="absent">not present</span></td>'
         label_cls = "label"
@@ -217,45 +293,50 @@ def _row_pair_html(pair: Pair, tags: Tags) -> str:
             gap = len(other.values) - len(unit.values)
         return (
             f'<td class="side">'
-            f'<span class="{label_cls}">{_e(unit.text) or "&nbsp;"}</span>'
-            f'<span class="figs">{_figure_cells(unit.values, changed if not is_a else changed, gap)}</span>'
+            f'<span class="{label_cls}">'
+            f'{_loc(_e(unit.text) or "&nbsp;", unit, href, heights)}</span>'
+            f'<span class="figs">{_figure_cells(unit.values, changed, gap)}</span>'
             f"</td>"
         )
 
     return (
         f'<tr class="r r--{status}">'
-        f'<td class="gut">{_page_link(a.page, tags.href_a) if a else ""}</td>'
-        f"{side(a, b, True)}"
-        f"{side(b, a, False)}"
-        f'<td class="gut">{_page_link(b.page, tags.href_b) if b else ""}</td>'
+        f'<td class="gut">{_spot_link(a, tags.href_a, tags.heights_a)}</td>'
+        f"{side(a, b, tags.href_a, tags.heights_a)}"
+        f"{side(b, a, tags.href_b, tags.heights_b)}"
+        f'<td class="gut">{_spot_link(b, tags.href_b, tags.heights_b)}</td>'
         f"</tr>"
     )
 
 
-def _paragraph_html(pair: Pair) -> str:
+def _paragraph_html(pair: Pair, tags: Tags) -> str:
     a, b = pair.a, pair.b
+    gut_a = _spot_link(a, tags.href_a, tags.heights_a)
+    gut_b = _spot_link(b, tags.href_b, tags.heights_b)
     if a is not None and b is not None and not pair.words:
         # A table row that landed in a prose section: no word diff was computed,
         # so show both sides plainly rather than rendering two empty paragraphs.
         return (
             f'<div class="prose prose--{pair.status}">'
-            f'<div class="gut">{_e(a.page)}</div>'
-            f'<div class="side"><p class="para">{_e(a.text)}'
+            f'<div class="gut">{gut_a}</div>'
+            f'<div class="side"><p class="para">{_loc(_e(a.text), a, tags.href_a, tags.heights_a)}'
             f'<span class="figs">{_figure_cells(a.values, set())}</span></p></div>'
-            f'<div class="side"><p class="para">{_e(b.text)}'
+            f'<div class="side"><p class="para">{_loc(_e(b.text), b, tags.href_b, tags.heights_b)}'
             f'<span class="figs">{_figure_cells(b.values, set())}</span></p></div>'
-            f'<div class="gut">{_e(b.page)}</div></div>'
+            f'<div class="gut">{gut_b}</div></div>'
         )
     if a is None or b is None:
         only = a or b
-        text = f'<p class="para">{_e(only.text)}</p>'
+        href = tags.href_a if a is not None else tags.href_b
+        heights = tags.heights_a if a is not None else tags.heights_b
+        text = f'<p class="para">{_loc(_e(only.text), only, href, heights)}</p>'
         empty = '<div class="side side--empty"><span class="absent">not present</span></div>'
         left = f'<div class="side">{text}</div>' if a is not None else empty
         right = f'<div class="side">{text}</div>' if b is not None else empty
         return (
             f'<div class="prose prose--{pair.status}">'
-            f'<div class="gut">{_e(a.page) if a else ""}</div>{left}{right}'
-            f'<div class="gut">{_e(b.page) if b else ""}</div></div>'
+            f'<div class="gut">{gut_a}</div>{left}{right}'
+            f'<div class="gut">{gut_b}</div></div>'
         )
 
     left_parts, right_parts = [], []
@@ -278,10 +359,10 @@ def _paragraph_html(pair: Pair) -> str:
 
     return (
         f'<div class="prose prose--{pair.status}">'
-        f'<div class="gut">{_e(a.page)}</div>'
+        f'<div class="gut">{gut_a}</div>'
         f'<div class="side"><p class="para">{" ".join(left_parts)}</p></div>'
         f'<div class="side"><p class="para">{" ".join(right_parts)}</p></div>'
-        f'<div class="gut">{_e(b.page)}</div>'
+        f'<div class="gut">{gut_b}</div>'
         f"</div>"
     )
 
@@ -321,11 +402,11 @@ def _collapse_wrapping(pairs: list[Pair], render, tags: Tags) -> list[str]:
 
 
 _STATUS_LABEL = {
-    "same": "identical",
+    "same": "matches benchmark",
     "formatting": "formatting only",
-    "changed": "differs",
-    "added": "only in B",
-    "removed": "only in A",
+    "changed": "deviates",
+    "added": "not in benchmark",
+    "removed": "benchmark only",
 }
 
 
@@ -337,7 +418,7 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
     # Only meaningful where both sides exist; on a one-sided section every pair
     # counts as changed, and "1 of 1 differ" would just restate the chip.
     detail = (
-        f"{section.changed} of {len(section.pairs)} differ"
+        f"{section.changed} of {len(section.pairs)} deviate"
         if status == "changed"
         else ""
     )
@@ -345,13 +426,15 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
     badge = f'<span class="serial">{section.serial}</span>'
     if section.marked is not None:
         badge += f'<span class="snum">&sect;{_e(section.marked)}</span>'
+    spot_a = _section_spot(section, "a", tags.heights_a)
+    spot_b = _section_spot(section, "b", tags.heights_b)
     head = (
         f'<div class="shead">'
         f'{badge}'
         f'<span class="skind">{kind}</span>'
         f'<h3>{_e(section.title) or "&nbsp;"}</h3>'
-        f'<span class="spages">{_page_link(pages_a, tags.href_a)}'
-        f' &middot; {_page_link(pages_b, tags.href_b)}</span>'
+        f'<span class="spages">{_page_link(pages_a, tags.href_a, top=spot_a[1] if spot_a else None)}'
+        f' &middot; {_page_link(pages_b, tags.href_b, top=spot_b[1] if spot_b else None)}</span>'
         f'<span class="chip chip--{status}">{label}</span>'
         f'{f"<span class=sdetail>{detail}</span>" if detail else ""}'
         f"</div>"
@@ -370,7 +453,7 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
             + "</table></div>"
         )
     else:
-        body = "".join(_paragraph_html(p) for p in section.pairs)
+        body = "".join(_paragraph_html(p, tags) for p in section.pairs)
 
     marked_cls = " sec--marked" if section.marked is not None else " sec--unmarked"
     return (
@@ -385,6 +468,7 @@ _CSS = """
   --muted:#6C736E; --rule:#C8CEC9; --rule-soft:#E4E7E2; --accent:#0E5A56;
   --differs:#9B3220; --differs-bg:#F6E3DE; --same:#2C6A4E;
   --add:#1F6F4A; --add-bg:#DFF0E5; --del:#9B3220; --del-bg:#F8E4DF;
+  --bench:#8A6B2E; --bench-bg:#F5EEDC;
   --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
   --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
@@ -394,23 +478,56 @@ _CSS = """
   --muted:#8C948F; --rule:#2E3835; --rule-soft:#222A28; --accent:#63B4AB;
   --differs:#E08A72; --differs-bg:#3A211B; --same:#79C7A0;
   --add:#79C7A0; --add-bg:#16301F; --del:#E08A72; --del-bg:#361D18;
+  --bench:#CFA95F; --bench-bg:#2C2415;
 }}
 :root[data-theme=dark]{
   --paper:#121614; --panel:#191F1D; --ink:#E7EAE7; --ink-soft:#B3BAB6;
   --muted:#8C948F; --rule:#2E3835; --rule-soft:#222A28; --accent:#63B4AB;
   --differs:#E08A72; --differs-bg:#3A211B; --same:#79C7A0;
   --add:#79C7A0; --add-bg:#16301F; --del:#E08A72; --del-bg:#361D18;
+  --bench:#CFA95F; --bench-bg:#2C2415;
 }
 :root[data-theme=light]{
   --paper:#FBFAF7; --panel:#F3F2ED; --ink:#16191A; --ink-soft:#4A514D;
   --muted:#6C736E; --rule:#C8CEC9; --rule-soft:#E4E7E2; --accent:#0E5A56;
   --differs:#9B3220; --differs-bg:#F6E3DE; --same:#2C6A4E;
   --add:#1F6F4A; --add-bg:#DFF0E5; --del:#9B3220; --del-bg:#F8E4DF;
+  --bench:#8A6B2E; --bench-bg:#F5EEDC;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
   font-size:15px;line-height:1.55}
 .wrap{max-width:88rem;margin:0 auto;padding:2.75rem 1.25rem 5rem}
+/* ---- hero: verdict beside the agreement seal ---- */
+.hero{display:grid;grid-template-columns:1fr auto;gap:2.5rem;align-items:center;
+  margin:0 0 2rem}
+.seal{position:relative;width:12rem;height:12rem;margin:0;flex:none}
+.seal svg{width:100%;height:100%;transform:rotate(-90deg)}
+.seal circle{fill:none;stroke-width:7}
+.seal-bg{stroke:var(--rule-soft)}
+.seal-fg{stroke:var(--bench);stroke-linecap:round;
+  transition:stroke-dashoffset 1.6s cubic-bezier(.22,.61,.36,1)}
+.seal--bad .seal-fg{stroke:var(--differs)}
+.seal figcaption{position:absolute;inset:0;display:grid;place-content:center;
+  text-align:center;gap:.1rem}
+.seal b{font-family:var(--serif);font-size:2.15rem;font-weight:400;
+  letter-spacing:-.02em;line-height:1}
+.seal span{font-size:.58rem;letter-spacing:.11em;text-transform:uppercase;
+  color:var(--muted);max-width:7.5rem;margin:0 auto}
+.seal i{font-style:normal;font-size:.66rem;font-weight:600;color:var(--bench)}
+.seal--bad i{color:var(--differs)}
+@media (prefers-reduced-motion:reduce){.seal-fg{transition:none}}
+/* Brass is the benchmark's colour and nothing else's. */
+.btag{font-size:.56rem;letter-spacing:.13em;text-transform:uppercase;font-weight:700;
+  font-family:var(--sans);color:var(--bench);border:1px solid var(--bench);
+  background:var(--bench-bg);padding:.1rem .38rem;border-radius:2px;
+  white-space:nowrap;vertical-align:middle;margin-left:.45rem}
+/* A cell is a link to the exact tinted spot it was drawn from. */
+a.loc{color:inherit;text-decoration:none}
+a.loc:hover,a.loc:focus-visible{color:var(--accent)}
+a.loc:hover::after,a.loc:focus-visible::after{content:" \\2197";font-size:.72em;
+  color:var(--accent)}
+tr.r:hover td,.prose:hover{background:var(--panel)}
 .eyebrow{font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;
   color:var(--accent);font-weight:600;margin:0 0 .7rem}
 h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem);
@@ -579,6 +696,8 @@ html{scroll-behavior:smooth}
 @media (max-width:60rem){
   .docs,.prose{grid-template-columns:1fr}
   .prose .gut{display:none}
+  .hero{grid-template-columns:1fr}
+  .seal{margin:0 auto}
 }
 footer{border-top:1px solid var(--rule);margin-top:2.5rem;padding-top:1rem;
   color:var(--muted);font-size:.8rem;max-width:72ch}
@@ -587,10 +706,17 @@ footer{border-top:1px solid var(--rule);margin-top:2.5rem;padding-top:1rem;
 _JS = """
 for (const [id, cls] of [['hide-same', 'hide-same'], ['hide-oneside', 'hide-oneside'],
                          ['hide-unmarked', 'hide-unmarked']]) {
-  document.getElementById(id).addEventListener('change', function (e) {
+  const box = document.getElementById(id);
+  if (box) box.addEventListener('change', function (e) {
     document.body.classList.toggle(cls, e.target.checked);
   });
 }
+// Draw the agreement seal up to its measured value. With reduced motion the
+// transition is off in CSS and the ring simply appears complete.
+const seal = document.querySelector('.seal-fg');
+if (seal) requestAnimationFrame(() => requestAnimationFrame(() => {
+  seal.style.strokeDashoffset = seal.dataset.target;
+}));
 """
 
 
@@ -614,20 +740,23 @@ def write_side_by_side(
     figure_state = "bad" if s.changed_figures else "good"
     text_state = "bad" if s.changed else "good"
 
+    benchmark = _e(meta.label_a)
     if s.changed_figures:
         headline = (
             f"{s.changed_figures:,} figure{'' if s.changed_figures == 1 else 's'} "
-            "differ between the two documents"
+            "deviate from the benchmark"
         )
         standfirst = (
-            "Every figure below was matched to its counterpart and compared. "
-            "The differing ones are listed first; each links to the page it came from."
+            f"{benchmark} is the benchmark; every figure below was matched to its "
+            "counterpart and measured against it. The deviations are indexed first; "
+            "each opens the exact highlighted passage it was drawn from."
         )
     elif s.changed:
-        headline = "Every figure agrees; the wording differs in places"
+        headline = "Every figure matches the benchmark; wording differs in places"
         standfirst = (
-            f"All {s.rows_matched:,} compared table rows carry the same values in both "
-            f"documents. {s.changed:,} passage(s) differ in wording"
+            f"{benchmark} is the benchmark. All {s.rows_matched:,} compared table "
+            f"rows carry its values exactly. {s.changed:,} passage(s) deviate in "
+            "wording"
             + (
                 f", and {s.formatting:,} differ only in punctuation or spacing."
                 if s.formatting
@@ -635,45 +764,78 @@ def write_side_by_side(
             )
         )
     elif s.formatting:
-        headline = "The two documents agree; only the typesetting differs"
+        headline = "Faithful to the benchmark; only the typesetting differs"
         standfirst = (
-            f"All {s.matched:,} compared passages, including {s.rows_matched:,} table "
-            f"rows, carry the same content. {s.formatting:,} differ in punctuation, "
-            "spacing or bullet style alone."
+            f"{benchmark} is the benchmark. All {s.matched:,} compared passages, "
+            f"including {s.rows_matched:,} table rows, carry its content. "
+            f"{s.formatting:,} differ in punctuation, spacing or bullet style alone."
         )
     else:
-        headline = "The two documents agree"
+        headline = "Faithful to the benchmark throughout"
         standfirst = (
-            f"All {s.matched:,} compared passages, including {s.rows_matched:,} table "
-            "rows, carry the same content in both documents."
+            f"{benchmark} is the benchmark. All {s.matched:,} compared passages, "
+            f"including {s.rows_matched:,} table rows, carry its content exactly."
         )
+
+    # The agreement seal: how much of what was compared matches the benchmark,
+    # drawn as a ring. Formatting-only differences count as agreement.
+    agree = s.matched - s.changed
+    pct = (100.0 * agree / s.matched) if s.matched else 0.0
+    pct_text = f"{pct:.1f}".rstrip("0").rstrip(".") + "%"
+    circumference = 351.86  # 2 * pi * r, r = 56
+    seal_target = circumference * (1 - pct / 100.0)
+    seal_state = " seal--bad" if s.changed_figures else ""
+    fig_note = (
+        "no figure deviations"
+        if not s.changed_figures
+        else f"{s.changed_figures:,} figure deviation{'' if s.changed_figures == 1 else 's'}"
+    )
+    seal = (
+        f'<figure class="seal{seal_state}" role="img" '
+        f'aria-label="{pct_text} of compared passages match the benchmark; {fig_note}">'
+        f'<svg viewBox="0 0 132 132" aria-hidden="true">'
+        f'<circle class="seal-bg" cx="66" cy="66" r="56"></circle>'
+        f'<circle class="seal-fg" cx="66" cy="66" r="56" '
+        f'stroke-dasharray="{circumference}" stroke-dashoffset="{circumference}" '
+        f'data-target="{seal_target:.1f}"></circle>'
+        f"</svg>"
+        f"<figcaption><b>{pct_text}</b>"
+        f"<span>agreement with benchmark</span>"
+        f"<i>{fig_note}</i></figcaption>"
+        f"</figure>"
+    )
 
     def _pill(status: str) -> str:
         word = {"same": "agrees", "formatting": "formatting only",
-                "changed": "differs", "added": "right only",
-                "removed": "left only"}.get(status, status)
+                "changed": "deviates", "added": "not in benchmark",
+                "removed": "benchmark only"}.get(status, status)
         return f'<span class="chip chip--{status}">{word}</span>'
 
-    register_rows = "".join(
-        f'<tr class="reg reg--{x.status}">'
-        f'<td class="rn">{x.serial}</td>'
-        f'<td class="rt">{_e(x.title) or "&nbsp;"}</td>'
-        f'<td class="rp">{_page_link(x.pages[0], meta.marked_href_a)}</td>'
-        f'<td class="rp">{_page_link(x.pages[1], meta.marked_href_b)}</td>'
-        f'<td class="rs">{_pill(x.status)}</td>'
-        f'<td class="rd">{f"{x.changed} of {len(x.pairs)}" if x.status == "changed" else ""}</td>'
-        f'<td class="rl"><a href="#s{sections.index(x)}">view</a></td>'
-        f"</tr>"
-        for x in (numbered_sections or sections)
-    )
+    def _register_row(x) -> str:
+        spot_a = _section_spot(x, "a", meta.heights_a)
+        spot_b = _section_spot(x, "b", meta.heights_b)
+        return (
+            f'<tr class="reg reg--{x.status}">'
+            f'<td class="rn">{x.serial}</td>'
+            f'<td class="rt">{_e(x.title) or "&nbsp;"}</td>'
+            f'<td class="rp">{_page_link(x.pages[0], meta.marked_href_a, top=spot_a[1] if spot_a else None)}</td>'
+            f'<td class="rp">{_page_link(x.pages[1], meta.marked_href_b, top=spot_b[1] if spot_b else None)}</td>'
+            f'<td class="rs">{_pill(x.status)}</td>'
+            f'<td class="rd">{f"{x.changed} of {len(x.pairs)}" if x.status == "changed" else ""}</td>'
+            f'<td class="rl"><a href="#s{sections.index(x)}">view</a></td>'
+            f"</tr>"
+        )
+
+    register_rows = "".join(_register_row(x) for x in (numbered_sections or sections))
     register = (
         '<section class="register"><h2>Section register</h2>'
         '<p class="sub">Every section compared, in document order. '
-        "Page numbers open the marked-up copy at that page.</p>"
+        "Page numbers open the marked-up copy at the exact passage.</p>"
         '<div class="scroll"><table>'
         "<thead><tr><th>#</th><th>Section</th>"
-        f"<th>{_e(meta.label_a)}</th><th>{_e(meta.label_b)}</th>"
-        "<th>Status</th><th>Differing</th><th></th></tr></thead>"
+        f'<th>{_e(meta.label_a)}<span class="btag">benchmark</span></th>'
+        f"<th>{_e(meta.label_b)}</th>"
+        "<th>Status</th><th>Deviations</th><th></th></tr></thead>"
         f"<tbody>{register_rows}</tbody></table></div></section>"
     )
 
@@ -693,12 +855,12 @@ def write_side_by_side(
             f'rel="noopener">{_e(meta.marked_href_a)}</a> and '
             f'<a class="pl" href="{_e(meta.marked_href_b)}" target="_blank" '
             f'rel="noopener">{_e(meta.marked_href_b)}</a>. '
-            "Page numbers throughout open those copies at the page the content "
-            "was drawn from, and each copy carries the same numbers in its "
-            "bookmarks. "
+            "Every cell and page number throughout opens its copy scrolled to "
+            "the exact highlighted passage it was drawn from, and each copy "
+            "carries the same numbers in its bookmarks. "
             f"Everything compared is tinted there — {meta.coverage_a[0]:,} "
-            f"passages and {meta.coverage_a[1]:,} figures on the left, "
-            f"{meta.coverage_b[0]:,} and {meta.coverage_b[1]:,} on the right — "
+            f"passages and {meta.coverage_a[1]:,} figures on the benchmark, "
+            f"{meta.coverage_b[0]:,} and {meta.coverage_b[1]:,} on the other — "
             "so anything left untinted was <em>not</em> covered by this report "
             "and can be checked rather than assumed."
             "</div>"
@@ -738,39 +900,45 @@ def write_side_by_side(
         for i, x in differing
     )
     toc = (
-        f'<nav class="toc"><h2>{len(differing)} sections differ on both sides</h2>'
+        f'<nav class="toc"><h2>{len(differing)} section'
+        f'{"" if len(differing) == 1 else "s"} deviate from the benchmark</h2>'
         f"<ol>{toc_items}</ol></nav>"
         if differing
         else ""
     )
 
-    page = f"""<title>Side-by-side comparison — {_e(meta.pdf_a.rsplit('/', 1)[-1])} vs {_e(meta.pdf_b.rsplit('/', 1)[-1])}</title>
+    page = f"""<title>Benchmark comparison — {_e(meta.pdf_b.rsplit('/', 1)[-1])} against {_e(meta.pdf_a.rsplit('/', 1)[-1])}</title>
 <style>{_CSS}</style>
 <div class="wrap">
-  <p class="eyebrow">Document comparison &middot; {_e(meta.label_a)} against {_e(meta.label_b)}</p>
-  <h1>{headline}</h1>
-  <p class="standfirst">{standfirst}</p>
+  <div class="hero">
+    <div class="hero-lead">
+      <p class="eyebrow">Verification &middot; {_e(meta.label_b)} against benchmark {_e(meta.label_a)}</p>
+      <h1>{headline}</h1>
+      <p class="standfirst">{standfirst}</p>
+    </div>
+    {seal}
+  </div>
 
   <div class="verdict">
     <div class="v v--{figure_state}">
       <b>{s.changed_figures:,}</b>
-      <span>figure{"" if s.changed_figures == 1 else "s"} differing</span>
+      <span>figure deviation{"" if s.changed_figures == 1 else "s"}</span>
       <i>across {s.rows_matched:,} compared table rows</i>
     </div>
     <div class="v">
       <b>{identical_sections:,}<em>/{total_sections:,}</em></b>
-      <span>sections identical</span>
+      <span>sections match exactly</span>
       <i>matched by {"your numbering" if numbered else "heading"}</i>
     </div>
     <div class="v v--{text_state}">
       <b>{s.changed:,}</b>
-      <span>passages differing</span>
+      <span>passages deviating</span>
       <i>of {s.matched:,} compared{f"; {s.formatting:,} formatting only" if s.formatting else ""}</i>
     </div>
     <div class="v">
       <b>{s.only_in_a + s.only_in_b:,}</b>
       <span>present on one side</span>
-      <i>{s.only_in_a:,} left &middot; {s.only_in_b:,} right</i>
+      <i>{s.only_in_a:,} benchmark only &middot; {s.only_in_b:,} not in benchmark</i>
     </div>
   </div>
 
@@ -785,7 +953,7 @@ def write_side_by_side(
   </div>
 
   <div class="docs">
-    <div><b>{_e(meta.label_a)}</b>
+    <div><b>{_e(meta.label_a)}<span class="btag">benchmark</span></b>
       <code>{_e(meta.pdf_a.rsplit('/', 1)[-1])}</code><br>
       {meta.pages_a} pages{f" &middot; {_e(meta.producer_a)}" if meta.producer_a else ""}</div>
     <div><b>{_e(meta.label_b)}</b>
@@ -795,11 +963,11 @@ def write_side_by_side(
 
   <div class="stats">
     <div class="stat"><b>{s.matched:,}</b><span>passages matched</span></div>
-    <div class="stat stat--bad"><b>{s.changed:,}</b><span>matched but differing</span></div>
-    <div class="stat stat--bad"><b>{s.changed_figures:,}</b><span>figure cells differing</span></div>
+    <div class="stat stat--bad"><b>{s.changed:,}</b><span>matched, deviating</span></div>
+    <div class="stat stat--bad"><b>{s.changed_figures:,}</b><span>figure cells deviating</span></div>
     <div class="stat stat--good"><b>{s.unchanged:,}</b><span>matched and agreeing</span></div>
-    <div class="stat"><b>{s.only_in_a:,}</b><span>only in A</span></div>
-    <div class="stat"><b>{s.only_in_b:,}</b><span>only in B</span></div>
+    <div class="stat"><b>{s.only_in_a:,}</b><span>benchmark only</span></div>
+    <div class="stat"><b>{s.only_in_b:,}</b><span>not in benchmark</span></div>
   </div>
 
   {marks_note}
@@ -809,16 +977,16 @@ def write_side_by_side(
     <label><input type="checkbox" id="hide-same"> Hide {identical_sections:,} identical</label>
     <label><input type="checkbox" id="hide-oneside"> Hide {one_sided:,} one-sided</label>
     {unmarked_filter}
-    <span class="key"><i style="background:var(--differs-bg)"></i> figure differs</span>
-    <span class="key"><i style="background:var(--del-bg)"></i> text only in A</span>
-    <span class="key"><i style="background:var(--add-bg)"></i> text only in B</span>
+    <span class="key"><i style="background:var(--differs-bg)"></i> figure deviates</span>
+    <span class="key"><i style="background:var(--del-bg)"></i> text in benchmark only</span>
+    <span class="key"><i style="background:var(--add-bg)"></i> text not in benchmark</span>
     <span>{s.paragraphs_matched:,} paragraphs &middot; {s.rows_matched:,} table rows</span>
   </div>
 
 {toc}
   <div class="colhead">
     <span class="cgut">pg</span>
-    <span class="ch">{_e(meta.label_a)}<i>{_e(meta.made_a)}</i></span>
+    <span class="ch">{_e(meta.label_a)}<span class="btag">benchmark</span><i>{_e(meta.made_a)}</i></span>
     <span class="ch">{_e(meta.label_b)}<i>{_e(meta.made_b)}</i></span>
     <span class="cgut">pg</span>
   </div>
