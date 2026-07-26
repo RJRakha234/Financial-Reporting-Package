@@ -399,13 +399,23 @@ h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem)
 .chip--added{color:var(--add)} .chip--removed{color:var(--del)}
 
 .scroll{overflow-x:auto}
-table.rows{border-collapse:collapse;width:100%;min-width:max-content}
+table.rows{border-collapse:collapse;width:100%}
 table.rows td{vertical-align:top;padding:.3rem .55rem;border-bottom:1px solid var(--rule-soft)}
 .gut{font-family:var(--mono);font-size:.68rem;color:var(--muted);text-align:right;
-  width:2.4rem;white-space:nowrap;user-select:none}
-.side{width:50%;min-width:18rem}
-.side--empty{background:repeating-linear-gradient(135deg,transparent,transparent 5px,
-  var(--rule-soft) 5px,var(--rule-soft) 6px)}
+  white-space:nowrap;user-select:none}
+/* Two real columns, each pinned to half the width. Without a fixed layout a
+   long row label grows its own cell and shoves the other document off screen —
+   which defeats the entire point of a side-by-side. */
+.rows--cols{table-layout:fixed}
+.rows--cols .gut{width:2.2rem}
+.rows--cols .figs{white-space:normal}
+.rows--cols .fig{min-width:4rem}
+/* The stacked layout has one content column, so it may exceed the viewport and
+   scroll as a unit; both documents move together and stay aligned. */
+.rows--stacked{min-width:max-content}
+.rows--stacked .gut{width:2.4rem}
+.side--empty{background:repeating-linear-gradient(135deg,transparent,transparent 4px,
+  var(--rule) 4px,var(--rule) 5px);opacity:.5}
 .label{display:block;font-size:.86rem}
 .label--changed{background:var(--differs-bg);box-shadow:0 0 0 2px var(--differs-bg)}
 .figs{display:block;margin-top:.15rem;white-space:nowrap}
