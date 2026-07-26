@@ -420,6 +420,14 @@ def _full_text(unit: Unit) -> str:
     return unit.text
 
 
+def _document_order(unit: Unit) -> tuple:
+    """Where a unit sits in its document: page, then down, then across."""
+    if not unit.rows:
+        return (unit.block.page_start, 0.0, 0.0)
+    first = unit.rows[0]
+    return (first.page, first.y0, first.x0)
+
+
 def _merge_paragraphs(units: list[Unit]) -> Unit:
     """Fuse a section's prose into one comparable passage."""
     text = " ".join(_full_text(u) for u in units if _full_text(u)).strip()
@@ -468,6 +476,14 @@ def _align_marked_section(sub_a: list[Unit], sub_b: list[Unit]) -> list[Pair]:
         prose_b = prose_b + [p.b for p in aligned if p.a is None]
     else:
         prose_a, prose_b = prose_a + rows_a, prose_b + rows_b
+
+    # Back into the order they appear on the page. A line handed over from the
+    # row comparison would otherwise be appended to the end of the passage, and
+    # a sentence lifted out of the middle and stitched on at the end reads as
+    # text deleted from one place and inserted in another — when nothing moved
+    # and nothing changed.
+    prose_a.sort(key=_document_order)
+    prose_b.sort(key=_document_order)
 
     if prose_a and prose_b:
         merged = Pair(

@@ -206,6 +206,67 @@ def test_figures_in_a_numbered_section_are_still_compared_per_row(tmp_path):
     assert changes[0][1] == [(1, 1041.0, 1099.0)]
 
 
+def _unit(kind, page, y, text, figures=()):
+    """A hand-built unit at a known position, for order-sensitive tests."""
+    from fincheck.align import Unit, _norm
+    from fincheck.blocks import Block, Figure, Row
+
+    figs = [
+        Figure(text=t, value=float(t.replace(",", "")), x0=420 + i * 45, x1=450 + i * 45)
+        for i, t in enumerate(figures)
+    ]
+    row = Row(page=page, baseline=y, label=text, figures=figs,
+              x0=60, y0=y - 10, x1=520, y1=y + 2)
+    block = Block(kind="table" if kind == "row" else "paragraph",
+                  rows=[row], page_start=page, page_end=page)
+    return Unit(
+        kind=kind,
+        block_index=0,
+        block=block,
+        row=row if kind == "row" else None,
+        text=text,
+        tokens=set(_norm(text).split()),
+        values=tuple(f.value for f in figs),
+        section="8",
+        rows=(row,),
+    )
+
+
+def test_a_row_handed_to_the_prose_keeps_its_place_on_the_page():
+    """A sentence one side misreads as a table row must not read as moved.
+
+    "Originally planned for just 4" ends on a figure, so one document files it
+    as a row; the other wraps the sentence differently and keeps it prose. The
+    row finds no counterpart and is handed to the prose comparison — where it
+    must rejoin the passage at its position on the page, not be stitched on at
+    the end, which showed the sentence deleted from the middle and inserted at
+    the end when nothing moved and nothing changed.
+    """
+    from fincheck.align import _align_marked_section
+
+    prose = ("Infosys collaborated with Perfection Fresh to enable "
+             "Originally planned for just  4 "
+             "sites, the rollout extended to all locations")
+    sub_a = [
+        _unit("paragraph", 2, 100, "Infosys collaborated with Perfection Fresh to enable"),
+        _unit("row", 2, 115, "Originally planned for just", figures=("4",)),
+        _unit("paragraph", 2, 130, "sites, the rollout extended to all locations"),
+        _unit("row", 2, 200, "Revenue", figures=("4,941", "4,714")),
+    ]
+    sub_b = [
+        _unit("paragraph", 2, 100, prose),
+        _unit("row", 2, 200, "Revenue", figures=("4,941", "4,714")),
+    ]
+
+    pairs = _align_marked_section(sub_a, sub_b)
+    merged = [p for p in pairs if p.a is not None and p.a.kind == "paragraph"]
+
+    assert len(merged) == 1
+    assert merged[0].a.text == merged[0].b.text
+    ops = {op for op, _ in merged[0].words}
+    assert ops <= {"="}, f"an unmoved, unchanged passage must diff clean, got {ops}"
+
+
 # --------------------------------------------------------------------------
 # Unmarked documents: the same treatment, derived from their own headings
 # --------------------------------------------------------------------------
