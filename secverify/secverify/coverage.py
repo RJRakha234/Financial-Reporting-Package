@@ -10,6 +10,7 @@ coverage map rendered at the end of the review copy.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from .numbers import is_significant, iter_tokens
@@ -1238,4 +1239,125 @@ def block_boundary_findings(pages_raw, soup):
             "a paragraph break leaves the text byte-identical to every other "
             f"check — this is the only one that can see it. HTML block: "
             f"“{text[:120]}”.",
+        )
+
+
+#: a missing PDF line and a HTML block sharing at least this share of their
+#: words (against the larger of the two) are the SAME statement reworded, not a
+#: missing one and an unrelated one
+WORDING_OVERLAP_RATIO = 0.6
+#: both sides must carry at least this many words before overlap means anything
+WORDING_MIN_WORDS = 4
+
+
+def wording_difference_findings(coverage_lines, block_texts):
+    """Turn an "omission" into a named WORDING DIFFERENCE where one exists.
+
+    A PDF line reported as missing is sometimes not missing at all — the HTML
+    says the same thing differently.  The distinction matters enormously to a
+    reviewer, and the failure mode it hides is severe:
+
+        PDF   "Chief Managaing Officer and Executive Director"
+        HTML  "Chief Executive Officer and Managing Director"
+
+    When a document repeats a line — two signature blocks, consolidated and
+    standalone — the HTML's copy matches the PDF's OTHER, unaltered occurrence,
+    so the block is stamped **green**.  The altered occurrence surfaces only as
+    an "omission" in the summary panel, which reads as "some content is missing"
+    rather than "this designation is wrong", and the text a reviewer is actually
+    looking at says verified.
+
+    The occurrence-count check cannot rescue it: at 40 canonical characters the
+    designation falls under DUP_CHECK_MIN_LEN, the length floor that exists so
+    legitimately recurring signature lines are not flagged.
+
+    So each missing line is paired with the HTML block sharing most of its
+    words.  Where one exists the finding names both versions, and the caller
+    recolours that block so it cannot stay green.  This adds no new findings —
+    it only sharpens, and colours, ones the omission check already made.
+
+    **Word overlap alone is not enough to pair them.**  Measured on 14 real
+    filings it produced 189 findings, essentially all of the same wrong shape:
+    adjacent statement rows that differ by one word and therefore overlap well
+    above any workable ratio —
+
+        PDF   "Deferred tax assets (net) 816 497"     HTML  "Income tax assets (net)"
+        PDF   "Basic (in Rs per share) 14.72"         HTML  "Diluted (in per share)"
+
+    Both HTML labels are perfectly correct rows that exist in the PDF in their
+    own right; they merely share three words with the line that went missing.
+    Tightening the ratio would only trade these for misses, since the real
+    designation case sits at 0.83 and these at 0.75.
+
+    The discriminator that actually separates them is **occurrence excess**: a
+    rewording makes the HTML say something the PDF does not say as often.  The
+    designation appears twice in the HTML and once in the PDF (case B) or not at
+    all (case A) — an excess either way.  "Income tax assets (net)" appears once
+    on each side, so it displaced nothing and is passed over.  This is the same
+    reasoning as the occurrence-count check, applied to the short lines that
+    check's length floor excludes.
+    """
+    def words(t):
+        return {w for w in re.findall(r"[A-Za-z]{2,}", (t or "").lower())}
+
+    # How often each side states each line, so a rewording can be told from a
+    # coincidence of shared vocabulary.
+    pdf_counts: Counter = Counter()
+    for line in coverage_lines:
+        key = canonical(line.text, letters_only=True)
+        if key:
+            pdf_counts[key] += 1
+    html_counts: Counter = Counter()
+    for bt in block_texts or []:
+        key = canonical(bt, letters_only=True)
+        if key:
+            html_counts[key] += 1
+
+    blocks = [(bt, words(bt)) for bt in block_texts or [] if bt]
+    for line in coverage_lines:
+        if line.status != "missing":
+            continue
+        pw = words(line.text)
+        if len(pw) < WORDING_MIN_WORDS:
+            continue
+        best = None
+        for bt, bw in blocks:
+            if len(bw) < WORDING_MIN_WORDS:
+                continue
+            key = canonical(bt, letters_only=True)
+            if key == canonical(line.text, letters_only=True):
+                continue
+            # The HTML must state this MORE often than the PDF does.  Without
+            # this the check pairs the missing line with a neighbouring row that
+            # is present and correct on both sides (see the docstring).
+            if html_counts[key] <= pdf_counts[key]:
+                continue
+            shared = len(pw & bw)
+            ratio = shared / max(len(pw), len(bw))
+            if ratio >= WORDING_OVERLAP_RATIO:
+                if best is None or ratio > best[0]:
+                    best = (ratio, bt)
+        if best is None:
+            continue
+        _ratio, html_text = best
+        only_pdf = sorted(pw - words(html_text))
+        only_html = sorted(words(html_text) - pw)
+        diff = ""
+        if only_pdf or only_html:
+            diff = (
+                f" The PDF has {', '.join(repr(w) for w in only_pdf) or 'nothing'} "
+                f"where the HTML has {', '.join(repr(w) for w in only_html) or 'nothing'}."
+            )
+        yield (
+            "wording",
+            "error",
+            line.text[:80],
+            f"Wording differs — the PDF ({line.label or line.page}) reads "
+            f"“{line.text[:120]}” but the HTML reads “{html_text[:120]}”.{diff} "
+            "This was reported as missing content, but the statement is present "
+            "and reworded, which is a different and usually more serious finding. "
+            "Note that if the document repeats this line elsewhere, the HTML's "
+            "copy may have matched the other occurrence and been coloured green — "
+            "compare this one against the PDF directly.",
+            html_text,
         )

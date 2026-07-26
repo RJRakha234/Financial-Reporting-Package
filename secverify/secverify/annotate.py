@@ -1112,6 +1112,31 @@ class Annotator:
             self._zone_counts = mark_review_zones(
                 soup, root, self.corpus, strict=self.strict, footed=self.footed
             )
+        # Sharpen omissions into named wording differences, and recolour the
+        # HTML variant so a reworded statement cannot stay green (see
+        # coverage.wording_difference_findings).
+        from .coverage import wording_difference_findings
+
+        for kind, sev, exc, rem, variant in wording_difference_findings(
+            self.result.coverage.lines, [b["text"] for b in self._block_index]
+        ):
+            issue = self._new_issue(kind, sev, exc, rem)
+            # EVERY block carrying this wording is recoloured, not just one.
+            # When the HTML repeats the line (two signature blocks) only one of
+            # them corresponds to the PDF occurrence that differs — and nothing
+            # in either document says which.  Colouring one leaves the other
+            # green, so a reviewer reading the green one is told the wrong
+            # designation was verified.  Both are marked; the reviewer decides.
+            target = canonical(variant, letters_only=True)
+            for b in self._block_index:
+                if b["letters"] != target:
+                    continue
+                el = b["el"]
+                cls = el.get("class", [])
+                cls = cls.split() if isinstance(cls, str) else list(cls)
+                cls = [c for c in cls if c not in ("secv-text-ok", "secv-text-bad")]
+                el["class"] = cls + ["secv-text-bad"]
+                el["title"] = f"#{issue.num}: {rem}"[:500]
         self._pairing_sanity()
         _inject_banner(
             soup, root, self.result, pdf_name, html_name, unplaced,

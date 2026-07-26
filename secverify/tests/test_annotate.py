@@ -546,3 +546,137 @@ def test_matching_percent_and_currency_stay_silent():
     )
     r = Annotator(corpus).run(html, "ref.pdf", "doc.html")
     assert not [i for i in r.issues if i.kind in ("percent", "currency")]
+
+
+# --- reworded statements (coverage.wording_difference_findings) -------------
+#
+# The case that motivated this: a signature block's designation reordered.
+#
+#   PDF   "Chief Managaing Officer and Executive Director"
+#   HTML  "Chief Executive Officer and Managing Director"
+#
+# Where the document carries TWO signature blocks and only one PDF occurrence
+# differs, the HTML's copy matches the OTHER, unaltered occurrence and every
+# text check stamps it green.  The difference surfaced only as an "omission" in
+# the summary panel — which reads as missing content, not a wrong designation —
+# while the text a reviewer looks at said verified.
+
+HTML_DESIG = "Chief Executive Officer and Managing Director"
+PDF_DESIG = "Chief Managaing Officer and Executive Director"
+
+_DESIG_PDF_HEAD = [
+    "Consolidated financial results for the quarter ended June 30, 2026 are "
+    "presented below together with the notes to those results.",
+    "Revenue from operations 1,234 1,100",
+    "Profit for the period 456 400",
+]
+
+
+def _desig_sig(designation: str) -> list[str]:
+    return [
+        "For and on behalf of the Board of Directors of the Company",
+        "A B Sharma",
+        designation,
+        "Place: Bengaluru Date: July 15, 2026",
+    ]
+
+
+def _desig_html(blocks: int) -> str:
+    sig = (
+        "<p>For and on behalf of the Board of Directors of the Company</p>"
+        "<p>A B Sharma</p>"
+        f"<p>{HTML_DESIG}</p>"
+        "<p>Place: Bengaluru Date: July 15, 2026</p>"
+    )
+    return (
+        "<html><body>"
+        "<p>Consolidated financial results for the quarter ended June 30, 2026 "
+        "are presented below together with the notes to those results.</p>"
+        "<table><tr><td>Revenue from operations</td><td>1,234</td>"
+        "<td>1,100</td></tr>"
+        "<tr><td>Profit for the period</td><td>456</td><td>400</td></tr></table>"
+        + sig * blocks
+        + "</body></html>"
+    )
+
+
+def _desig_run(pdf_designations: list[str], html_blocks: int):
+    corpus = make_corpus(
+        _desig_pages(_DESIG_PDF_HEAD, pdf_designations)
+    )
+    return Annotator(
+        corpus, level="sigma", pdf_paths=["d.pdf"], review_zones=True
+    ).run(_desig_html(html_blocks), "ref.pdf", "doc.html")
+
+
+def _desig_pages(head: list[str], designations: list[str]) -> list[str]:
+    pages = list(head)
+    for d in designations:
+        pages.extend(_desig_sig(d))
+    return pages
+
+
+def _desig_colours(result) -> list[list[str]]:
+    from bs4 import BeautifulSoup
+
+    from secverify.textnorm import canonical
+
+    soup = BeautifulSoup(result.html_out, "html.parser")
+    summary = soup.find(id="secv-summary")
+    if summary is not None:
+        summary.extract()
+    target = canonical(HTML_DESIG, letters_only=True)
+    return [
+        list(el.get("class", []))
+        for el in soup.find_all(["p", "td", "div"])
+        if canonical(el.get_text(" ", strip=True), letters_only=True) == target
+    ]
+
+
+def test_reworded_designation_is_named_not_just_missing():
+    r = _desig_run([PDF_DESIG], html_blocks=1)
+    wording = [i for i in r.issues if i.kind == "wording"]
+    assert wording, "a reordered designation must be named as a wording difference"
+    assert "Managaing" in wording[0].remark and "Managing" in wording[0].remark
+
+
+def test_reworded_designation_cannot_stay_green_with_two_signature_blocks():
+    # the reported case: two signature blocks, only the FIRST altered in the PDF
+    r = _desig_run([PDF_DESIG, HTML_DESIG], html_blocks=2)
+    assert [i for i in r.issues if i.kind == "wording"]
+    colours = _desig_colours(r)
+    assert len(colours) == 2, colours
+    # BOTH must be marked: only one of them corresponds to the PDF occurrence
+    # that differs, and nothing in either document says which.
+    for cls in colours:
+        assert "secv-text-bad" in cls, colours
+        assert "secv-text-ok" not in cls, colours
+
+
+def test_faithful_designation_produces_no_wording_finding():
+    r = _desig_run([HTML_DESIG, HTML_DESIG], html_blocks=2)
+    assert not [i for i in r.issues if i.kind == "wording"]
+
+
+def test_sibling_rows_differing_by_one_word_are_not_called_a_rewording():
+    # measured false positive: adjacent statement rows overlap far above any
+    # workable word ratio, and BOTH are present and correct on both sides.
+    # Only an occurrence EXCESS in the HTML makes it a rewording.
+    corpus = make_corpus([
+        "Deferred tax assets (net) 816 497",
+        "Income tax assets (net) 1,485 1,164",
+        "Other non-current assets 2,118 2,223",
+        "Total non-current assets 9,000 8,400",
+    ])
+    html = (
+        "<html><body><table>"
+        "<tr><td>Deferred tax assets (net)</td><td>816</td><td>497</td></tr>"
+        "<tr><td>Income tax assets (net)</td><td>1,485</td><td>1,164</td></tr>"
+        "<tr><td>Other non-current assets</td><td>2,118</td><td>2,223</td></tr>"
+        "<tr><td>Total non-current assets</td><td>9,000</td><td>8,400</td></tr>"
+        "</table></body></html>"
+    )
+    r = Annotator(corpus, level="sigma", pdf_paths=["d.pdf"]).run(
+        html, "ref.pdf", "doc.html"
+    )
+    assert not [i for i in r.issues if i.kind == "wording"]
