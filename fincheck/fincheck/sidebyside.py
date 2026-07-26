@@ -513,6 +513,36 @@ td.stack{width:auto}
 del{background:var(--del-bg);color:var(--del);text-decoration:line-through}
 ins{background:var(--add-bg);color:var(--add);text-decoration:none}
 
+/* ---- executive verdict ---- */
+.verdict{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));
+  border-top:2px solid var(--ink);border-bottom:1px solid var(--rule);margin:0 0 2rem}
+.v{padding:1.15rem 1.25rem 1.3rem}
+.v+.v{border-left:1px solid var(--rule-soft)}
+.v b{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:2rem;
+  font-weight:400;line-height:1;display:block;letter-spacing:-.02em}
+.v b em{font-style:normal;font-size:1.1rem;color:var(--muted)}
+.v span{display:block;margin-top:.5rem;font-size:.74rem;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-soft);font-weight:600}
+.v i{display:block;margin-top:.2rem;font-style:normal;font-size:.76rem;color:var(--muted)}
+.v--good b{color:var(--same)} .v--bad b{color:var(--differs)}
+/* ---- section register ---- */
+.register{margin:0 0 2.5rem}
+.register h2{font-family:var(--serif);font-weight:400;font-size:1.35rem;margin:0 0 .25rem}
+.register table{border-collapse:collapse;width:100%;font-size:.86rem}
+.register thead th{font-size:.66rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);font-weight:600;text-align:left;padding:0 .8rem .45rem 0;
+  border-bottom:1px solid var(--ink);white-space:nowrap}
+.register td{padding:.42rem .8rem .42rem 0;border-bottom:1px solid var(--rule-soft);
+  vertical-align:top}
+.reg--changed{background:linear-gradient(90deg,var(--differs-bg),transparent 42%)}
+.rn{font-family:var(--mono);font-size:.74rem;color:var(--paper);width:1.9rem}
+.reg .rn{background:var(--ink);text-align:center;border-radius:2px;padding:.1rem 0;
+  height:1.1rem;line-height:1.1rem}
+.rt{max-width:32rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rp{font-family:var(--mono);font-size:.76rem;white-space:nowrap;color:var(--muted)}
+.rd{font-family:var(--mono);font-size:.74rem;color:var(--differs);white-space:nowrap}
+.rl a{font-size:.74rem;color:var(--accent);text-decoration:none;
+  border-bottom:1px dotted currentColor}
 body.hide-same .sec--same{display:none}
 body.hide-oneside .sec--added,body.hide-oneside .sec--removed{display:none}
 .toc{border-top:2px solid var(--ink);border-bottom:1px solid var(--rule);
@@ -555,15 +585,76 @@ def write_side_by_side(
 ) -> str:
     s = meta.summary
     tags = meta.tags
-    identical_sections = sum(1 for x in sections if x.status == "same")
+    identical_all = sum(1 for x in sections if x.status == "same")
+    identical_sections = identical_all
     one_sided = sum(1 for x in sections if x.status in ("added", "removed"))
 
     body = "".join(_section_html(x, i, tags) for i, x in enumerate(sections))
 
-    numbered = [x for x in sections if x.marked is not None]
-    unmarked_count = len(sections) - len(numbered)
+    numbered_sections = [x for x in sections if x.marked is not None]
+    numbered = bool(meta.marked_sections)
+    total_sections = len(numbered_sections) or len(sections)
+    identical_sections_count = sum(
+        1 for x in (numbered_sections or sections) if x.status == "same"
+    )
+    figure_state = "bad" if s.changed_figures else "good"
+    text_state = "bad" if s.changed else "good"
+
+    if s.changed_figures:
+        headline = (
+            f"{s.changed_figures:,} figure{'' if s.changed_figures == 1 else 's'} "
+            "differ between the two documents"
+        )
+        standfirst = (
+            "Every figure below was matched to its counterpart and compared. "
+            "The differing ones are listed first; each links to the page it came from."
+        )
+    elif s.changed:
+        headline = "Every figure agrees; the wording differs in places"
+        standfirst = (
+            f"All {s.rows_matched:,} compared table rows carry the same values in both "
+            f"documents. {s.changed:,} passage(s) differ in wording or formatting, "
+            "set out below."
+        )
+    else:
+        headline = "The two documents agree"
+        standfirst = (
+            f"All {s.matched:,} compared passages, including {s.rows_matched:,} table "
+            "rows, carry the same content in both documents."
+        )
+
+    def _pill(status: str) -> str:
+        word = {"same": "agrees", "changed": "differs",
+                "added": "right only", "removed": "left only"}.get(status, status)
+        return f'<span class="chip chip--{status}">{word}</span>'
+
+    register_rows = "".join(
+        f'<tr class="reg reg--{x.status}">'
+        f'<td class="rn">{x.serial}</td>'
+        f'<td class="rt">{_e(x.title) or "&nbsp;"}</td>'
+        f'<td class="rp">{_page_link(x.pages[0], meta.marked_href_a)}</td>'
+        f'<td class="rp">{_page_link(x.pages[1], meta.marked_href_b)}</td>'
+        f'<td class="rs">{_pill(x.status)}</td>'
+        f'<td class="rd">{f"{x.changed} of {len(x.pairs)}" if x.status == "changed" else ""}</td>'
+        f'<td class="rl"><a href="#s{sections.index(x)}">view</a></td>'
+        f"</tr>"
+        for x in (numbered_sections or sections)
+    )
+    register = (
+        '<section class="register"><h2>Section register</h2>'
+        '<p class="sub">Every section compared, in document order. '
+        "Page numbers open the marked-up copy at that page.</p>"
+        '<div class="scroll"><table>'
+        "<thead><tr><th>#</th><th>Section</th>"
+        f"<th>{_e(meta.label_a)}</th><th>{_e(meta.label_b)}</th>"
+        "<th>Status</th><th>Differing</th><th></th></tr></thead>"
+        f"<tbody>{register_rows}</tbody></table></div></section>"
+    )
+
+    numbered_list = [x for x in sections if x.marked is not None]
+    unmarked_count = len(sections) - len(numbered_list)
     blanks_in_numbered = sum(
-        1 for x in numbered for p in x.pairs if p.a is None or p.b is None
+        1 for x in numbered_list for p in x.pairs if p.a is None or p.b is None
     )
     copies_note = ""
     if meta.marked_href_a or meta.marked_href_b:
@@ -584,10 +675,10 @@ def write_side_by_side(
 
     marks_note = ""
     unmarked_filter = ""
-    if numbered:
+    if numbered_list:
         marks_note = (
             '<div class="caution caution--marks">'
-            f"<strong>Using your section numbers.</strong> {len(numbered)} numbered "
+            f"<strong>Using your section numbers.</strong> {len(numbered_list)} numbered "
             "section(s) were read from the highlight comments in both files. Content "
             "you numbered <em>n</em> is compared only against content numbered "
             "<em>n</em>, so a section you marked in both documents cannot come out "
@@ -625,10 +716,34 @@ def write_side_by_side(
     page = f"""<title>Side-by-side comparison — {_e(meta.pdf_a.rsplit('/', 1)[-1])} vs {_e(meta.pdf_b.rsplit('/', 1)[-1])}</title>
 <style>{_CSS}</style>
 <div class="wrap">
-  <p class="eyebrow">Side-by-side &middot; reconstructed paragraphs and tables</p>
-  <h1>Every paragraph and table, matched by content and placed side by side</h1>
-  <p class="standfirst">Matched on what each passage says, not where it sits, because
-  the two files paginate differently. A is on the left, B on the right.</p>
+  <p class="eyebrow">Document comparison &middot; {_e(meta.label_a)} against {_e(meta.label_b)}</p>
+  <h1>{headline}</h1>
+  <p class="standfirst">{standfirst}</p>
+
+  <div class="verdict">
+    <div class="v v--{figure_state}">
+      <b>{s.changed_figures:,}</b>
+      <span>figure{"" if s.changed_figures == 1 else "s"} differing</span>
+      <i>across {s.rows_matched:,} compared table rows</i>
+    </div>
+    <div class="v">
+      <b>{identical_sections:,}<em>/{total_sections:,}</em></b>
+      <span>sections identical</span>
+      <i>matched by {"your numbering" if numbered else "heading"}</i>
+    </div>
+    <div class="v v--{text_state}">
+      <b>{s.changed:,}</b>
+      <span>passages differing</span>
+      <i>of {s.matched:,} compared</i>
+    </div>
+    <div class="v">
+      <b>{s.only_in_a + s.only_in_b:,}</b>
+      <span>present on one side</span>
+      <i>{s.only_in_a:,} left &middot; {s.only_in_b:,} right</i>
+    </div>
+  </div>
+
+  {register}
 
   <div class="caution">
     <strong>This view infers structure.</strong> A PDF holds glyphs at coordinates, not

@@ -12,9 +12,17 @@ Public API::
 
 from dataclasses import dataclass, field
 
-from .align import align, align_by_section, group, summarise, units_of
+from .align import (
+    align,
+    align_by_derived_sections,
+    align_by_section,
+    derive_sections,
+    group,
+    summarise,
+    units_of,
+)
 from .blocks import segment
-from .marks import read_marks
+from .marks import _sort_key as _label_order, read_marks
 from .checks import Inconsistency, TotalCheck, run_checks
 from .compare import DEFAULT_DPI, ComparisonResult, SpanChange, compare_pdfs
 from .diffmark import write_diff_pdf
@@ -164,6 +172,33 @@ def _relative_to(target: str, html_path: str) -> str:
         return target
 
 
+def _one_sided(pairs) -> int:
+    return sum(1 for p in pairs if p.a is None or p.b is None)
+
+
+def _best_alignment(units_a, units_b):
+    """Cut both documents at their headings, but only keep it if it helps.
+
+    Sectioning is the right idea — it is how a reviewer works through two
+    documents — but a heading detected in one and missed in the other shifts
+    every section after it, and the result is worse than not sectioning at all.
+    Rather than guess, both alignments are computed and the one leaving fewer
+    passages without a counterpart wins. They take about a second each.
+    """
+    plain = align(units_a, units_b)
+    if not (derive_sections(units_a) and derive_sections(units_b)):
+        return plain
+
+    sectioned = align_by_derived_sections(units_a, units_b)
+    if _one_sided(sectioned) <= _one_sided(plain):
+        return sectioned
+
+    # Headings did not line up; discard them and keep the plain alignment.
+    for unit in units_a + units_b:
+        unit.section = None
+    return plain
+
+
 def side_by_side(
     pdf_a: str,
     pdf_b: str,
@@ -173,6 +208,7 @@ def side_by_side(
     use_marks: bool = True,
     marked_pdf_a: str | None = None,
     marked_pdf_b: str | None = None,
+    auto_sections: bool = True,
 ) -> SideBySideResult:
     """Match two documents paragraph by paragraph and row by row.
 
@@ -195,6 +231,10 @@ def side_by_side(
         marked_pdf_a: if given, write a copy of ``pdf_a`` with every compared
             section outlined and stamped with its number from the report.
         marked_pdf_b: the same for ``pdf_b``.
+        auto_sections: when neither PDF carries reviewer marks, cut both at
+            their own headings and compare section against matching section.
+            This is how a reviewer marks these documents by hand, so the output
+            matches whether or not anyone has been through them first.
     """
     marks_a = read_marks(pdf_a) if use_marks else None
     marks_b = read_marks(pdf_b) if use_marks else None
@@ -202,11 +242,19 @@ def side_by_side(
 
     units_a = units_of(segment(pdf_a), marks_a)
     units_b = units_of(segment(pdf_b), marks_b)
-    pairs = align_by_section(units_a, units_b) if sectioned else align(units_a, units_b)
+
+    if sectioned:
+        pairs = align_by_section(units_a, units_b)
+    elif auto_sections:
+        pairs = _best_alignment(units_a, units_b)
+    else:
+        pairs = align(units_a, units_b)
     sections = group(pairs)
     summary = summarise(pairs, units_a, units_b)
     shared_marks = (
-        sorted(set(marks_a.labels) & set(marks_b.labels), key=len) if sectioned else []
+        sorted(set(marks_a.labels) & set(marks_b.labels), key=_label_order)
+        if sectioned
+        else []
     )
 
     copies = None

@@ -472,6 +472,153 @@ def _align_marked_section(sub_a: list[Unit], sub_b: list[Unit]) -> list[Pair]:
     return out
 
 
+# A heading up to this long starts a section of its own.
+_MAX_SECTION_HEADING = 90
+# Two derived headings sharing this much of their wording are the same section.
+_HEADING_FLOOR = 0.4
+
+
+def _is_section_heading(text: str) -> bool:
+    """Does this passage introduce a section rather than belong to one?
+
+    Learned from how reviewers actually mark these documents up: they cut at
+    the headings — "Client wins & Testimonials", "Recognitions & Awards",
+    "About Infosys", "Extracted from the Condensed Consolidated Balance
+    Sheet" — and let everything under one run together.
+    """
+    stripped = text.strip()
+    if not stripped or len(stripped) > _MAX_SECTION_HEADING:
+        return False
+    # A heading is not a sentence. Checked first, because a numbered list item
+    # ("1. Infosys announced ...") otherwise matches the numbered-note pattern
+    # and starts a section per bullet.
+    if stripped.endswith("."):
+        return False
+    if _STATEMENT_RE.search(stripped) or _HEADING_RE.match(stripped):
+        return True
+    # A short line set mostly in initial capitals.
+    if len(stripped) > 60:
+        return False
+    words = stripped.split()
+    if not 1 <= len(words) <= 8:
+        return False
+    capitalised = sum(1 for w in words if w[:1].isupper())
+    return capitalised >= max(1, len(words) // 2)
+
+
+def _heading_key(text: str) -> str:
+    """A heading reduced to its words, so punctuation and bullets do not divide.
+
+    One document writes "Key highlights :" and the other "Key highlights:"; one
+    prefixes its bullets with a middle dot and the other with a bullet. None of
+    that changes which section it is.
+    """
+    return " ".join(re.findall(r"[a-z0-9&]+", text.lower()))[:_MAX_SECTION_HEADING]
+
+
+def derive_sections(units: list[Unit]) -> int:
+    """Cut an unmarked document into sections at its headings.
+
+    Sections are keyed by the heading's own words rather than by position, so
+    the two documents pair on what a section *is*. One of them carrying an
+    extra heading then shifts nothing else out of alignment.
+
+    Returns the number of sections found. Units before the first heading get no
+    section and fall back to ordinary content matching.
+    """
+    current = None
+    found = 0
+    for unit in units:
+        # Test the unit's first line, not the whole of it. A heading is often
+        # reconstructed together with the body beneath it — "About Infosys
+        # Infosys is a global leader in ..." — and testing the merged text
+        # would find no headings at all.
+        lead = unit.rows[0].label.strip() if unit.rows else unit.text
+        if unit.kind == "paragraph" and _is_section_heading(lead):
+            current = _heading_key(lead)
+            found += 1
+        unit.section = current
+    return found
+
+
+def _runs(units: list[Unit]) -> list[tuple]:
+    """Consecutive units sharing a section key, in document order."""
+    out: list[tuple] = []
+    for unit in units:
+        if out and out[-1][0] == unit.section:
+            out[-1][1].append(unit)
+        else:
+            out.append((unit.section, [unit]))
+    return out
+
+
+def _align_keys(keys_a: list, keys_b: list) -> list[tuple]:
+    """Order-preserving alignment of two heading sequences on word overlap.
+
+    Derived headings are not identical across two documents and one document
+    may carry an extra one, so pairing them by name alone strands whole
+    sections. Aligning the sequences tolerates both.
+    """
+    rows, cols = len(keys_a), len(keys_b)
+    sets_a = [set(k.split()) if k else set() for k in keys_a]
+    sets_b = [set(k.split()) if k else set() for k in keys_b]
+
+    def score(i, j):
+        if keys_a[i] is None or keys_b[j] is None:
+            return 0.0
+        s = _jaccard(sets_a[i], sets_b[j])
+        return s if s >= _HEADING_FLOOR else 0.0
+
+    table = [[0.0] * (cols + 1) for _ in range(rows + 1)]
+    for i in range(rows - 1, -1, -1):
+        for j in range(cols - 1, -1, -1):
+            best = max(table[i + 1][j], table[i][j + 1])
+            s = score(i, j)
+            if s > 0:
+                best = max(best, table[i + 1][j + 1] + s)
+            table[i][j] = best
+
+    out: list[tuple] = []
+    i = j = 0
+    while i < rows and j < cols:
+        s = score(i, j)
+        if s > 0 and table[i][j] == table[i + 1][j + 1] + s:
+            out.append((i, j))
+            i += 1
+            j += 1
+        elif table[i + 1][j] >= table[i][j + 1]:
+            out.append((i, None))
+            i += 1
+        else:
+            out.append((None, j))
+            j += 1
+    out += [(k, None) for k in range(i, rows)]
+    out += [(None, k) for k in range(j, cols)]
+    return out
+
+
+def align_by_derived_sections(units_a: list[Unit], units_b: list[Unit]) -> list[Pair]:
+    """Compare two documents cut at their own headings."""
+    runs_a, runs_b = _runs(units_a), _runs(units_b)
+    keys_a = [k for k, _ in runs_a]
+    keys_b = [k for k, _ in runs_b]
+
+    pairs: list[Pair] = []
+    for i, j in _align_keys(keys_a, keys_b):
+        sub_a = runs_a[i][1] if i is not None else []
+        sub_b = runs_b[j][1] if j is not None else []
+        if sub_a and sub_b:
+            # Give the pair a shared name so the report groups it as one
+            # section and labels it with the heading it was cut at.
+            label = keys_a[i] or keys_b[j]
+            for unit in sub_a + sub_b:
+                unit.section = label
+            pairs += _align_marked_section(sub_a, sub_b)
+        else:
+            pairs += align(sub_a, sub_b)
+    return pairs
+
+
 def align_by_section(units_a: list[Unit], units_b: list[Unit]) -> list[Pair]:
     """Align within each numbered section, then across the unmarked remainder.
 

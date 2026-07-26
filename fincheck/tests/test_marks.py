@@ -20,6 +20,10 @@ def write(path, lines, marks=(), width=595, height=842, pitch=16, start=80):
     boxes = []
     y = start
     for line in lines:
+        if line is None:  # blank line, as a document leaves above a heading
+            y += pitch
+            boxes.append(fitz.Rect(58, y - 10, width - 40, y + 4))
+            continue
         page.insert_text((60, y), line, fontsize=10, fontname="helv")
         boxes.append(fitz.Rect(58, y - 10, width - 40, y + 4))
         y += pitch
@@ -200,3 +204,106 @@ def test_figures_in_a_numbered_section_are_still_compared_per_row(tmp_path):
 
     assert len(changes) == 1
     assert changes[0][1] == [(1, 1041.0, 1099.0)]
+
+
+# --------------------------------------------------------------------------
+# Unmarked documents: the same treatment, derived from their own headings
+# --------------------------------------------------------------------------
+
+RELEASE = [
+    "Guidance for FY26",
+    "Revenue growth of 1%-3% in constant currency",
+    None,
+    "Client wins & Testimonials",
+    "1. A collaboration was extended to drive operational efficiency.",
+    None,
+    "About Infosys",
+    "Infosys is a global leader in next-generation digital services.",
+]
+
+
+def test_headings_cut_an_unmarked_document_into_sections(tmp_path):
+    from fincheck.align import derive_sections, units_of
+    from fincheck.blocks import segment
+
+    units = units_of(segment(write(tmp_path / "a.pdf", RELEASE)))
+    found = derive_sections(units)
+
+    assert found >= 3, "the document's own headings should start sections"
+    keys = [u.section for u in units if u.section]
+    assert any("client wins" in k for k in keys)
+    assert any("about infosys" in k for k in keys)
+
+
+def test_a_heading_key_ignores_punctuation_and_bullets(tmp_path):
+    """One file writes "Key highlights :", the other "• Key highlights:"."""
+    from fincheck.align import _heading_key
+
+    assert _heading_key("Key highlights :") == _heading_key("Key highlights:")
+    assert _heading_key("• Industry & Solutions") == _heading_key("Industry & Solutions")
+
+
+def test_a_sentence_is_not_mistaken_for_a_heading():
+    from fincheck.align import _is_section_heading
+
+    assert _is_section_heading("Client wins & Testimonials")
+    assert _is_section_heading("About Infosys")
+    assert _is_section_heading("Guidance for FY26 :")
+    # Body text, however short, is not a heading.
+    assert not _is_section_heading(
+        "Infosys is a global leader in next-generation digital services."
+    )
+    assert not _is_section_heading("")
+
+
+def test_an_unmarked_pair_is_compared_section_by_section(tmp_path):
+    """The point: unhighlighted files get the same treatment as marked ones."""
+    a = write(tmp_path / "a.pdf", RELEASE)
+    # Same content, re-wrapped and with one sentence reworded.
+    b = write(
+        tmp_path / "b.pdf",
+        [
+            "Guidance for FY26",
+            "Revenue growth of 1%-3%",
+            "in constant currency",
+            None,
+            "Client wins & Testimonials",
+            "1. A collaboration was extended",
+            "to drive operational efficiency.",
+            None,
+            "About Infosys",
+            "Infosys is a global leader in",
+            "next-generation digital services and consulting.",
+        ],
+    )
+
+    result = side_by_side(a, b)
+    named = [s for s in result.sections if s.marked is not None]
+
+    assert named, "sections should be derived without any marks"
+    assert any("about infosys" in (s.marked or "") for s in named)
+    # A section found in both must not be reported one-sided.
+    both = [s for s in named if s.status in ("same", "changed")]
+    assert both
+    assert all(
+        p.a is not None and p.b is not None for s in both for p in s.pairs
+    )
+
+
+def test_auto_sectioning_can_be_turned_off(tmp_path):
+    a = write(tmp_path / "a.pdf", RELEASE)
+    b = write(tmp_path / "b.pdf", RELEASE)
+
+    off = side_by_side(a, b, auto_sections=False)
+
+    assert all(s.marked is None for s in off.sections)
+
+
+def test_reviewer_marks_take_precedence_over_derived_headings(tmp_path):
+    a = write(tmp_path / "a.pdf", RELEASE, marks=[("1", 0, 1), ("2", 3, 7)])
+    b = write(tmp_path / "b.pdf", RELEASE, marks=[("1", 0, 1), ("2", 3, 7)])
+
+    result = side_by_side(a, b)
+
+    assert result.marked_sections == ["1", "2"]
+    assert {s.marked for s in result.sections if s.marked} == {"1", "2"}
