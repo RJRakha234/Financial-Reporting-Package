@@ -43,6 +43,11 @@ class Meta:
     # them so a link can open a copy scrolled to the exact passage.
     heights_a: dict = field(default_factory=dict)
     heights_b: dict = field(default_factory=dict)
+    # Rendered pages of the marked copies (see sidemarks.render_previews), so
+    # the report can show the highlighted source in place — external PDF
+    # viewers cannot be relied on to honour a link's page-and-position.
+    previews_a: dict = field(default_factory=dict)
+    previews_b: dict = field(default_factory=dict)
 
     @property
     def made_a(self) -> str:
@@ -169,6 +174,41 @@ def _unit_spot(unit, heights: dict):
     return (row.page, top)
 
 
+def _unit_rect(unit):
+    """(page, x0, y0, x1, y1) around the unit's rows on its first page."""
+    if unit is None or not unit.rows:
+        return None
+    page = unit.rows[0].page
+    rows = [r for r in unit.rows if r.page == page]
+    return (
+        page,
+        min(r.x0 for r in rows),
+        min(r.y0 for r in rows),
+        max(r.x1 for r in rows),
+        max(r.y1 for r in rows),
+    )
+
+
+def _peek_attr(side: str, unit) -> str:
+    """Data the in-page preview needs to spotlight this passage."""
+    rect = _unit_rect(unit)
+    if rect is None:
+        return ""
+    page, x0, y0, x1, y1 = rect
+    return f' data-peek="{side}:{page}:{x0:.0f},{y0:.0f},{x1:.0f},{y1:.0f}"'
+
+
+def _section_peek(section, side: str) -> str:
+    regions = section.regions(side)
+    if not regions:
+        return ""
+    page, box = sorted(regions.items())[0]
+    return (
+        f' data-peek="{side}:{page}:'
+        f'{box[0]:.0f},{box[1]:.0f},{box[2]:.0f},{box[3]:.0f}"'
+    )
+
+
 def _section_spot(section, side: str, heights: dict):
     """(page, top) for the first marked region of a section, or ``None``."""
     regions = section.regions(side)
@@ -180,7 +220,9 @@ def _section_spot(section, side: str, heights: dict):
     return (page, top)
 
 
-def _page_link(page: str, href: str, css: str = "", top=None) -> str:
+def _page_link(
+    page: str, href: str, css: str = "", top=None, peek: str = ""
+) -> str:
     """A page number that opens the marked-up PDF at that page."""
     text = _e(page)
     if not href or not page or page == "—":
@@ -189,12 +231,12 @@ def _page_link(page: str, href: str, css: str = "", top=None) -> str:
     if not first.isdigit():
         return text
     return (
-        f'<a class="pl {css}" href="{_url(href, first, top)}" target="_blank" '
+        f'<a class="pl {css}" href="{_url(href, first, top)}"{peek} target="_blank" '
         f'rel="noopener" title="open page {_e(first)} of the marked-up PDF">{text}</a>'
     )
 
 
-def _spot_link(unit, href: str, heights: dict, css: str = "") -> str:
+def _spot_link(unit, href: str, heights: dict, side: str) -> str:
     """The unit's page number, linking to its exact spot in the marked copy."""
     if unit is None:
         return ""
@@ -202,10 +244,10 @@ def _spot_link(unit, href: str, heights: dict, css: str = "") -> str:
     if spot is None or not href:
         return _e(unit.page)
     page, top = spot
-    return _page_link(str(page), href, css=css, top=top)
+    return _page_link(str(page), href, top=top, peek=_peek_attr(side, unit))
 
 
-def _loc(text_html: str, unit, href: str, heights: dict) -> str:
+def _loc(text_html: str, unit, href: str, heights: dict, side: str) -> str:
     """Wrap rendered cell content so it opens its own highlighted source."""
     if not href:
         return text_html
@@ -214,20 +256,79 @@ def _loc(text_html: str, unit, href: str, heights: dict) -> str:
         return text_html
     page, top = spot
     return (
-        f'<a class="loc" href="{_url(href, page, top)}" target="_blank" '
-        f'rel="noopener" title="open this passage in the marked-up PDF">'
+        f'<a class="loc" href="{_url(href, page, top)}"{_peek_attr(side, unit)} '
+        f'target="_blank" rel="noopener" '
+        f'title="show this passage in its highlighted source">'
         f"{text_html}</a>"
     )
 
 
-def _figure_cells(values, changed: set, missing: int = 0) -> str:
-    cells = "".join(
-        f'<span class="fig{" fig--changed" if i in changed else ""}">'
-        f"{_e(format_number(v))}</span>"
-        for i, v in enumerate(values)
-    )
-    cells += '<span class="fig fig--absent">—</span>' * missing
-    return cells
+def _figure_cells(values, changed, missing: int = 0) -> str:
+    """Figure spans; a changed cell names both readings in its tooltip.
+
+    ``changed`` may be a plain set of indices, or a dict mapping the index to
+    the ``(benchmark, compared)`` values so every deviating cell can say what
+    should have been there without leaving the page.
+    """
+    cells = []
+    for i, v in enumerate(values):
+        title = ""
+        if i in changed and isinstance(changed, dict):
+            va, vb = changed[i]
+            if vb is None:
+                title = f' title="benchmark: {format_number(va)} · no counterpart here"'
+            else:
+                title = (
+                    f' title="benchmark: {format_number(va)}'
+                    f' · compared: {format_number(vb)}"'
+                )
+        cls = " fig--changed" if i in changed else ""
+        cells.append(
+            f'<span class="fig{cls}"{title}>{_e(format_number(v))}</span>'
+        )
+    return "".join(cells) + '<span class="fig fig--absent">—</span>' * missing
+
+
+def _tracked_figs(pair: Pair) -> str:
+    """One run of figure cells with each deviation shown as old-struck, new-inserted."""
+    a, b = pair.a, pair.b
+    if a is None:
+        return "".join(
+            f'<span class="fig"><ins>{_e(format_number(v))}</ins></span>'
+            for v in b.values
+        )
+    if b is None:
+        return "".join(
+            f'<span class="fig"><del>{_e(format_number(v))}</del></span>'
+            for v in a.values
+        )
+    changed = {i: (va, vb) for i, va, vb in pair.changed_figures}
+    cells = []
+    for i in range(max(len(a.values), len(b.values))):
+        if i in changed:
+            va, vb = changed[i]
+            inner = ""
+            if va is not None:
+                inner += f"<del>{_e(format_number(va))}</del>"
+            if vb is not None:
+                inner += f"<ins>{_e(format_number(vb))}</ins>"
+            cells.append(f'<span class="fig fig--changed">{inner}</span>')
+        else:
+            v = a.values[i] if i < len(a.values) else b.values[i]
+            cells.append(f'<span class="fig">{_e(format_number(v))}</span>')
+    return "".join(cells)
+
+
+def _tracked_label(pair: Pair, tags: Tags) -> str:
+    """The row label as tracked changes: benchmark struck, replacement inserted."""
+    a, b = pair.a, pair.b
+    if a is None:
+        return f"<ins>{_e(b.text) or '&nbsp;'}</ins>"
+    if b is None:
+        return f"<del>{_e(a.text) or '&nbsp;'}</del>"
+    if pair.status == "label-differs" and a.text != b.text:
+        return f"<del>{_e(a.text)}</del> <ins>{_e(b.text)}</ins>"
+    return _loc(_e(a.text) or "&nbsp;", a, tags.href_a, tags.heights_a, "a")
 
 
 # Beyond this many figure columns, two side-by-side copies cannot both fit on
@@ -238,21 +339,21 @@ WIDE_TABLE_COLUMNS = 6
 
 def _stacked_row_html(pair: Pair, tags: Tags) -> str:
     """One row with the two documents stacked, columns aligned, for a wide table."""
-    changed = {i for i, _, _ in pair.changed_figures}
+    changed = {i: (va, vb) for i, va, vb in pair.changed_figures}
     a, b = pair.a, pair.b
     status = pair.status
 
-    def line(unit, other, tag: str) -> str:
+    def line(unit, other, tag: str, letter: str) -> str:
         if unit is None:
             return (
-                f'<span class="ln ln--absent"><em>{tag}</em>'
+                f'<span class="ln ln-{letter} ln--absent"><em>{tag}</em>'
                 f'<span class="absent">not present</span></span>'
             )
         gap = 0
         if other is not None and len(unit.values) < len(other.values):
             gap = len(other.values) - len(unit.values)
         return (
-            f'<span class="ln"><em>{tag}</em>'
+            f'<span class="ln ln-{letter}"><em>{tag}</em>'
             f'<span class="figs">{_figure_cells(unit.values, changed, gap)}</span>'
             f"</span>"
         )
@@ -262,29 +363,36 @@ def _stacked_row_html(pair: Pair, tags: Tags) -> str:
     alt = ""
     if status == "label-differs" and a is not None and b is not None:
         alt = f'<span class="alt">{_e(tags.full_b)}: {_e(b.text)}</span>'
+    tracked = (
+        f'<span class="ln tracked"><em>&Delta;</em>'
+        f'<span class="figs">{_tracked_figs(pair)}</span></span>'
+    )
 
     return (
         f'<tr class="r r--{status}">'
-        f'<td class="gut">{_spot_link(a, tags.href_a, tags.heights_a)}</td>'
+        f'<td class="gut gut-a">{_spot_link(a, tags.href_a, tags.heights_a, "a")}</td>'
         f'<td class="stack">'
         f'<span class="{label_cls}">'
-        f'{_loc(_e(label) or "&nbsp;", a or b, tags.href_a if a else tags.href_b, tags.heights_a if a else tags.heights_b)}'
+        f'{_loc(_e(label) or "&nbsp;", a or b, tags.href_a if a else tags.href_b, tags.heights_a if a else tags.heights_b, "a" if a else "b")}'
         f"</span>{alt}"
-        f"{line(a, b, tags.short_a)}{line(b, a, tags.short_b)}"
+        f'{line(a, b, tags.short_a, "a")}{line(b, a, tags.short_b, "b")}{tracked}'
         f"</td>"
-        f'<td class="gut">{_spot_link(b, tags.href_b, tags.heights_b)}</td>'
+        f'<td class="gut gut-b">{_spot_link(b, tags.href_b, tags.heights_b, "b")}</td>'
         f"</tr>"
     )
 
 
 def _row_pair_html(pair: Pair, tags: Tags) -> str:
-    changed = {i for i, _, _ in pair.changed_figures}
+    changed = {i: (va, vb) for i, va, vb in pair.changed_figures}
     status = pair.status
     a, b = pair.a, pair.b
 
-    def side(unit, other, href: str, heights: dict) -> str:
+    def side(unit, other, href: str, heights: dict, letter: str) -> str:
         if unit is None:
-            return '<td class="side side--empty"><span class="absent">not present</span></td>'
+            return (
+                f'<td class="side side-{letter} side--empty">'
+                '<span class="absent">not present</span></td>'
+            )
         label_cls = "label"
         if status == "label-differs":
             label_cls += " label--changed"
@@ -292,78 +400,102 @@ def _row_pair_html(pair: Pair, tags: Tags) -> str:
         if other is not None and len(unit.values) < len(other.values):
             gap = len(other.values) - len(unit.values)
         return (
-            f'<td class="side">'
+            f'<td class="side side-{letter}">'
             f'<span class="{label_cls}">'
-            f'{_loc(_e(unit.text) or "&nbsp;", unit, href, heights)}</span>'
+            f'{_loc(_e(unit.text) or "&nbsp;", unit, href, heights, letter)}</span>'
             f'<span class="figs">{_figure_cells(unit.values, changed, gap)}</span>'
             f"</td>"
         )
 
+    tracked = (
+        f'<td class="side tracked">'
+        f'<span class="label">{_tracked_label(pair, tags)}</span>'
+        f'<span class="figs">{_tracked_figs(pair)}</span></td>'
+    )
     return (
         f'<tr class="r r--{status}">'
-        f'<td class="gut">{_spot_link(a, tags.href_a, tags.heights_a)}</td>'
-        f"{side(a, b, tags.href_a, tags.heights_a)}"
-        f"{side(b, a, tags.href_b, tags.heights_b)}"
-        f'<td class="gut">{_spot_link(b, tags.href_b, tags.heights_b)}</td>'
+        f'<td class="gut gut-a">{_spot_link(a, tags.href_a, tags.heights_a, "a")}</td>'
+        f'{side(a, b, tags.href_a, tags.heights_a, "a")}'
+        f'{side(b, a, tags.href_b, tags.heights_b, "b")}'
+        f"{tracked}"
+        f'<td class="gut gut-b">{_spot_link(b, tags.href_b, tags.heights_b, "b")}</td>'
         f"</tr>"
     )
 
 
 def _paragraph_html(pair: Pair, tags: Tags) -> str:
     a, b = pair.a, pair.b
-    gut_a = _spot_link(a, tags.href_a, tags.heights_a)
-    gut_b = _spot_link(b, tags.href_b, tags.heights_b)
+    gut_a = f'<div class="gut gut-a">{_spot_link(a, tags.href_a, tags.heights_a, "a")}</div>'
+    gut_b = f'<div class="gut gut-b">{_spot_link(b, tags.href_b, tags.heights_b, "b")}</div>'
     if a is not None and b is not None and not pair.words:
         # A table row that landed in a prose section: no word diff was computed,
         # so show both sides plainly rather than rendering two empty paragraphs.
+        left = (
+            f'{_loc(_e(a.text), a, tags.href_a, tags.heights_a, "a")}'
+            f'<span class="figs">{_figure_cells(a.values, set())}</span>'
+        )
+        right = (
+            f'{_loc(_e(b.text), b, tags.href_b, tags.heights_b, "b")}'
+            f'<span class="figs">{_figure_cells(b.values, set())}</span>'
+        )
         return (
             f'<div class="prose prose--{pair.status}">'
-            f'<div class="gut">{gut_a}</div>'
-            f'<div class="side"><p class="para">{_loc(_e(a.text), a, tags.href_a, tags.heights_a)}'
-            f'<span class="figs">{_figure_cells(a.values, set())}</span></p></div>'
-            f'<div class="side"><p class="para">{_loc(_e(b.text), b, tags.href_b, tags.heights_b)}'
-            f'<span class="figs">{_figure_cells(b.values, set())}</span></p></div>'
-            f'<div class="gut">{gut_b}</div></div>'
+            f"{gut_a}"
+            f'<div class="side side-a"><p class="para">{left}</p></div>'
+            f'<div class="side side-b"><p class="para">{right}</p></div>'
+            f'<div class="side tracked"><p class="para">{left}</p></div>'
+            f"{gut_b}</div>"
         )
     if a is None or b is None:
         only = a or b
+        side_letter = "a" if a is not None else "b"
         href = tags.href_a if a is not None else tags.href_b
         heights = tags.heights_a if a is not None else tags.heights_b
-        text = f'<p class="para">{_loc(_e(only.text), only, href, heights)}</p>'
-        empty = '<div class="side side--empty"><span class="absent">not present</span></div>'
-        left = f'<div class="side">{text}</div>' if a is not None else empty
-        right = f'<div class="side">{text}</div>' if b is not None else empty
+        linked = _loc(_e(only.text), only, href, heights, side_letter)
+        text = f'<p class="para">{linked}</p>'
+        mark = "del" if a is not None else "ins"
+        tracked = (
+            f'<div class="side tracked"><p class="para">'
+            f"<{mark}>{linked}</{mark}></p></div>"
+        )
+        empty = '<div class="side side-{0} side--empty"><span class="absent">not present</span></div>'
+        left = f'<div class="side side-a">{text}</div>' if a is not None else empty.format("a")
+        right = f'<div class="side side-b">{text}</div>' if b is not None else empty.format("b")
         return (
             f'<div class="prose prose--{pair.status}">'
-            f'<div class="gut">{gut_a}</div>{left}{right}'
-            f'<div class="gut">{gut_b}</div></div>'
+            f"{gut_a}{left}{right}{tracked}"
+            f"{gut_b}</div>"
         )
 
-    left_parts, right_parts = [], []
+    left_parts, right_parts, tracked_parts = [], [], []
     for op, text in pair.words:
         if not text:
             continue
         if op == "=":
             left_parts.append(_e(text))
             right_parts.append(_e(text))
+            tracked_parts.append(_e(text))
         elif op == "~-":
             # Same words, set differently — punctuation, spacing, a bullet
             # glyph. Marked quietly, and each side keeps its own text.
             left_parts.append(f'<u class="fmt">{_e(text)}</u>')
+            tracked_parts.append(f'<u class="fmt">{_e(text)}</u>')
         elif op == "~+":
             right_parts.append(f'<u class="fmt">{_e(text)}</u>')
         elif op == "-":
             left_parts.append(f"<del>{_e(text)}</del>")
+            tracked_parts.append(f"<del>{_e(text)}</del>")
         else:
             right_parts.append(f"<ins>{_e(text)}</ins>")
+            tracked_parts.append(f"<ins>{_e(text)}</ins>")
 
     return (
         f'<div class="prose prose--{pair.status}">'
-        f'<div class="gut">{gut_a}</div>'
-        f'<div class="side"><p class="para">{" ".join(left_parts)}</p></div>'
-        f'<div class="side"><p class="para">{" ".join(right_parts)}</p></div>'
-        f'<div class="gut">{gut_b}</div>'
-        f"</div>"
+        f"{gut_a}"
+        f'<div class="side side-a"><p class="para">{" ".join(left_parts)}</p></div>'
+        f'<div class="side side-b"><p class="para">{" ".join(right_parts)}</p></div>'
+        f'<div class="side tracked"><p class="para">{" ".join(tracked_parts)}</p></div>'
+        f"{gut_b}</div>"
     )
 
 
@@ -383,7 +515,7 @@ def _collapse_wrapping(pairs: list[Pair], render, tags: Tags) -> list[str]:
         if run:
             out.append(
                 f'<tr class="r r--wrap"><td class="gut"></td>'
-                f'<td class="wrapnote" colspan="2">{run} wrapped label line'
+                f'<td class="wrapnote" colspan="3">{run} wrapped label line'
                 f'{"s" if run != 1 else ""} on one side only</td>'
                 f'<td class="gut"></td></tr>'
             )
@@ -433,8 +565,8 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
         f'{badge}'
         f'<span class="skind">{kind}</span>'
         f'<h3>{_e(section.title) or "&nbsp;"}</h3>'
-        f'<span class="spages">{_page_link(pages_a, tags.href_a, top=spot_a[1] if spot_a else None)}'
-        f' &middot; {_page_link(pages_b, tags.href_b, top=spot_b[1] if spot_b else None)}</span>'
+        f'<span class="spages">{_page_link(pages_a, tags.href_a, top=spot_a[1] if spot_a else None, peek=_section_peek(section, "a"))}'
+        f' &middot; {_page_link(pages_b, tags.href_b, top=spot_b[1] if spot_b else None, peek=_section_peek(section, "b"))}</span>'
         f'<span class="chip chip--{status}">{label}</span>'
         f'{f"<span class=sdetail>{detail}</span>" if detail else ""}'
         f"</div>"
@@ -528,6 +660,60 @@ a.loc:hover,a.loc:focus-visible{color:var(--accent)}
 a.loc:hover::after,a.loc:focus-visible::after{content:" \\2197";font-size:.72em;
   color:var(--accent)}
 tr.r:hover td,.prose:hover{background:var(--panel)}
+
+/* ---- review views: side by side / tracked changes / before / after ---- */
+.views{display:inline-flex;border:1px solid var(--rule);border-radius:3px;
+  overflow:hidden;background:var(--paper)}
+.views label{padding:.3rem .65rem;font-size:.74rem;cursor:pointer;
+  color:var(--ink-soft);border-left:1px solid var(--rule-soft);display:flex;
+  gap:.3rem;align-items:center;white-space:nowrap}
+.views label:first-child{border-left:0}
+.views input{position:absolute;opacity:0;pointer-events:none}
+.views label:has(input:checked){background:var(--accent);color:var(--paper)}
+.views label:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:-2px}
+.tracked{display:none}
+td.side.tracked{display:none}
+.fig del{margin-right:.3rem}
+/* Tracked changes: one pane, benchmark struck where it was not carried over. */
+body.view-tracked .side-a,body.view-tracked .side-b,
+body.view-tracked .ln-a,body.view-tracked .ln-b{display:none}
+body.view-tracked div.side.tracked,body.view-tracked span.ln.tracked{display:block}
+body.view-tracked td.side.tracked{display:table-cell}
+body.view-tracked .prose{grid-template-columns:2.4rem 1fr 2.4rem}
+/* Before: the benchmark as written. After: the compared document as written. */
+body.view-before .side-b,body.view-before .gut-b,body.view-before .ln-b{display:none}
+body.view-after .side-a,body.view-after .gut-a,body.view-after .ln-a{display:none}
+body.view-before .prose,body.view-after .prose{grid-template-columns:2.4rem 1fr 2.4rem}
+body.view-before .sec--added,body.view-before .prose--added,body.view-before .r--added{display:none}
+body.view-after .sec--removed,body.view-after .prose--removed,body.view-after .r--removed{display:none}
+body.view-before .alt,body.view-after .alt{display:none}
+
+/* ---- in-page source preview: the highlighted page, spotlighted ---- */
+.peek{position:fixed;inset:0;z-index:50;display:flex;align-items:center;
+  justify-content:center;background:rgba(8,12,10,.55);padding:2vh 2vw}
+.peek[hidden]{display:none}
+.peek-card{background:var(--paper);color:var(--ink);width:min(62rem,96vw);
+  height:min(90vh,70rem);display:flex;flex-direction:column;
+  border:1px solid var(--rule);border-radius:4px;
+  box-shadow:0 24px 64px rgba(0,0,0,.4)}
+.peek-head{display:flex;gap:1rem;align-items:center;padding:.6rem .95rem;
+  border-bottom:1px solid var(--rule)}
+.peek-head b{font-family:var(--serif);font-weight:400;font-size:.95rem;flex:1;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.peek-head a{font-size:.78rem;white-space:nowrap}
+.peek-x{background:none;border:0;font-size:1.25rem;line-height:1;cursor:pointer;
+  color:var(--muted);padding:.15rem .4rem}
+.peek-x:hover,.peek-x:focus-visible{color:var(--ink)}
+.peek-body{overflow:auto;flex:1;background:var(--panel);padding:.8rem}
+.peek-canvas{position:relative;margin:0 auto;max-width:56rem;
+  box-shadow:0 2px 14px rgba(0,0,0,.18)}
+.peek-canvas img{display:block;width:100%;height:auto}
+.peek-box{position:absolute;border:2px solid var(--accent);border-radius:2px;
+  background:rgba(14,90,86,.13);box-shadow:0 0 0 4px rgba(14,90,86,.12)}
+@media (prefers-reduced-motion:no-preference){
+  .peek-box{animation:peekpulse 1.5s ease-in-out 2}
+}
+@keyframes peekpulse{50%{box-shadow:0 0 0 10px rgba(14,90,86,.05)}}
 .eyebrow{font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;
   color:var(--accent);font-weight:600;margin:0 0 .7rem}
 h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem);
@@ -632,6 +818,14 @@ td.stack{width:auto}
 .ch i:before{content:" · "}
 .cgut{font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
   text-align:right}
+.ch-mode{display:none;font-size:.7rem;letter-spacing:.06em;text-transform:none;
+  font-weight:600;color:var(--accent);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+body.view-tracked .ch-a,body.view-tracked .ch-b,
+body.view-before .ch-b,body.view-after .ch-a{display:none}
+body.view-tracked .ch-mode{display:block}
+body.view-tracked .colhead,body.view-before .colhead,body.view-after .colhead{
+  grid-template-columns:2.4rem 1fr 2.4rem}
 /* Two real columns when the table is narrow enough for them to fit. */
 .rows--cols .side+.side{border-left:1px solid var(--rule)}
 
@@ -717,6 +911,86 @@ const seal = document.querySelector('.seal-fg');
 if (seal) requestAnimationFrame(() => requestAnimationFrame(() => {
   seal.style.strokeDashoffset = seal.dataset.target;
 }));
+
+// Review views: side by side, tracked changes (Word-style redline against the
+// benchmark), before (the benchmark as written), after (the compared document).
+const MODE_NOTE = {
+  tracked: 'Tracked changes \\u2014 struck through: in the benchmark, not carried over \\u00b7 underlaid green: added, not in the benchmark',
+  before: '', after: ''
+};
+for (const radio of document.querySelectorAll('input[name="view"]')) {
+  radio.addEventListener('change', () => {
+    document.body.classList.remove('view-tracked', 'view-before', 'view-after');
+    if (radio.value !== 'sbs') document.body.classList.add('view-' + radio.value);
+    const note = document.querySelector('.ch-mode');
+    if (note) note.textContent = MODE_NOTE[radio.value] || '';
+  });
+}
+
+// In-page source preview. External PDF viewers cannot be relied on to honour
+// a link's page-and-position, so clicking a cell shows the rendered page of
+// the marked copy right here, with the passage spotlighted. The PDF link is
+// still offered inside the panel.
+const PEEK = (() => {
+  const el = document.getElementById('previews');
+  if (!el) return null;
+  try { return JSON.parse(el.textContent); } catch (err) { return null; }
+})();
+let peekEl = null, peekReturn = null;
+function closePeek() {
+  if (peekEl) peekEl.hidden = true;
+  if (peekReturn) { peekReturn.focus(); peekReturn = null; }
+}
+function buildPeek() {
+  peekEl = document.createElement('div');
+  peekEl.className = 'peek';
+  peekEl.hidden = true;
+  peekEl.innerHTML =
+    '<div class="peek-card" role="dialog" aria-modal="true" aria-label="Highlighted source">' +
+    '<div class="peek-head"><b id="peek-title"></b>' +
+    '<a id="peek-open" class="pl" target="_blank" rel="noopener">Open the PDF here</a>' +
+    '<button class="peek-x" aria-label="Close" title="Close (Esc)">&#215;</button></div>' +
+    '<div class="peek-body"><div class="peek-canvas">' +
+    '<img id="peek-img" alt="Rendered page of the marked-up PDF">' +
+    '<div class="peek-box" id="peek-box"></div></div></div></div>';
+  document.body.appendChild(peekEl);
+  peekEl.addEventListener('click', e => { if (e.target === peekEl) closePeek(); });
+  peekEl.querySelector('.peek-x').addEventListener('click', closePeek);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePeek(); });
+}
+document.addEventListener('click', e => {
+  const link = e.target.closest('a[data-peek]');
+  if (!link || !PEEK) return;
+  const [side, page, rectStr] = link.dataset.peek.split(':');
+  const pv = PEEK[side] && PEEK[side][page];
+  if (!pv) return;
+  e.preventDefault();
+  if (!peekEl) buildPeek();
+  peekReturn = link;
+  const rect = rectStr.split(',').map(Number);
+  const name = (PEEK.labels[side] || '') + (side === 'a' ? ' (benchmark)' : '');
+  peekEl.querySelector('#peek-title').textContent = name + ' \\u00b7 page ' + page;
+  peekEl.querySelector('#peek-open').href = link.href;
+  const img = peekEl.querySelector('#peek-img');
+  const box = peekEl.querySelector('#peek-box');
+  const pad = 5;
+  box.style.left = (Math.max(0, rect[0] - pad) / pv.w * 100) + '%';
+  box.style.top = (Math.max(0, rect[1] - pad) / pv.h * 100) + '%';
+  box.style.width = (Math.min(pv.w, rect[2] - rect[0] + 2 * pad) / pv.w * 100) + '%';
+  box.style.height = (Math.min(pv.h, rect[3] - rect[1] + 2 * pad) / pv.h * 100) + '%';
+  const bringIntoView = () => {
+    const body = peekEl.querySelector('.peek-body');
+    body.scrollTop = Math.max(0, box.offsetTop - 120);
+  };
+  peekEl.hidden = false;
+  if (img.dataset.shown === side + page) { bringIntoView(); }
+  else {
+    img.dataset.shown = side + page;
+    img.onload = bringIntoView;
+    img.src = pv.src;
+  }
+  peekEl.querySelector('.peek-x').focus();
+}, true);
 """
 
 
@@ -818,8 +1092,8 @@ def write_side_by_side(
             f'<tr class="reg reg--{x.status}">'
             f'<td class="rn">{x.serial}</td>'
             f'<td class="rt">{_e(x.title) or "&nbsp;"}</td>'
-            f'<td class="rp">{_page_link(x.pages[0], meta.marked_href_a, top=spot_a[1] if spot_a else None)}</td>'
-            f'<td class="rp">{_page_link(x.pages[1], meta.marked_href_b, top=spot_b[1] if spot_b else None)}</td>'
+            f'<td class="rp">{_page_link(x.pages[0], meta.marked_href_a, top=spot_a[1] if spot_a else None, peek=_section_peek(x, "a"))}</td>'
+            f'<td class="rp">{_page_link(x.pages[1], meta.marked_href_b, top=spot_b[1] if spot_b else None, peek=_section_peek(x, "b"))}</td>'
             f'<td class="rs">{_pill(x.status)}</td>'
             f'<td class="rd">{f"{x.changed} of {len(x.pairs)}" if x.status == "changed" else ""}</td>'
             f'<td class="rl"><a href="#s{sections.index(x)}">view</a></td>'
@@ -907,6 +1181,22 @@ def write_side_by_side(
         else ""
     )
 
+    previews_json = ""
+    if meta.previews_a or meta.previews_b:
+        import json
+
+        payload = json.dumps(
+            {
+                "labels": {"a": meta.label_a, "b": meta.label_b},
+                "a": meta.previews_a,
+                "b": meta.previews_b,
+            },
+            separators=(",", ":"),
+        ).replace("</", "<\\/")
+        previews_json = (
+            f'<script id="previews" type="application/json">{payload}</script>\n'
+        )
+
     page = f"""<title>Benchmark comparison — {_e(meta.pdf_b.rsplit('/', 1)[-1])} against {_e(meta.pdf_a.rsplit('/', 1)[-1])}</title>
 <style>{_CSS}</style>
 <div class="wrap">
@@ -974,6 +1264,12 @@ def write_side_by_side(
   {copies_note}
 
   <div class="bar">
+    <span class="views" role="radiogroup" aria-label="Review view">
+      <label><input type="radio" name="view" value="sbs" checked> Side by side</label>
+      <label><input type="radio" name="view" value="tracked"> Tracked changes</label>
+      <label><input type="radio" name="view" value="before"> Before &middot; benchmark</label>
+      <label><input type="radio" name="view" value="after"> After &middot; compared</label>
+    </span>
     <label><input type="checkbox" id="hide-same"> Hide {identical_sections:,} identical</label>
     <label><input type="checkbox" id="hide-oneside"> Hide {one_sided:,} one-sided</label>
     {unmarked_filter}
@@ -986,8 +1282,9 @@ def write_side_by_side(
 {toc}
   <div class="colhead">
     <span class="cgut">pg</span>
-    <span class="ch">{_e(meta.label_a)}<span class="btag">benchmark</span><i>{_e(meta.made_a)}</i></span>
-    <span class="ch">{_e(meta.label_b)}<i>{_e(meta.made_b)}</i></span>
+    <span class="ch ch-a">{_e(meta.label_a)}<span class="btag">benchmark</span><i>{_e(meta.made_a)}</i></span>
+    <span class="ch ch-b">{_e(meta.label_b)}<i>{_e(meta.made_b)}</i></span>
+    <span class="ch-mode"></span>
     <span class="cgut">pg</span>
   </div>
 {body}
@@ -1000,7 +1297,7 @@ def write_side_by_side(
     Indian digit grouping.
   </footer>
 </div>
-<script>{_JS}</script>
+{previews_json}<script>{_JS}</script>
 """
     with open(output_path, "w") as fh:
         fh.write(page)

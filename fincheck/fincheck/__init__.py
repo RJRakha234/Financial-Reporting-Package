@@ -30,7 +30,7 @@ from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 from .sidebyside import Meta, default_label, write_side_by_side
-from .sidemarks import coverage, write_marked_copies
+from .sidemarks import coverage, render_previews, write_marked_copies
 
 __all__ = [
     "analyze",
@@ -292,6 +292,11 @@ def side_by_side(
                 coverage_b=coverage(sections, "b"),
                 heights_a={i + 1: doc_a[i].rect.height for i in range(doc_a.page_count)},
                 heights_b={i + 1: doc_b[i].rect.height for i in range(doc_b.page_count)},
+                # Embed the marked pages so a click can show the highlighted
+                # source in the report itself — a PDF link at a viewer's mercy
+                # is a fallback, not the feature.
+                previews_a=render_previews(copies[0]) if copies else {},
+                previews_b=render_previews(copies[1]) if copies else {},
             )
         finally:
             doc_a.close()

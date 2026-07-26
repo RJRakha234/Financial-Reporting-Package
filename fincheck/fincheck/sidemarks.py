@@ -177,6 +177,38 @@ def write_marked_copies(
     )
 
 
+def render_previews(pdf_path: str, dpi: int = 112, quality: int = 70) -> dict:
+    """Render each page of a marked copy to an embeddable image.
+
+    PDF viewers differ in whether they honour ``#page=N&zoom=...`` open
+    parameters — some desktop viewers drop the fragment entirely, and a report
+    viewed away from its PDFs has nothing to open at all. Embedding the pages
+    lets the report show the highlighted source itself, everywhere.
+
+    Returns ``{page: {"src": data URI, "w": width_pt, "h": height_pt}}``.
+    """
+    import base64
+
+    doc = fitz.open(pdf_path)
+    try:
+        out: dict = {}
+        for page in doc:
+            pix = page.get_pixmap(dpi=dpi)
+            try:
+                data, mime = pix.tobytes("jpg", jpg_quality=quality), "jpeg"
+            except (ValueError, RuntimeError):  # JPEG support missing
+                data, mime = pix.tobytes("png"), "png"
+            out[page.number + 1] = {
+                "src": f"data:image/{mime};base64,"
+                + base64.b64encode(data).decode(),
+                "w": round(page.rect.width, 2),
+                "h": round(page.rect.height, 2),
+            }
+        return out
+    finally:
+        doc.close()
+
+
 def coverage(sections: list, side: str) -> tuple[int, int]:
     """How many passages and figures the report covered on one side."""
     passages = figures = 0

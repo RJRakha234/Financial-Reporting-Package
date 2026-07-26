@@ -589,6 +589,73 @@ def test_cells_link_to_the_exact_spot_in_the_marked_copy(tmp_path):
     assert max(tops) > 700, "content near the page top lands near height in PDF coords"
 
 
+def test_every_section_offers_a_tracked_changes_view(tmp_path):
+    """A Word-style redline: benchmark text struck where it was not carried over."""
+    a = make_pdf(tmp_path / "a.pdf", ["The term is thirty-six months in total."])
+    b = make_pdf(tmp_path / "b.pdf", ["The term is twenty-four months in total."])
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    # The view selector and the three alternate views.
+    assert 'name="view"' in html
+    assert "Tracked changes" in html and "Before" in html and "After" in html
+    # The tracked pane carries the redline: what should have been there,
+    # struck through, beside what is there.
+    assert '<div class="side tracked"><p class="para">' in html
+    assert "<del>thirty-six</del>" in html and "<ins>twenty-four</ins>" in html
+
+
+def test_a_deviating_figure_row_gets_a_tracked_cell_and_a_tooltip(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "b.pdf",
+        [l.replace("11,502      10,106", "11,502      10,999") for l in STATEMENT],
+    )
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    # The tracked cell shows old-struck, new-inserted, in one run of figures.
+    assert '<td class="side tracked">' in html
+    assert "<del>10,106</del><ins>10,999</ins>" in html
+    # And each deviating cell names both readings without leaving the page.
+    assert 'title="benchmark: 10,106 · compared: 10,999"' in html
+
+
+def test_the_report_embeds_the_marked_pages_for_in_page_preview(tmp_path):
+    """Clicking a cell must work even where PDF open-parameters do not."""
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(
+        a, b, output_html=str(out),
+        marked_pdf_a=str(tmp_path / "a.marked.pdf"),
+        marked_pdf_b=str(tmp_path / "b.marked.pdf"),
+    )
+    html = out.read_text()
+
+    assert '<script id="previews" type="application/json">' in html
+    assert "data:image/" in html
+    # Every spot link carries the region to spotlight on the rendered page.
+    assert 'data-peek="a:1:' in html and 'data-peek="b:1:' in html
+
+
+def test_no_pages_are_embedded_without_marked_copies(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    assert 'id="previews"' not in html
+    assert 'data-peek="' not in html
+
+
 def test_the_left_document_is_presented_as_the_benchmark(tmp_path):
     a = make_pdf(tmp_path / "source.pdf", STATEMENT)
     b = make_pdf(tmp_path / "filed.pdf", STATEMENT)
