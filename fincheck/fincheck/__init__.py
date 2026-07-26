@@ -12,8 +12,9 @@ Public API::
 
 from dataclasses import dataclass, field
 
-from .align import align, group, summarise, units_of
+from .align import align, align_by_section, group, summarise, units_of
 from .blocks import segment
+from .marks import read_marks
 from .checks import Inconsistency, TotalCheck, run_checks
 from .compare import DEFAULT_DPI, ComparisonResult, SpanChange, compare_pdfs
 from .diffmark import write_diff_pdf
@@ -135,6 +136,7 @@ class SideBySideResult:
     pairs: list
     summary: object
     output_html: str | None = None
+    marked_sections: list = field(default_factory=list)
 
     @property
     def changed_sections(self) -> list:
@@ -156,6 +158,7 @@ def side_by_side(
     output_html: str | None = None,
     label_a: str | None = None,
     label_b: str | None = None,
+    use_marks: bool = True,
 ) -> SideBySideResult:
     """Match two documents paragraph by paragraph and row by row.
 
@@ -171,12 +174,23 @@ def side_by_side(
             was produced ("Excel export", "HTML print"), which is usually how
             people refer to these files, and to the filename otherwise.
         label_b: column heading for the second document.
+        use_marks: honour section numbers a reviewer has written into highlight
+            comments, matching content marked ``5`` against content marked ``5``
+            rather than trusting similarity. On by default; it does nothing to a
+            document with no such marks.
     """
-    units_a = units_of(segment(pdf_a))
-    units_b = units_of(segment(pdf_b))
-    pairs = align(units_a, units_b)
+    marks_a = read_marks(pdf_a) if use_marks else None
+    marks_b = read_marks(pdf_b) if use_marks else None
+    sectioned = bool(marks_a) and bool(marks_b)
+
+    units_a = units_of(segment(pdf_a), marks_a)
+    units_b = units_of(segment(pdf_b), marks_b)
+    pairs = align_by_section(units_a, units_b) if sectioned else align(units_a, units_b)
     sections = group(pairs)
     summary = summarise(pairs, units_a, units_b)
+    shared_marks = (
+        sorted(set(marks_a.labels) & set(marks_b.labels), key=len) if sectioned else []
+    )
 
     written = None
     if output_html is not None:
@@ -198,6 +212,7 @@ def side_by_side(
                 label_b=label_b or default_label(pdf_b, producer_b, creator_b),
                 producer_a=producer_a,
                 producer_b=producer_b,
+                marked_sections=len(shared_marks),
             )
         finally:
             doc_a.close()
@@ -211,4 +226,5 @@ def side_by_side(
         pairs=pairs,
         summary=summary,
         output_html=written,
+        marked_sections=shared_marks,
     )

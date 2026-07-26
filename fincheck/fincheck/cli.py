@@ -100,6 +100,14 @@ def build_compare_parser() -> argparse.ArgumentParser:
         "--label-b", metavar="NAME", help="column heading for the second PDF"
     )
     parser.add_argument(
+        "--ignore-marks",
+        action="store_true",
+        help="ignore section numbers written into the PDFs' highlight comments; "
+        "by default content marked 'n' is compared only against content marked "
+        "'n', which stops a passage being shown against a blank when a "
+        "counterpart exists",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="print the comparison as JSON"
     )
     return parser
@@ -142,6 +150,7 @@ def compare_main(argv: list[str]) -> int:
             output_html=args.side_by_side,
             label_a=args.label_a,
             label_b=args.label_b,
+            use_marks=not args.ignore_marks,
         )
 
     if args.json:
@@ -171,6 +180,23 @@ def compare_main(argv: list[str]) -> int:
                 f"  {s.only_in_a:,} only in A, {s.only_in_b:,} only in B. "
                 "This view infers paragraphs and tables — treat it as a worksheet."
             )
+            if aligned.marked_sections:
+                blanks = sum(
+                    1
+                    for sec in aligned.sections
+                    if sec.marked is not None
+                    for pair in sec.pairs
+                    if pair.a is None or pair.b is None
+                )
+                print(
+                    f"  Honoured {len(aligned.marked_sections)} section number(s) "
+                    "marked in both files; "
+                    + (
+                        "none of them came out against a blank."
+                        if not blanks
+                        else f"{blanks} pair(s) in them still have no counterpart."
+                    )
+                )
 
     # Non-zero when the documents differ, for use in CI or a release gate.
     return 0 if result.identical else 1

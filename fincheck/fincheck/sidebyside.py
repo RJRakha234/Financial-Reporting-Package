@@ -29,6 +29,7 @@ class Meta:
     label_b: str = "B"
     producer_a: str = ""
     producer_b: str = ""
+    marked_sections: int = 0
 
     @property
     def tags(self) -> "Tags":
@@ -293,8 +294,14 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
         else ""
     )
 
+    badge = (
+        f'<span class="snum">&sect;{_e(section.marked)}</span>'
+        if section.marked is not None
+        else ""
+    )
     head = (
         f'<div class="shead">'
+        f'{badge}'
         f'<span class="skind">{kind}</span>'
         f'<h3>{_e(section.title) or "&nbsp;"}</h3>'
         f'<span class="spages">A&nbsp;{_e(pages_a)} &middot; B&nbsp;{_e(pages_b)}</span>'
@@ -318,7 +325,11 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
     else:
         body = "".join(_paragraph_html(p) for p in section.pairs)
 
-    return f'<section class="sec sec--{status}" id="s{index}">{head}{body}</section>'
+    marked_cls = " sec--marked" if section.marked is not None else " sec--unmarked"
+    return (
+        f'<section class="sec sec--{status}{marked_cls}" id="s{index}">'
+        f"{head}{body}</section>"
+    )
 
 
 _CSS = """
@@ -363,6 +374,7 @@ h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem)
   padding:1rem 1.2rem;margin:0 0 2rem;max-width:72ch;font-size:.9rem;
   color:var(--ink-soft)}
 .caution strong{color:var(--ink)}
+.caution--marks{border-left-color:var(--same)}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));
   border-top:2px solid var(--ink);border-bottom:1px solid var(--rule);margin:0 0 1.5rem}
 .stat{padding:.9rem 1rem 1rem}
@@ -389,6 +401,9 @@ h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem)
 .shead{display:flex;flex-wrap:wrap;gap:.6rem;align-items:baseline;margin-bottom:.6rem}
 .shead h3{font-family:var(--serif);font-weight:400;font-size:1.02rem;margin:0;
   flex:1 1 20rem;min-width:0}
+.snum{font-family:var(--mono);font-size:.74rem;font-weight:600;color:var(--paper);
+  background:var(--accent);padding:.1rem .4rem;border-radius:2px;white-space:nowrap}
+body.hide-unmarked .sec--unmarked{display:none}
 .skind{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;
   color:var(--muted);border:1px solid var(--rule);padding:.12rem .38rem;border-radius:2px}
 .spages{font-family:var(--mono);font-size:.72rem;color:var(--muted);white-space:nowrap}
@@ -478,7 +493,8 @@ footer{border-top:1px solid var(--rule);margin-top:2.5rem;padding-top:1rem;
 """
 
 _JS = """
-for (const [id, cls] of [['hide-same', 'hide-same'], ['hide-oneside', 'hide-oneside']]) {
+for (const [id, cls] of [['hide-same', 'hide-same'], ['hide-oneside', 'hide-oneside'],
+                         ['hide-unmarked', 'hide-unmarked']]) {
   document.getElementById(id).addEventListener('change', function (e) {
     document.body.classList.toggle(cls, e.target.checked);
   });
@@ -495,6 +511,35 @@ def write_side_by_side(
     one_sided = sum(1 for x in sections if x.status in ("added", "removed"))
 
     body = "".join(_section_html(x, i, tags) for i, x in enumerate(sections))
+
+    numbered = [x for x in sections if x.marked is not None]
+    unmarked_count = len(sections) - len(numbered)
+    blanks_in_numbered = sum(
+        1 for x in numbered for p in x.pairs if p.a is None or p.b is None
+    )
+    marks_note = ""
+    unmarked_filter = ""
+    if numbered:
+        marks_note = (
+            '<div class="caution caution--marks">'
+            f"<strong>Using your section numbers.</strong> {len(numbered)} numbered "
+            "section(s) were read from the highlight comments in both files. Content "
+            "you numbered <em>n</em> is compared only against content numbered "
+            "<em>n</em>, so a section you marked in both documents cannot come out "
+            "against a blank"
+            + (
+                "."
+                if not blanks_in_numbered
+                else f" — {blanks_in_numbered} still did, which means the two sides "
+                "hold different amounts of content there."
+            )
+            + " Everything outside your marks falls back to content matching."
+            "</div>"
+        )
+        unmarked_filter = (
+            f'<label><input type="checkbox" id="hide-unmarked"> '
+            f"Hide {unmarked_count:,} outside your marks</label>"
+        )
 
     # An index of the sections that differ on both sides — the ones a reviewer
     # has to look at. 700 sections is too many to scroll hunting for them.
@@ -546,9 +591,12 @@ def write_side_by_side(
     <div class="stat"><b>{s.only_in_b:,}</b><span>only in B</span></div>
   </div>
 
+  {marks_note}
+
   <div class="bar">
     <label><input type="checkbox" id="hide-same"> Hide {identical_sections:,} identical</label>
     <label><input type="checkbox" id="hide-oneside"> Hide {one_sided:,} one-sided</label>
+    {unmarked_filter}
     <span class="key"><i style="background:var(--differs-bg)"></i> figure differs</span>
     <span class="key"><i style="background:var(--del-bg)"></i> text only in A</span>
     <span class="key"><i style="background:var(--add-bg)"></i> text only in B</span>

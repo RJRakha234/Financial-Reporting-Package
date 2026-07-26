@@ -41,6 +41,9 @@ ROW_FLOOR = 0.34
 # A fuzzy-fill segment larger than this is left unmatched rather than aligned;
 # beyond it the quadratic fill costs more than the pairing is worth.
 _MAX_SEGMENT = 320
+# Inside a section the reviewer has numbered in both documents, correspondence
+# is asserted rather than inferred, so pairing needs far less similarity.
+_MARKED_FLOOR_SCALE = 0.35
 # A one-sided run longer than this is content of its own, not an insertion into
 # the surrounding block.
 _MAX_INSERTION = 8
@@ -86,6 +89,7 @@ class Unit:
     text: str
     tokens: set
     values: tuple
+    section: str | None = None
 
     @property
     def page(self) -> str:
@@ -96,22 +100,64 @@ def _norm(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-def units_of(blocks: list[Block]) -> list[Unit]:
+def _runs_by_section(rows, marks):
+    """Group consecutive rows by the marked section they fall in.
+
+    With no marks this yields one run, so an unmarked document keeps whole
+    paragraphs exactly as before.
+    """
+    if marks is None:
+        return [(None, list(rows))]
+    runs: list[tuple] = []
+    for row in rows:
+        label = marks.label_for(row.page, row.bbox)
+        if runs and runs[-1][0] == label:
+            runs[-1][1].append(row)
+        else:
+            runs.append((label, [row]))
+    return runs
+
+
+def units_of(blocks: list[Block], marks=None) -> list[Unit]:
+    """Flatten blocks into comparable units, tagged with any marked section.
+
+    A paragraph takes the section its first marked row falls in, so a paragraph
+    straddling a mark boundary still lands in one section rather than none.
+    """
+
+    def section_of(rows) -> str | None:
+        if marks is None:
+            return None
+        for row in rows:
+            label = marks.label_for(row.page, row.bbox)
+            if label is not None:
+                return label
+        return None
+
     out: list[Unit] = []
     for index, block in enumerate(blocks):
         if block.kind == "paragraph":
-            text = block.text
-            out.append(
-                Unit(
-                    kind="paragraph",
-                    block_index=index,
-                    block=block,
-                    row=None,
-                    text=text,
-                    tokens=set(_norm(text).split()),
-                    values=(),
+            # Split the paragraph wherever the marked section changes. A block
+            # reconstructed from geometry can run straight through two or three
+            # of a reviewer's marks; left whole it would take the first one's
+            # number and silently swallow the rest, which is how sections went
+            # missing entirely.
+            for label, rows in _runs_by_section(block.rows, marks):
+                text = " ".join(r.label for r in rows if r.label).strip()
+                if not text:
+                    continue
+                out.append(
+                    Unit(
+                        kind="paragraph",
+                        block_index=index,
+                        block=block,
+                        row=rows[0] if label is not None else None,
+                        text=text,
+                        tokens=set(_norm(text).split()),
+                        values=(),
+                        section=label,
+                    )
                 )
-            )
         else:
             for row in block.rows:
                 out.append(
@@ -123,6 +169,7 @@ def units_of(blocks: list[Block]) -> list[Unit]:
                         text=row.label,
                         tokens=set(_norm(row.label).split()),
                         values=tuple(f.value for f in row.figures),
+                        section=section_of([row]),
                     )
                 )
     return out
@@ -201,13 +248,15 @@ def similarity(a: Unit, b: Unit) -> float:
     return 0.6 * label + 0.4 * figures
 
 
-def _scored(a: Unit, b: Unit) -> float:
+def _scored(a: Unit, b: Unit, floor_scale: float = 1.0) -> float:
     s = similarity(a, b)
-    floor = PARAGRAPH_FLOOR if a.kind == "paragraph" else ROW_FLOOR
+    floor = (PARAGRAPH_FLOOR if a.kind == "paragraph" else ROW_FLOOR) * floor_scale
     return s if s >= floor else 0.0
 
 
-def _align_window(a: list[Unit], b: list[Unit]) -> list[Pair]:
+def _align_window(
+    a: list[Unit], b: list[Unit], floor_scale: float = 1.0
+) -> list[Pair]:
     """Order-preserving alignment maximising total similarity; gaps are free.
 
     Free gaps suit documents that genuinely differ in extent — one carries an
@@ -220,7 +269,9 @@ def _align_window(a: list[Unit], b: list[Unit]) -> list[Pair]:
     if rows * cols > _MAX_SEGMENT * _MAX_SEGMENT:
         return [Pair(a=x, b=None) for x in a] + [Pair(a=None, b=y) for y in b]
 
-    scores = [[_scored(a[i], b[j]) for j in range(cols)] for i in range(rows)]
+    scores = [
+        [_scored(a[i], b[j], floor_scale) for j in range(cols)] for i in range(rows)
+    ]
     table = [[0.0] * (cols + 1) for _ in range(rows + 1)]
     for i in range(rows - 1, -1, -1):
         row_i, row_next, srow = table[i], table[i + 1], scores[i]
@@ -299,21 +350,151 @@ def _anchor_pairs(a: list[Unit], b: list[Unit]) -> list[tuple[int, int]]:
     return [candidates[n] for n in reversed(chain)]
 
 
-def align(units_a: list[Unit], units_b: list[Unit]) -> list[Pair]:
+def align(
+    units_a: list[Unit],
+    units_b: list[Unit],
+    floor_scale: float = 1.0,
+    pair_leftovers: bool = False,
+) -> list[Pair]:
     """Pair the two documents' units and diff every matched pair."""
     anchors = _anchor_pairs(units_a, units_b)
 
     pairs: list[Pair] = []
     prev_a = prev_b = 0
     for ia, ib in anchors + [(len(units_a), len(units_b))]:
-        pairs += _align_window(units_a[prev_a:ia], units_b[prev_b:ib])
+        pairs += _align_window(units_a[prev_a:ia], units_b[prev_b:ib], floor_scale)
         if ia < len(units_a) and ib < len(units_b):
             pairs.append(Pair(a=units_a[ia], b=units_b[ib], similarity=1.0))
         prev_a, prev_b = ia + 1, ib + 1
 
+    if pair_leftovers:
+        pairs = _fuse_one_sided(pairs)
+
     for pair in pairs:
         if pair.kind == "paragraph" and pair.a is not None and pair.b is not None:
             pair.words = diff_words(pair.a.text, pair.b.text)
+    return pairs
+
+
+def _fuse_one_sided(pairs: list[Pair]) -> list[Pair]:
+    """Turn leftover blanks into comparisons, in order.
+
+    Used only inside a section a reviewer has numbered in both documents. There,
+    "present in one document only" is a statement the reviewer has already
+    contradicted, so anything still unpaired is put beside its opposite number
+    rather than shown against a blank. Order decides which goes with which,
+    since within one marked section that is the only information left.
+    """
+    spare_b = [i for i, p in enumerate(pairs) if p.a is None]
+    taken: set = set()
+    for index, pair in enumerate(pairs):
+        if pair.b is not None:
+            continue
+        for j in spare_b:
+            if j in taken or pairs[j].b.kind != pair.a.kind:
+                continue
+            pairs[index] = Pair(a=pair.a, b=pairs[j].b, similarity=0.0)
+            taken.add(j)
+            break
+    return [p for i, p in enumerate(pairs) if i not in taken]
+
+
+def _full_text(unit: Unit) -> str:
+    """A unit's text including any figures, for merging into a passage."""
+    if unit.row is not None and unit.kind == "row":
+        return unit.row.as_text()
+    return unit.text
+
+
+def _merge_paragraphs(units: list[Unit]) -> Unit:
+    """Fuse a section's prose into one comparable passage."""
+    text = " ".join(_full_text(u) for u in units if _full_text(u)).strip()
+    first = units[0]
+    return Unit(
+        kind="paragraph",
+        block_index=first.block_index,
+        block=first.block,
+        row=first.row,
+        text=text,
+        tokens=set(_norm(text).split()),
+        values=(),
+        section=first.section,
+    )
+
+
+def _align_marked_section(sub_a: list[Unit], sub_b: list[Unit]) -> list[Pair]:
+    """Compare one section a reviewer numbered in both documents.
+
+    Prose is fused into a single passage per side. The two documents rarely break
+    a section into the same number of paragraphs — one may run it together where
+    the other splits it in three — and pairing those counts against each other is
+    what leaves passages facing a blank. Since the reviewer has already said the
+    two regions correspond, the whole of one is compared against the whole of the
+    other and the word-level diff locates the differences inside it.
+
+    Table rows are kept individually, because a row means something on its own
+    and a figure has to be comparable to its counterpart.
+    """
+    rows_a = [u for u in sub_a if u.kind == "row"]
+    rows_b = [u for u in sub_b if u.kind == "row"]
+    prose_a = [u for u in sub_a if u.kind == "paragraph"]
+    prose_b = [u for u in sub_b if u.kind == "paragraph"]
+
+    out: list[Pair] = []
+    if rows_a and rows_b:
+        aligned = align(
+            rows_a, rows_b, floor_scale=_MARKED_FLOOR_SCALE, pair_leftovers=True
+        )
+        out += [p for p in aligned if p.a is not None and p.b is not None]
+        # A line one document read as a table row and the other read as prose
+        # leaves a row with no row to face. Rather than show it against a blank,
+        # hand it to the prose comparison, where its words can still be diffed.
+        prose_a = prose_a + [p.a for p in aligned if p.b is None]
+        prose_b = prose_b + [p.b for p in aligned if p.a is None]
+    else:
+        prose_a, prose_b = prose_a + rows_a, prose_b + rows_b
+
+    if prose_a and prose_b:
+        merged = Pair(
+            a=_merge_paragraphs(prose_a), b=_merge_paragraphs(prose_b), similarity=1.0
+        )
+        merged.words = diff_words(merged.a.text, merged.b.text)
+        out.append(merged)
+    else:
+        out += [Pair(a=u, b=None) for u in prose_a]
+        out += [Pair(a=None, b=u) for u in prose_b]
+    return out
+
+
+def align_by_section(units_a: list[Unit], units_b: list[Unit]) -> list[Pair]:
+    """Align within each numbered section, then across the unmarked remainder.
+
+    A section numbered in both documents is aligned only against itself, so its
+    content cannot drift into a neighbouring section and cannot be reported as
+    one-sided. Unmarked content falls back to ordinary content matching.
+    """
+    labels_a = [u.section for u in units_a]
+    labels_b = [u.section for u in units_b]
+
+    # Section order follows document A, then any section only B numbers.
+    ordered: list[str] = []
+    for label in labels_a + labels_b:
+        if label is not None and label not in ordered:
+            ordered.append(label)
+
+    pairs: list[Pair] = []
+    for label in ordered:
+        sub_a = [u for u in units_a if u.section == label]
+        sub_b = [u for u in units_b if u.section == label]
+        if sub_a and sub_b:
+            pairs += _align_marked_section(sub_a, sub_b)
+        else:
+            pairs += align(sub_a, sub_b)
+
+    unmarked_a = [u for u in units_a if u.section is None]
+    unmarked_b = [u for u in units_b if u.section is None]
+    if unmarked_a or unmarked_b:
+        pairs += align(unmarked_a, unmarked_b)
     return pairs
 
 
@@ -349,6 +530,8 @@ class Section:
     a_block: Block | None
     b_block: Block | None
     pairs: list[Pair] = field(default_factory=list)
+    # The number a reviewer marked on this content, if any.
+    marked: str | None = None
 
     @property
     def changed(self) -> int:
@@ -369,6 +552,16 @@ class Section:
 
     @property
     def title(self) -> str:
+        if self.marked is not None:
+            lead = next(
+                (
+                    (p.a or p.b).text.strip()
+                    for p in self.pairs
+                    if (p.a or p.b).text.strip()
+                ),
+                "",
+            )
+            return lead[:110] or f"Section {self.marked}"
         block = self.a_block or self.b_block
         if block.kind == "paragraph":
             return block.text[:110]
@@ -410,7 +603,12 @@ def group(pairs: list[Pair]) -> list[Section]:
         current = sections[-1] if sections else None
         current_key = getattr(current, "_key", None) if current is not None else None
 
-        if pair.a is not None:
+        marked = (pair.a or pair.b).section
+        if marked is not None:
+            # A numbered section is one section in the report, whatever blocks
+            # the two documents happen to have split it into.
+            key = ("mark", marked)
+        elif pair.a is not None:
             key = ("A", pair.a.block_index)
         else:
             key = ("B", pair.b.block_index)
@@ -420,7 +618,11 @@ def group(pairs: list[Pair]) -> list[Section]:
             # a wide table's labels wrap onto their own lines in the narrower
             # document, and those continuation lines carry no figures, so they
             # arrive as prose in the middle of a table.
-            if current is not None and current.a_block is not None:
+            if (
+                current is not None
+                and current.a_block is not None
+                and getattr(current, "_key", (None,))[0] != "mark"
+            ):
                 resumes = next(
                     (p for p in pairs[index + 1 : index + 1 + _MAX_INSERTION] if p.a),
                     None,
@@ -440,6 +642,7 @@ def group(pairs: list[Pair]) -> list[Section]:
             b_block=pair.b.block if pair.b is not None else None,
             pairs=[pair],
             heading=heading,
+            marked=marked,
         )
         section._key = key
         sections.append(section)

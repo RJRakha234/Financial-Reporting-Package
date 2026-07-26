@@ -330,6 +330,47 @@ The page opens with an index of the sections that differ on both sides, has
 filters for hiding identical and one-sided sections, and folds away the wrapped
 label lines a narrower page produces (counted, not dropped).
 
+### Numbering the sections yourself
+
+Content matching is a similarity judgement, and a judgement can decline: two
+passages that plainly correspond may fall below the floor and be reported as
+present in one document only — a blank where a comparison belongs. If you can
+see that they correspond, you can say so.
+
+**Highlight the passage in any PDF reader and type a number in the comment.
+Put the same number on its counterpart in the other file.** That is all:
+
+```bash
+fincheck compare exhibit.pdf original.pdf --side-by-side review.html
+#   Honoured 16 section number(s) marked in both files;
+#   none of them came out against a blank.
+```
+
+Numbers found in both documents become hard constraints, not hints. Content you
+marked `5` is compared only against content you marked `5`, whatever the
+similarity score says, so **a section you numbered in both files cannot come out
+against a blank.** Three things make that hold:
+
+- a reconstructed paragraph running through two of your marks is split at the
+  boundary, so a mark cannot be swallowed by its neighbour;
+- prose inside a section is compared as one passage per side, because the two
+  documents rarely break a section into the same number of paragraphs — pairing
+  those counts against each other is what leaves passages facing a blank — and
+  the word-level diff still locates the differences inside it;
+- a line one document read as a table row and the other read as prose is handed
+  to the prose comparison rather than shown against a blank.
+
+Table rows inside a numbered section are still compared individually, so a
+figure is still checked against its counterpart cell by cell.
+
+The report badges each section `§n`, and offers a filter to hide everything
+outside your marks. Marking is entirely optional, partial marking is fine, and
+anything unmarked falls back to content matching. `--ignore-marks` turns it off.
+
+**A mark that covers less than you intended will show as a difference** — that
+is the feature working, not failing. If a section reports text present on one
+side only, check the highlight actually covers the whole passage on both.
+
 ### What it infers, and why that matters
 
 Each of these rules can misfire, and none of them is evidence:

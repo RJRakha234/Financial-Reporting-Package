@@ -71,6 +71,11 @@ class Row:
     baseline: float
     label: str
     figures: list[Figure] = field(default_factory=list)
+    # Extent of the row's words, so it can be tested against a marked region.
+    x0: float = 0.0
+    y0: float = 0.0
+    x1: float = 0.0
+    y1: float = 0.0
     # Distance from the previous baseline on this page, and the page's usual
     # line pitch. Their ratio is what separates a new paragraph from a new line.
     gap: float = 0.0
@@ -86,6 +91,10 @@ class Row:
     @property
     def is_figure_row(self) -> bool:
         return bool(self.figures)
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        return (self.x0, self.y0, self.x1, self.y1)
 
     def as_text(self) -> str:
         cells = "  ".join(f.text for f in self.figures)
@@ -267,12 +276,17 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
                 r"\s+", " ", " ".join(w[4].strip() for w in row["bucket"])
             ).strip()
             figures = []
+        bucket = row["bucket"]
         rows.append(
             Row(
                 page=index + 1,
-                baseline=round(row["bucket"][0][3], 2),
+                baseline=round(bucket[0][3], 2),
                 label=label,
                 figures=figures,
+                x0=round(min(w[0] for w in bucket), 2),
+                y0=round(min(w[1] for w in bucket), 2),
+                x1=round(max(w[2] for w in bucket), 2),
+                y1=round(max(w[3] for w in bucket), 2),
             )
         )
 
