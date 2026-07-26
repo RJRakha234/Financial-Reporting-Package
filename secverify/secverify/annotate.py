@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import html as html_mod
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from bs4 import BeautifulSoup, Comment, NavigableString
@@ -1168,7 +1169,18 @@ class Annotator:
         the text blocks to fail as well distinguishes "wrong document" from
         "right document, badly converted" — the latter must stay a normal run
         with normal findings.
+
+        That leaves the ratios blind to the *near* mispair — the same document
+        one period out — which is the one most likely to happen.  The reporting
+        period is checked separately and first, since it is conclusive where the
+        ratios are not (see :func:`period_pairing_finding`).
         """
+        period = period_pairing_finding(
+            "\n".join(self.corpus.pages_raw), self.html_corpus.visible_text
+        )
+        if period is not None:
+            self._new_issue(*period)
+            return  # one STOP banner is enough; the ratios would only echo it
         figs_total = self.result.figures_total
         blocks_total = self.result.text_blocks_total
         if figs_total < 30 or blocks_total < 20:
@@ -1368,6 +1380,85 @@ class Annotator:
 def _shorten(text: str, max_len: int = 300) -> str:
     text = " ".join(text.split())
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
+
+
+#: "three months ended June 30, 2025", "year ended March 31, 2026",
+#: "quarter ended September 30, 2025", "period ended ..."
+_PERIOD_RE = re.compile(
+    r"(?:(three|six|nine|twelve)\s+months?|quarter|half[-\s]year|year|period)\s+"
+    r"end(?:ed|ing)\s+"
+    r"(January|February|March|April|May|June|July|August|September|October"
+    r"|November|December)\s+(\d{1,2})\s*,?\s*(\d{4})",
+    re.I,
+)
+
+
+def statement_periods(text: str) -> "Counter":
+    """Count each reporting period the text states, e.g. ``three months ended
+    June 30, 2025``.  The span word is kept, so a three-month column and a
+    nine-month column ending on the same date stay distinct."""
+    found: Counter = Counter()
+    for m in _PERIOD_RE.finditer(text or ""):
+        found[
+            (
+                (m.group(1) or "").lower(),
+                m.group(2).lower(),
+                int(m.group(3)),
+                int(m.group(4)),
+            )
+        ] += 1
+    return found
+
+
+def describe_period(key) -> str:
+    span, month, day, year = key
+    lead = f"{span} months" if span else "period"
+    return f"{lead} ended {month.title()} {day}, {year}"
+
+
+def period_pairing_finding(pdf_text: str, html_text: str):
+    """Report a PDF that is the wrong PERIOD of the right document.
+
+    The figure/text-block ratios cannot see this.  Measured on eight deliberate
+    period mispairs — an annual PDF against the Q3 exhibit, Q1 against Q3, Q2
+    against Q3 — figures matched 24–57% while wording still matched 37–88%,
+    because successive filings of the same entity share nearly all their
+    boilerplate.  Five of the eight therefore passed the ratio gate in silence,
+    each producing 1,700–2,900 findings measured against a source that never
+    contained these numbers, with nothing to say the pairing was wrong.  A
+    threshold cannot rescue it either: a *correctly* paired factsheet matches
+    only 51.2% of figures, inside the mispair range.
+
+    The exhibit's own reporting period separates them exactly.  The period
+    stated most often in the HTML is what the exhibit reports on; a genuine
+    source PDF always states it too (measured 1–28 times across 16 correct
+    pairs), and every one of the eight mispairs stated it **zero** times.  So
+    this tests presence, not a ratio, and needs no tuning.
+    """
+    html_periods = statement_periods(html_text)
+    if not html_periods:
+        return None  # no period phrase to check — say nothing
+    principal, html_n = html_periods.most_common(1)[0]
+    pdf_periods = statement_periods(pdf_text)
+    if pdf_periods.get(principal):
+        return None
+    said = ", ".join(
+        describe_period(k) for k, _ in pdf_periods.most_common(3)
+    ) or "no reporting period at all"
+    return (
+        "pairing",
+        "error",
+        f"exhibit reports {describe_period(principal)}; the PDF does not",
+        "WRONG PERIOD OF PDF FOR THIS EXHIBIT — read this before anything "
+        f"else. The exhibit states “{describe_period(principal)}” "
+        f"{html_n} time(s), but the reference PDF(s) never state that period; "
+        f"they report {said}. This is the previous quarter's or the annual "
+        "file — successive downloads are frequently identically named. The "
+        "figure and text-block ratios do NOT catch this, because consecutive "
+        "filings of the same entity share almost all their wording. Every "
+        "other finding in this run is measured against the wrong source and "
+        "should be ignored until the pairing is fixed.",
+    )
 
 
 def _collect_block_index(root) -> list[dict]:

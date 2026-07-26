@@ -680,3 +680,66 @@ def test_sibling_rows_differing_by_one_word_are_not_called_a_rewording():
         html, "ref.pdf", "doc.html"
     )
     assert not [i for i in r.issues if i.kind == "wording"]
+
+
+# --- wrong PERIOD of the right document (period_pairing_finding) ------------
+#
+# Measured on eight deliberate period mispairs of our own filings: figures
+# matched 24-57% while wording still matched 37-88%, so five of the eight
+# passed the ratio gate in silence, each producing 1,700-2,900 findings against
+# a source that never contained those numbers.  A threshold cannot separate
+# them -- a CORRECTLY paired factsheet matches only 51.2% of figures, inside
+# the mispair range.  The exhibit's own reporting period does separate them:
+# present 1-28 times in all 16 correct pairs, zero times in all eight mispairs.
+
+def test_statement_periods_keeps_the_span_word():
+    from secverify.annotate import statement_periods
+
+    got = statement_periods(
+        "for the three months ended June 30, 2025 and the nine months ended "
+        "June 30, 2025 and again three months ended June 30, 2025"
+    )
+    assert got[("three", "june", 30, 2025)] == 2
+    assert got[("nine", "june", 30, 2025)] == 1
+
+
+def test_previous_quarter_pdf_is_reported_as_wrong_period():
+    from secverify.annotate import period_pairing_finding
+
+    finding = period_pairing_finding(
+        "Condensed financial results for the three months ended June 30, 2025",
+        "Condensed financial results for the nine months ended December 31, "
+        "2025. Notes for the nine months ended December 31, 2025.",
+    )
+    assert finding is not None
+    kind, severity, excerpt, remark = finding
+    assert kind == "pairing" and severity == "error"
+    assert "December 31, 2025" in remark and "June 30, 2025" in remark
+
+
+def test_matching_period_produces_no_pairing_finding():
+    from secverify.annotate import period_pairing_finding
+
+    text = "results for the nine months ended December 31, 2025"
+    assert period_pairing_finding(text, text) is None
+
+
+def test_comparative_periods_absent_from_the_pdf_do_not_fire():
+    # an exhibit names periods its source PDF need not repeat (a prior-year
+    # comparative, a standard's effective date).  Only the period the exhibit
+    # reports on -- the one it states most often -- is required of the PDF.
+    from secverify.annotate import period_pairing_finding
+
+    html = (
+        "nine months ended December 31, 2025. nine months ended December 31, "
+        "2025. nine months ended December 31, 2025. "
+        "period ended March 31, 2022. three months ended March 31, 2025."
+    )
+    pdf = "nine months ended December 31, 2025 and comparatives"
+    assert period_pairing_finding(pdf, html) is None
+
+
+def test_exhibit_without_a_period_phrase_is_not_judged():
+    from secverify.annotate import period_pairing_finding
+
+    assert period_pairing_finding("year ended March 31, 2026", "Balance Sheet") is None

@@ -40,7 +40,7 @@ deleted / duplicated paragraph, shifted dates, a renamed label, content hidden
 by CSS. **All 20 were reported.** The command is in §6 so this can be repeated
 on any filing.
 
-**Three further error classes were closed after the measurements above, each
+**Six further error classes were closed after the measurements above, each
 found by stress-testing rather than by reading reports:**
 
 * **words moved across a paragraph boundary.** Canonical comparison strips
@@ -62,6 +62,18 @@ found by stress-testing rather than by reading reports:**
   moved words are now named explicitly as an error — *"in individual segments"
   sits at the end of this block in the HTML, but in the PDF those words appear
   in a DIFFERENT paragraph*.
+* **a reworded line where the document repeats it.** A signature block's
+  designation — PDF *"Chief Managaing Officer and Executive Director"* against
+  HTML *"Chief Executive Officer and Managing Director"* — passed as **green**.
+  The exhibit carries two signature blocks, so the HTML's copy matched the PDF's
+  *other, unaltered* occurrence and every text check stamped it verified; the
+  altered occurrence surfaced only as an "omission" in the summary panel, which
+  reads as *missing content* rather than *wrong designation*. Reworded lines are
+  now named — both versions quoted side by side — and **every** HTML block
+  carrying that wording is recoloured, because only one copy corresponds to the
+  differing PDF occurrence and nothing in either document says which.
+* **the PDF being the wrong *period* of the right document** — see §5, where it
+  is quantified. This was the most consequential of the fourteen.
 
 ---
 
@@ -140,10 +152,43 @@ actually hit, twice:
 - An exhibit paired with **only the auditor's-report PDF**, omitting the
   financial-statements PDF. Row-order coverage measured **0%**.
 
-The tool now detects both and prints a `STOP — THE PDF DOES NOT MATCH THIS
-EXHIBIT` banner at the top of the report, and the audit harness refuses to run.
-**But a reviewer must still confirm the pairing.** If an exhibit contains an
-auditor's report as well as the statements, **pass both PDFs**:
+The tool detects both and prints a `STOP — THE PDF DOES NOT MATCH THIS EXHIBIT`
+banner at the top of the report, and the audit harness refuses to run.
+
+**How that detection was found to be inadequate, and what replaced it.** The
+banner originally fired on match *ratios* — figures validated and text blocks
+matched. Tested against eight deliberately mispaired runs of our own filings
+(the annual PDF against the Q3 exhibit, Q1 against Q3, Q2 against Q3, and so
+on), **five of the eight passed the banner in complete silence**, each producing
+1,700–2,900 findings measured against a source that never contained those
+numbers:
+
+| Deliberate mispair | Figures matched | Text blocks matched | Banner fired? |
+|---|---|---|---|
+| annual PDF vs Q3 consolidated exhibit | 51.9% | 85.7% | **no** |
+| Q3 PDF vs Q1 consolidated exhibit | 56.4% | 88.4% | **no** |
+| Q1 PDF vs Q3 consolidated exhibit | 43.4% | 86.5% | **no** |
+| Q2 PDF vs Q3 standalone exhibit | 57.3% | 88.1% | **no** |
+| Q1/Q3 PDF vs Q2 IFRS-INR exhibit | 45.4% / 51.3% | 87.7% / 87.0% | **no** |
+
+The reason is structural: consecutive filings of the same entity share almost
+all their wording, so text-block agreement stays high however wrong the period
+is. And **no threshold can fix it** — a *correctly* paired factsheet validates
+only **51.2%** of its figures, sitting inside the mispair range of 24–57%. The
+ratios simply do not separate these documents.
+
+The exhibit's own **reporting period** does, exactly. The period an exhibit
+states most often is what it reports on, and a genuine source PDF always states
+it too — measured 1 to 28 times across **16 correctly paired filings**, and
+**zero** times in **all eight** mispairs. That is a test of presence rather than
+a ratio, so it needs no tuning and has no threshold to drift. All eight mispairs
+now raise the banner, naming the period the exhibit reports and the periods the
+PDF actually covers; all sixteen correct pairs stay silent.
+
+**A reviewer must still confirm the pairing** — the check reads the period from
+text, so an exhibit that states no period phrase at all cannot be judged this
+way and falls back to the ratios. If an exhibit contains an auditor's report as
+well as the statements, **pass both PDFs**:
 
 ```
 python -m secverify.toolsigma auditorsreport.pdf statement.pdf exhibit.htm
@@ -175,7 +220,7 @@ python tools/order_coverage.py statement.pdf exhibit.htm
 # Why is one specific row not order-checked?
 python tools/diagnose_row_order.py statement.pdf exhibit.htm --label "Life Sciences"
 
-# 178 regression tests
+# 187 regression tests
 python -m pytest -q
 ```
 
@@ -183,12 +228,14 @@ python -m pytest -q
 
 ## 7. Residual risk — stated plainly
 
-During development, **twelve defects of one particular kind were found and
+During development, **fourteen defects of one particular kind were found and
 fixed**: a check that silently declined to run, while the review copy looked
 fully green. Examples: footnote markers excluding every marked segment row from
 the order check; a date's day-of-month leaking into a row's figure key; the
 prose symbol check disabled on every real filing because it tested for
-`<table>` membership when our exhibits nest prose inside layout tables.
+`<table>` membership when our exhibits nest prose inside layout tables; a
+reworded designation matching the document's *other* copy of the same line; and
+the wrong-period-PDF banner that five of eight mispairs walked straight past.
 
 Each was invisible from the output. Each was found only by asking "what is
 **not** being checked?" — never by reading a report. The last of them was not
