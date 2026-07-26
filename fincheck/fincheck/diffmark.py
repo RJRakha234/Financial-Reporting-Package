@@ -12,6 +12,8 @@ observed, so nothing here re-derives position:
 A summary page carrying the layered verdicts is prepended.
 """
 
+from typing import NamedTuple
+
 import fitz  # PyMuPDF
 
 from .compare import ComparisonResult
@@ -54,19 +56,10 @@ def _note(change) -> str:
     )
 
 
-def _mark_page(page: "fitz.Page", comparison, max_marks: int) -> int:
-    """Annotate one page; return how many changes went unmarked.
-
-    The cap is not cosmetic. Marking a page that was re-typeset wholesale means
-    thousands of annotations, which is both unreadable and slow enough to look
-    like a hang. When it bites, the console and JSON reports still carry every
-    change — only the drawing is abridged.
-    """
+def _mark_page(page: "fitz.Page", comparison) -> None:
     marked: list[fitz.Rect] = []
-    changes = comparison.span_changes
-    omitted = max(0, len(changes) - max_marks)
 
-    for change in changes[:max_marks]:
+    for change in comparison.span_changes:
         span = change.after or change.before
         x0, y0, x1, y1 = span.bbox
         rect = fitz.Rect(x0 - _PAD, y0 - _PAD, x1 + _PAD, y1 + _PAD)
@@ -85,7 +78,7 @@ def _mark_page(page: "fitz.Page", comparison, max_marks: int) -> int:
         marked.append(rect)
 
     if comparison.pixels is None:
-        return omitted
+        return
 
     # Only outline visual differences no text mark already explains — a moved
     # ruling line, a changed image. Boxing regions that merely restate a
@@ -101,8 +94,6 @@ def _mark_page(page: "fitz.Page", comparison, max_marks: int) -> int:
             content="rendered pixels differ here, with no text change to explain it"
         )
         box.update()
-
-    return omitted
 
 
 def _swatch(page, x, y, color, label):
@@ -138,7 +129,10 @@ def _verdict_text(result: ComparisonResult) -> list[tuple[str, tuple]]:
 
 
 def _add_summary_page(
-    doc: "fitz.Document", result: ComparisonResult, omitted: int = 0
+    doc: "fitz.Document",
+    result: ComparisonResult,
+    omitted: int = 0,
+    unmarked_pages: int = 0,
 ) -> None:
     page = doc.new_page(0)
     insert_at = 1
@@ -174,24 +168,16 @@ def _add_summary_page(
     _swatch(page, 54, y, _VIOLET, "pixels differ with no text change to explain it")
     y += 24
 
-    if omitted:
-        page.insert_text(
-            (54, y),
-            f"Note: {omitted:,} further text changes are not drawn (too many to"
-            " mark legibly).",
-            fontsize=10,
-            fontname="helv",
-            color=_RED,
-        )
-        y += 14
-        page.insert_text(
-            (54, y),
-            "The console and JSON reports list every one of them.",
-            fontsize=10,
-            fontname="helv",
-            color=_RED,
-        )
-        y += 14
+    if unmarked_pages:
+        for text in (
+            f"Note: {unmarked_pages} page(s) are left unmarked because their text",
+            f"differs wholesale ({omitted:,} changes). Marking every line would",
+            "obscure rather than show. The console and JSON reports list them all.",
+        ):
+            page.insert_text(
+                (54, y), text, fontsize=10, fontname="helv", color=_RED
+            )
+            y += 13
     y += 10
 
     numeric = result.numeric_changes
@@ -232,29 +218,40 @@ def _add_summary_page(
 MAX_MARKS_PER_PAGE = 300
 
 
+class Markup(NamedTuple):
+    path: str
+    omitted_changes: int
+    unmarked_pages: int
+
+
 def write_diff_pdf(
     result: ComparisonResult,
     output_pdf: str,
     summary: bool = True,
     max_marks_per_page: int = MAX_MARKS_PER_PAGE,
-) -> tuple[str, int]:
+) -> Markup:
     """Mark up a copy of ``result.pdf_b`` with the differences and save it.
 
-    Returns the path written and the number of text changes left undrawn
-    because a page exceeded ``max_marks_per_page``.
+    A page whose text differs in more than ``max_marks_per_page`` places is
+    left unmarked rather than marked partially. Past that point the page was
+    re-typeset rather than edited, every line would carry a highlight, and the
+    mark-up would obscure rather than show — while costing an annotation per
+    span to draw. The console and JSON reports still list every change.
     """
     doc = fitz.open(result.pdf_b)
-    omitted = 0
+    omitted = unmarked = 0
     try:
         for comparison in result.pages:
             if comparison.page_b is None or comparison.identical:
                 continue
-            omitted += _mark_page(
-                doc[comparison.page_b], comparison, max_marks_per_page
-            )
+            if len(comparison.span_changes) > max_marks_per_page:
+                omitted += len(comparison.span_changes)
+                unmarked += 1
+                continue
+            _mark_page(doc[comparison.page_b], comparison)
         if summary:
-            _add_summary_page(doc, result, omitted)
+            _add_summary_page(doc, result, omitted, unmarked)
         doc.save(output_pdf, garbage=4, deflate=True)
     finally:
         doc.close()
-    return output_pdf, omitted
+    return Markup(output_pdf, omitted, unmarked)

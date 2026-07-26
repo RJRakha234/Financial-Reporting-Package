@@ -113,20 +113,21 @@ def compare_main(argv: list[str]) -> int:
         align_pages=args.align_pages,
     )
 
-    written, omitted = None, 0
+    markup = None
     if output is not None and not result.identical:
-        written, omitted = write_diff_pdf(result, output)
+        markup = write_diff_pdf(result, output)
 
     if args.json:
         print(comparison_to_json(result))
     else:
         print(comparison_to_console(result))
-        if written:
-            print(f"\nMarked-up PDF written to: {written}")
-            if omitted:
+        if markup is not None:
+            print(f"\nMarked-up PDF written to: {markup.path}")
+            if markup.unmarked_pages:
                 print(
-                    f"  {omitted:,} text changes are listed above but not drawn "
-                    "in it — too many to mark legibly."
+                    f"  {markup.unmarked_pages} page(s) left unmarked: their text "
+                    f"differs wholesale ({markup.omitted_changes:,} changes), so "
+                    "marking every line would obscure rather than show."
                 )
         elif output is not None:
             print("\nNo differences to mark up, so no diff PDF was written.")

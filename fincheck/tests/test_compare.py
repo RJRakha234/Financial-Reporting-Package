@@ -249,8 +249,8 @@ def test_changed_pixel_count_matches_a_pixel_by_pixel_scan():
         assert _count_changed_pixels(a, b, n) == brute
 
 
-def test_wholly_different_pages_do_not_take_forever_to_mark_up(tmp_path):
-    """A re-typeset page must not try to draw one annotation per span."""
+def test_a_wholly_retypeset_page_is_left_unmarked_not_marked_partly(tmp_path):
+    """Past the cap a page was re-typeset, not edited; marking it teaches nothing."""
     from fincheck.diffmark import write_diff_pdf
 
     a = make_pdf(
@@ -261,18 +261,35 @@ def test_wholly_different_pages_do_not_take_forever_to_mark_up(tmp_path):
         tmp_path / "b.pdf",
         rows=[(300, 65 + i * 9, f"right row {i}") for i in range(80)],
     )
-    out = tmp_path / "diff.pdf"
 
     result = compare_pdfs(a, b, dpi=None)
     assert len(result.pages[0].span_changes) == 160  # every span differs
 
-    written, omitted = write_diff_pdf(result, str(out), max_marks_per_page=25)
+    markup = write_diff_pdf(result, str(tmp_path / "diff.pdf"), max_marks_per_page=25)
 
-    assert omitted == 135
-    doc = fitz.open(written)
+    assert (markup.unmarked_pages, markup.omitted_changes) == (1, 160)
+    doc = fitz.open(markup.path)
     try:
-        assert len(list(doc[1].annots())) == 25
-        assert "not drawn" in doc[0].get_text()
+        assert len(list(doc[1].annots())) == 0
+        assert "unmarked" in doc[0].get_text()
+    finally:
+        doc.close()
+
+
+def test_a_lightly_edited_page_is_marked_in_full(tmp_path):
+    """The cap must not bite on the case the mark-up exists for."""
+    from fincheck.diffmark import write_diff_pdf
+
+    a = make_pdf(tmp_path / "a.pdf")
+    b = make_pdf(tmp_path / "b.pdf", rows=edited(ROWS, "10,200", "10,100"))
+
+    result = compare_pdfs(a, b, dpi=None)
+    markup = write_diff_pdf(result, str(tmp_path / "diff.pdf"))
+
+    assert (markup.unmarked_pages, markup.omitted_changes) == (0, 0)
+    doc = fitz.open(markup.path)
+    try:
+        assert len(list(doc[1].annots())) == len(result.pages[0].span_changes)
     finally:
         doc.close()
 
