@@ -268,6 +268,12 @@ differ *without* a text change to explain it, which is where a moved rule or a
 swapped image shows up. A summary page carrying the five verdicts is
 prepended.
 
+At most 300 text changes are drawn per page. Two documents that merely share a
+subject rather than a lineage differ in nearly every span, and marking all of
+them is both unreadable and slow enough to look like a hang. When the cap
+bites, the console and JSON reports still list every change and the summary
+page says how many went undrawn.
+
 ### What this cannot do
 
 Reliably attributing a changed figure to a named line item and column needs

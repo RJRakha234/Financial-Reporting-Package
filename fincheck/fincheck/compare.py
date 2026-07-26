@@ -614,24 +614,57 @@ def _context_for(change: SpanChange, a: PageContent, b: PageContent) -> str:
 
 
 def _row_changed_range(row_a: bytes, row_b: bytes, n: int, width: int):
-    """First and last differing pixel index in a scanline, plus the count."""
-    first = last = None
-    changed = 0
+    """First and last differing pixel index in a scanline.
+
+    Only the two boundary blocks are examined pixel by pixel; the blocks
+    between them cannot move the first or last index, so scanning them would
+    cost time without changing the answer.
+    """
     step = _SCAN_BLOCK * n
-    for start in range(0, width * n, step):
-        block_a = row_a[start : start + step]
-        block_b = row_b[start : start + step]
-        if block_a == block_b:
-            continue
-        base = start // n
-        for offset in range(0, min(len(block_a), len(block_b)), n):
-            if block_a[offset : offset + n] != block_b[offset : offset + n]:
-                index = base + offset // n
-                if first is None:
-                    first = index
-                last = index
-                changed += 1
-    return first, last, changed
+    starts = range(0, width * n, step)
+    differing = [
+        s for s in starts if row_a[s : s + step] != row_b[s : s + step]
+    ]
+    if not differing:
+        return None, None
+
+    def refine(start: int, reverse: bool):
+        offsets = range(0, min(step, width * n - start), n)
+        for offset in reversed(offsets) if reverse else offsets:
+            if (
+                row_a[start + offset : start + offset + n]
+                != row_b[start + offset : start + offset + n]
+            ):
+                return (start + offset) // n
+        return start // n
+
+    return refine(differing[0], False), refine(differing[-1], True)
+
+
+# Maps every non-zero byte to 0xFF, so channel planes can be OR-ed together as
+# one big integer instead of pixel by pixel in Python.
+_NONZERO_TO_FF = bytes(0 if i == 0 else 0xFF for i in range(256))
+
+
+def _count_changed_pixels(a: bytes, b: bytes, n: int) -> int:
+    """Exact number of pixels that differ, computed without a Python loop.
+
+    XOR-ing the two buffers as single integers marks every differing byte;
+    folding the channel planes together with OR then marks every differing
+    pixel, and ``bytes.count`` totals them. Every step runs in C, which matters
+    because the alternative — touching each pixel from Python — takes minutes
+    on a page that changed substantially.
+    """
+    diff = (int.from_bytes(a, "big") ^ int.from_bytes(b, "big")).to_bytes(
+        len(a), "big"
+    )
+    if n == 1:
+        return len(diff) - diff.count(0)
+    acc = 0
+    for channel in range(n):
+        acc |= int.from_bytes(diff[channel::n].translate(_NONZERO_TO_FF), "big")
+    folded = acc.to_bytes(len(diff) // n, "big")
+    return len(folded) - folded.count(0)
 
 
 def _pixel_diff(page_a, page_b, dpi: int) -> PixelDiff:
@@ -656,18 +689,30 @@ def _pixel_diff(page_a, page_b, dpi: int) -> PixelDiff:
 
     scale = 72.0 / dpi
     stride, n, width = pix_a.stride, pix_a.n, pix_a.width
-    changed_pixels = 0
-    bands: list[list[int]] = []  # [y_top, y_bottom, x_first, x_last]
+    row_bytes = width * n
 
+    # Counted over the padding-free rows so the stride cannot inflate the total.
+    if stride == row_bytes:
+        changed_pixels = _count_changed_pixels(samples_a, samples_b, n)
+    else:
+        changed_pixels = sum(
+            _count_changed_pixels(
+                samples_a[y * stride : y * stride + row_bytes],
+                samples_b[y * stride : y * stride + row_bytes],
+                n,
+            )
+            for y in range(pix_a.height)
+        )
+
+    bands: list[list[int]] = []  # [y_top, y_bottom, x_first, x_last]
     for y in range(pix_a.height):
-        row_a = samples_a[y * stride : y * stride + width * n]
-        row_b = samples_b[y * stride : y * stride + width * n]
+        row_a = samples_a[y * stride : y * stride + row_bytes]
+        row_b = samples_b[y * stride : y * stride + row_bytes]
         if row_a == row_b:
             continue
-        first, last, count = _row_changed_range(row_a, row_b, n, width)
+        first, last = _row_changed_range(row_a, row_b, n, width)
         if first is None:
             continue
-        changed_pixels += count
         if bands and y - bands[-1][1] <= _BAND_GAP:
             band = bands[-1]
             band[1] = y

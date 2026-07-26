@@ -229,6 +229,54 @@ def test_scanned_pages_are_compared_by_pixels_and_image_hash(tmp_path):
     assert "vector graphics and images .......... DIFFERS" in console
 
 
+def test_changed_pixel_count_matches_a_pixel_by_pixel_scan():
+    """The C-level counter must agree with the obvious slow implementation."""
+    import random
+
+    from fincheck.compare import _count_changed_pixels
+
+    random.seed(7)
+    for _ in range(200):
+        n = random.choice([1, 2, 3, 4])
+        pixels = random.randint(1, 80)
+        a = bytes(random.randrange(256) for _ in range(pixels * n))
+        b = bytearray(a)
+        for _ in range(random.randint(0, pixels)):
+            b[random.randrange(pixels * n)] ^= random.randrange(1, 256)
+        b = bytes(b)
+
+        brute = sum(1 for i in range(0, pixels * n, n) if a[i : i + n] != b[i : i + n])
+        assert _count_changed_pixels(a, b, n) == brute
+
+
+def test_wholly_different_pages_do_not_take_forever_to_mark_up(tmp_path):
+    """A re-typeset page must not try to draw one annotation per span."""
+    from fincheck.diffmark import write_diff_pdf
+
+    a = make_pdf(
+        tmp_path / "a.pdf",
+        rows=[(72, 60 + i * 9, f"left row {i}") for i in range(80)],
+    )
+    b = make_pdf(
+        tmp_path / "b.pdf",
+        rows=[(300, 65 + i * 9, f"right row {i}") for i in range(80)],
+    )
+    out = tmp_path / "diff.pdf"
+
+    result = compare_pdfs(a, b, dpi=None)
+    assert len(result.pages[0].span_changes) == 160  # every span differs
+
+    written, omitted = write_diff_pdf(result, str(out), max_marks_per_page=25)
+
+    assert omitted == 135
+    doc = fitz.open(written)
+    try:
+        assert len(list(doc[1].annots())) == 25
+        assert "not drawn" in doc[0].get_text()
+    finally:
+        doc.close()
+
+
 def test_skipping_the_render_leaves_visual_equality_undetermined(tmp_path):
     a = make_pdf(tmp_path / "a.pdf")
     b = make_pdf(tmp_path / "b.pdf", metadata={"title": "other"})

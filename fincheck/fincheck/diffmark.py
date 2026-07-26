@@ -54,10 +54,19 @@ def _note(change) -> str:
     )
 
 
-def _mark_page(page: "fitz.Page", comparison) -> None:
-    marked: list[fitz.Rect] = []
+def _mark_page(page: "fitz.Page", comparison, max_marks: int) -> int:
+    """Annotate one page; return how many changes went unmarked.
 
-    for change in comparison.span_changes:
+    The cap is not cosmetic. Marking a page that was re-typeset wholesale means
+    thousands of annotations, which is both unreadable and slow enough to look
+    like a hang. When it bites, the console and JSON reports still carry every
+    change — only the drawing is abridged.
+    """
+    marked: list[fitz.Rect] = []
+    changes = comparison.span_changes
+    omitted = max(0, len(changes) - max_marks)
+
+    for change in changes[:max_marks]:
         span = change.after or change.before
         x0, y0, x1, y1 = span.bbox
         rect = fitz.Rect(x0 - _PAD, y0 - _PAD, x1 + _PAD, y1 + _PAD)
@@ -76,7 +85,7 @@ def _mark_page(page: "fitz.Page", comparison) -> None:
         marked.append(rect)
 
     if comparison.pixels is None:
-        return
+        return omitted
 
     # Only outline visual differences no text mark already explains — a moved
     # ruling line, a changed image. Boxing regions that merely restate a
@@ -92,6 +101,8 @@ def _mark_page(page: "fitz.Page", comparison) -> None:
             content="rendered pixels differ here, with no text change to explain it"
         )
         box.update()
+
+    return omitted
 
 
 def _swatch(page, x, y, color, label):
@@ -126,7 +137,9 @@ def _verdict_text(result: ComparisonResult) -> list[tuple[str, tuple]]:
     return out
 
 
-def _add_summary_page(doc: "fitz.Document", result: ComparisonResult) -> None:
+def _add_summary_page(
+    doc: "fitz.Document", result: ComparisonResult, omitted: int = 0
+) -> None:
     page = doc.new_page(0)
     insert_at = 1
     y = 54
@@ -159,7 +172,27 @@ def _add_summary_page(doc: "fitz.Document", result: ComparisonResult) -> None:
     _swatch(page, 54, y, _BLUE, "moved or restyled")
     y += 16
     _swatch(page, 54, y, _VIOLET, "pixels differ with no text change to explain it")
-    y += 28
+    y += 24
+
+    if omitted:
+        page.insert_text(
+            (54, y),
+            f"Note: {omitted:,} further text changes are not drawn (too many to"
+            " mark legibly).",
+            fontsize=10,
+            fontname="helv",
+            color=_RED,
+        )
+        y += 14
+        page.insert_text(
+            (54, y),
+            "The console and JSON reports list every one of them.",
+            fontsize=10,
+            fontname="helv",
+            color=_RED,
+        )
+        y += 14
+    y += 10
 
     numeric = result.numeric_changes
     if numeric:
@@ -196,19 +229,32 @@ def _add_summary_page(doc: "fitz.Document", result: ComparisonResult) -> None:
             )
 
 
+MAX_MARKS_PER_PAGE = 300
+
+
 def write_diff_pdf(
-    result: ComparisonResult, output_pdf: str, summary: bool = True
-) -> str:
-    """Mark up a copy of ``result.pdf_b`` with the differences and save it."""
+    result: ComparisonResult,
+    output_pdf: str,
+    summary: bool = True,
+    max_marks_per_page: int = MAX_MARKS_PER_PAGE,
+) -> tuple[str, int]:
+    """Mark up a copy of ``result.pdf_b`` with the differences and save it.
+
+    Returns the path written and the number of text changes left undrawn
+    because a page exceeded ``max_marks_per_page``.
+    """
     doc = fitz.open(result.pdf_b)
+    omitted = 0
     try:
         for comparison in result.pages:
             if comparison.page_b is None or comparison.identical:
                 continue
-            _mark_page(doc[comparison.page_b], comparison)
+            omitted += _mark_page(
+                doc[comparison.page_b], comparison, max_marks_per_page
+            )
         if summary:
-            _add_summary_page(doc, result)
+            _add_summary_page(doc, result, omitted)
         doc.save(output_pdf, garbage=4, deflate=True)
     finally:
         doc.close()
-    return output_pdf
+    return output_pdf, omitted
