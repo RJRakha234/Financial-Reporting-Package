@@ -6,6 +6,9 @@ Two tools in one package:
    financial statement actually foots, and highlight the result.
 2. **`fincheck compare old.pdf new.pdf`** — compare two PDFs **exactly**, with
    no layout assumptions at all. See [Comparing two PDFs](#comparing-two-pdfs-exactly).
+3. **`fincheck compare a.pdf b.pdf --side-by-side out.html`** — place every
+   paragraph and table beside its counterpart, matched by content. This one
+   *does* infer structure, and says so. See [Side by side](#side-by-side-every-paragraph-and-table).
 
 ## Checking totals
 
@@ -274,9 +277,79 @@ every line would carry a highlight, and the mark-up would obscure rather than
 show. The summary page says how many pages were skipped, and the console and
 JSON reports still list every change.
 
-### What this cannot do
+## Side by side, every paragraph and table
 
-Reliably attributing a changed figure to a named line item and column needs
-structure the PDF does not carry. If you need that, compare the XBRL
-instance/calculation linkbase or the source workbook, not the rendering.
-`fincheck compare` deliberately stops at what the file can prove.
+The exact layers above answer *whether* two documents differ. They will not put
+a statement next to its counterpart, because doing that requires deciding what a
+paragraph and a table are — and a PDF does not say. `--side-by-side` makes that
+decision explicitly and shows its work:
+
+```bash
+fincheck compare draft.pdf final.pdf --side-by-side review.html
+```
+
+```
+Side-by-side written to: review.html
+  1,135 passages matched by content (266 paragraphs, 869 table rows);
+  234 differ, 324 figure cells differ.
+  147 only in A, 320 only in B. This view infers paragraphs and tables.
+```
+
+**Matched by content, not by page.** When one document sets a statement
+landscape over two pages and the other portrait over three, page 4 of one has
+nothing to do with page 4 of the other. Matching runs the way a good text diff
+does: passages whose content occurs exactly once in each document are
+unambiguous anchors and are paired first; the leftovers get an order-preserving
+similarity alignment between those anchors. Order preservation matters, because
+statements repeat labels — *Total*, *Others*, *Investments* — endlessly.
+
+**The unit of comparison differs by kind, and it has to.** Prose is compared a
+paragraph at a time, because the two files wrap lines at different measures and
+no line of one corresponds to a line of the other. Tables are compared a row at
+a time, because the two files group rows into tables differently — one keeps a
+balance sheet whole, the other splits it over three pages — so whole-table
+matching collapses on exactly the statements that matter most.
+
+**Wide tables stack rather than scroll.** Past six figure columns, two
+side-by-side copies cannot both fit on screen, so A is laid above B with the
+columns aligned. Reading down a column beats scrolling sideways to find its
+counterpart — and a column the other document lost shows as a row of dashes.
+
+The page opens with an index of the sections that differ on both sides, has
+filters for hiding identical and one-sided sections, and folds away the wrapped
+label lines a narrower page produces (counted, not dropped).
+
+### What it infers, and why that matters
+
+Each of these rules can misfire, and none of them is evidence:
+
+- spans sharing a text baseline form a row (exact — baselines come from the file);
+- a row is a figure row when its numbers sit to the right of a short label, so
+  prose quoting a figure mid-sentence stays prose;
+- consecutive figure rows form a table, consecutive prose rows a paragraph, with
+  a break where the vertical gap exceeds the page's usual line pitch;
+- a heading between figure rows stays inside its table;
+- a block continues across a page break when the text before it does not end a
+  sentence, or when a table resumes with the same column count;
+- pairing is a similarity judgement above a floor.
+
+Read a difference here as "look at this", and use the exact layers when you need
+proof. In library form:
+
+```python
+from fincheck import side_by_side
+
+result = side_by_side("draft.pdf", "final.pdf", output_html="review.html")
+for pair, cells in result.figure_changes():
+    for column, before, after in cells:
+        print(pair.a.text, f"col {column}:", before, "->", after)
+```
+
+### What no layer can do
+
+Attributing a changed figure to a named line item *and column heading* needs
+structure the PDF does not carry. The side-by-side gets close — it will tell you
+that the third figure on the *Balance as at April 1* row differs — but naming
+that column means reading a wrapped, multi-level table header, which is
+reconstruction again. If you need that, compare the XBRL instance and
+calculation linkbase, or the source workbook.

@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import DEFAULT_DPI, analyze, compare
+from . import DEFAULT_DPI, analyze, compare, side_by_side
 from .compare_report import comparison_to_console, comparison_to_json
 from .diffmark import write_diff_pdf
 from .report import to_console, to_json
@@ -83,6 +83,14 @@ def build_compare_parser() -> argparse.ArgumentParser:
         "removed pages (positional matching assumes nothing, so it is default)",
     )
     parser.add_argument(
+        "--side-by-side",
+        metavar="HTML",
+        help="also write an HTML page placing every paragraph and table beside "
+        "its counterpart, matched by content. This reconstructs paragraphs and "
+        "tables from the page geometry, so unlike the checks above it infers "
+        "structure: read it as a worksheet, not as proof",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="print the comparison as JSON"
     )
     return parser
@@ -117,6 +125,12 @@ def compare_main(argv: list[str]) -> int:
     if output is not None and not result.identical:
         markup = write_diff_pdf(result, output)
 
+    aligned = None
+    if args.side_by_side:
+        aligned = side_by_side(
+            str(paths[0]), str(paths[1]), output_html=args.side_by_side
+        )
+
     if args.json:
         print(comparison_to_json(result))
     else:
@@ -131,6 +145,19 @@ def compare_main(argv: list[str]) -> int:
                 )
         elif output is not None:
             print("\nNo differences to mark up, so no diff PDF was written.")
+
+        if aligned is not None:
+            s = aligned.summary
+            print(f"\nSide-by-side written to: {aligned.output_html}")
+            print(
+                f"  {s.matched:,} passages matched by content "
+                f"({s.paragraphs_matched:,} paragraphs, {s.rows_matched:,} table rows); "
+                f"{s.changed:,} differ, {s.changed_figures:,} figure cells differ."
+            )
+            print(
+                f"  {s.only_in_a:,} only in A, {s.only_in_b:,} only in B. "
+                "This view infers paragraphs and tables — treat it as a worksheet."
+            )
 
     # Non-zero when the documents differ, for use in CI or a release gate.
     return 0 if result.identical else 1
