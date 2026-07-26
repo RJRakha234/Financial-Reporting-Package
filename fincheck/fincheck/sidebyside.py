@@ -12,6 +12,7 @@ page states that plainly. It is a reviewer's worksheet, not evidence.
 
 import html
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from .align import Pair, Section, Summary
 from .numbers import format_number
@@ -24,6 +25,79 @@ class Meta:
     pages_a: int
     pages_b: int
     summary: Summary
+    label_a: str = "A"
+    label_b: str = "B"
+    producer_a: str = ""
+    producer_b: str = ""
+
+    @property
+    def tags(self) -> "Tags":
+        return Tags(
+            short_a=_short_tag(self.label_a),
+            short_b=_short_tag(self.label_b),
+            full_a=self.label_a,
+            full_b=self.label_b,
+        )
+
+
+class Tags(NamedTuple):
+    """Column names in two lengths.
+
+    Stacked figure rows are prefixed dozens of times per table, so they need a
+    tag narrow enough not to eat the width the figures need. The sticky column
+    header carries the full name, so the short form only has to be recognisable.
+    """
+
+    short_a: str
+    short_b: str
+    full_a: str
+    full_b: str
+
+
+_SHORT = (
+    ("excel", "XLS"),
+    ("html", "HTML"),
+    ("word", "DOC"),
+    ("latex", "TEX"),
+)
+
+
+def _short_tag(label: str) -> str:
+    low = label.lower()
+    for needle, short in _SHORT:
+        if needle in low:
+            return short
+    words = [w for w in label.replace("_", " ").replace("-", " ").split() if w]
+    if len(words) > 1:
+        return "".join(w[0] for w in words[:4]).upper()
+    return (words[0][:4] if words else label[:4]).upper()
+
+
+# How a PDF was made is usually the most useful thing to call it: "the Excel
+# one" and "the HTML one" is how people actually refer to these two files.
+_PRODUCERS = (
+    ("excel", "Excel export"),
+    ("skia", "HTML print"),
+    ("chrome", "HTML print"),
+    ("wkhtmltopdf", "HTML print"),
+    ("word", "Word export"),
+    ("indesign", "InDesign"),
+    ("latex", "LaTeX"),
+    ("distiller", "Distiller"),
+    ("ghostscript", "Ghostscript"),
+)
+
+
+def default_label(path: str, producer: str, creator: str = "") -> str:
+    """Name a document by how it was produced, falling back to its filename."""
+    haystack = f"{producer} {creator}".lower()
+    for needle, label in _PRODUCERS:
+        if needle in haystack:
+            return label
+    stem = path.rsplit("/", 1)[-1]
+    return stem[:-4] if stem.lower().endswith(".pdf") else stem
+
+
 
 
 def _e(text) -> str:
@@ -46,8 +120,8 @@ def _figure_cells(values, changed: set, missing: int = 0) -> str:
 WIDE_TABLE_COLUMNS = 6
 
 
-def _stacked_row_html(pair: Pair) -> str:
-    """One row with A above B, columns aligned, for a wide table."""
+def _stacked_row_html(pair: Pair, tags: Tags) -> str:
+    """One row with the two documents stacked, columns aligned, for a wide table."""
     changed = {i for i, _, _ in pair.changed_figures}
     a, b = pair.a, pair.b
     status = pair.status
@@ -71,21 +145,21 @@ def _stacked_row_html(pair: Pair) -> str:
     label_cls = "label label--changed" if status == "label-differs" else "label"
     alt = ""
     if status == "label-differs" and a is not None and b is not None:
-        alt = f'<span class="alt">B: {_e(b.text)}</span>'
+        alt = f'<span class="alt">{_e(tags.full_b)}: {_e(b.text)}</span>'
 
     return (
         f'<tr class="r r--{status}">'
         f'<td class="gut">{_e(a.page) if a else ""}</td>'
         f'<td class="stack">'
         f'<span class="{label_cls}">{_e(label) or "&nbsp;"}</span>{alt}'
-        f"{line(a, b, 'A')}{line(b, a, 'B')}"
+        f"{line(a, b, tags.short_a)}{line(b, a, tags.short_b)}"
         f"</td>"
         f'<td class="gut">{_e(b.page) if b else ""}</td>'
         f"</tr>"
     )
 
 
-def _row_pair_html(pair: Pair) -> str:
+def _row_pair_html(pair: Pair, tags: Tags) -> str:
     changed = {i for i, _, _ in pair.changed_figures}
     status = pair.status
     a, b = pair.a, pair.b
@@ -164,7 +238,7 @@ def _paragraph_html(pair: Pair) -> str:
     )
 
 
-def _collapse_wrapping(pairs: list[Pair], render) -> list[str]:
+def _collapse_wrapping(pairs: list[Pair], render, tags: Tags) -> list[str]:
     """Render a table's rows, folding away wrapped-label artefacts.
 
     A wide table set in a narrower page wraps its row labels onto extra lines.
@@ -193,7 +267,7 @@ def _collapse_wrapping(pairs: list[Pair], render) -> list[str]:
             run += 1
             continue
         flush()
-        out.append(render(pair))
+        out.append(render(pair, tags))
     flush()
     return out
 
@@ -206,7 +280,7 @@ _STATUS_LABEL = {
 }
 
 
-def _section_html(section: Section, index: int) -> str:
+def _section_html(section: Section, index: int, tags: Tags) -> str:
     pages_a, pages_b = section.pages
     status = section.status
     label = _STATUS_LABEL.get(status, status)
@@ -231,15 +305,14 @@ def _section_html(section: Section, index: int) -> str:
 
     if section.kind == "table":
         columns = max(
-            (len(p.a.values) if p.a else 0) for p in section.pairs
-        ) if section.pairs else 0
-        columns = max(
-            columns, max((len(p.b.values) if p.b else 0) for p in section.pairs)
+            max(len(p.a.values) if p.a else 0, len(p.b.values) if p.b else 0)
+            for p in section.pairs
         )
-        render = _stacked_row_html if columns > WIDE_TABLE_COLUMNS else _row_pair_html
+        wide = columns > WIDE_TABLE_COLUMNS
+        render = _stacked_row_html if wide else _row_pair_html
         body = (
-            '<div class="scroll"><table class="rows">'
-            + "".join(_collapse_wrapping(section.pairs, render))
+            f'<div class="scroll"><table class="rows rows--{"stacked" if wide else "cols"}">'
+            + "".join(_collapse_wrapping(section.pairs, render, tags))
             + "</table></div>"
         )
     else:
@@ -345,12 +418,23 @@ table.rows td{vertical-align:top;padding:.3rem .55rem;border-bottom:1px solid va
 .r--same .label{color:var(--ink-soft)}
 td.stack{width:auto}
 .ln{display:block;white-space:nowrap;margin-top:.1rem}
-.ln em{font-family:var(--mono);font-size:.66rem;font-style:normal;color:var(--muted);
-  display:inline-block;width:1.1rem}
+.ln em{font-family:var(--mono);font-size:.64rem;font-style:normal;color:var(--muted);
+  display:inline-block;width:2.9rem;letter-spacing:.04em}
 .ln--absent em{color:var(--differs)}
 .alt{display:block;font-size:.8rem;color:var(--differs);margin-top:.05rem}
 .wrapnote{font-size:.72rem;color:var(--muted);font-style:italic;padding:.2rem .55rem}
 .r--wrap td{border-bottom:1px dashed var(--rule-soft)}
+/* Which column is which, kept on screen while scrolling a 600-section page. */
+.colhead{position:sticky;top:0;z-index:5;display:grid;
+  grid-template-columns:2.4rem 1fr 1fr 2.4rem;gap:.55rem;
+  background:var(--paper);border-bottom:2px solid var(--ink);
+  padding:.5rem 0 .45rem;margin-bottom:.2rem}
+.ch{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;font-weight:600;
+  color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cgut{font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  text-align:right}
+/* Two real columns when the table is narrow enough for them to fit. */
+.rows--cols .side+.side{border-left:1px solid var(--rule)}
 
 .prose{display:grid;grid-template-columns:2.4rem 1fr 1fr 2.4rem;gap:.55rem;
   border-bottom:1px solid var(--rule-soft);padding:.3rem 0}
@@ -396,10 +480,11 @@ def write_side_by_side(
     sections: list[Section], meta: Meta, output_path: str
 ) -> str:
     s = meta.summary
+    tags = meta.tags
     identical_sections = sum(1 for x in sections if x.status == "same")
     one_sided = sum(1 for x in sections if x.status in ("added", "removed"))
 
-    body = "".join(_section_html(x, i) for i, x in enumerate(sections))
+    body = "".join(_section_html(x, i, tags) for i, x in enumerate(sections))
 
     # An index of the sections that differ on both sides — the ones a reviewer
     # has to look at. 700 sections is too many to scroll hunting for them.
@@ -434,8 +519,12 @@ def write_side_by_side(
   </div>
 
   <div class="docs">
-    <div><b>A</b><code>{_e(meta.pdf_a.rsplit('/', 1)[-1])}</code><br>{meta.pages_a} pages</div>
-    <div><b>B</b><code>{_e(meta.pdf_b.rsplit('/', 1)[-1])}</code><br>{meta.pages_b} pages</div>
+    <div><b>{_e(meta.label_a)}</b>
+      <code>{_e(meta.pdf_a.rsplit('/', 1)[-1])}</code><br>
+      {meta.pages_a} pages{f" &middot; {_e(meta.producer_a)}" if meta.producer_a else ""}</div>
+    <div><b>{_e(meta.label_b)}</b>
+      <code>{_e(meta.pdf_b.rsplit('/', 1)[-1])}</code><br>
+      {meta.pages_b} pages{f" &middot; {_e(meta.producer_b)}" if meta.producer_b else ""}</div>
   </div>
 
   <div class="stats">
@@ -457,6 +546,12 @@ def write_side_by_side(
   </div>
 
 {toc}
+  <div class="colhead">
+    <span class="cgut">pg</span>
+    <span class="ch">{_e(meta.label_a)}</span>
+    <span class="ch">{_e(meta.label_b)}</span>
+    <span class="cgut">pg</span>
+  </div>
 {body}
 
   <footer>

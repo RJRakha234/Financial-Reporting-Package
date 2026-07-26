@@ -20,7 +20,7 @@ from .diffmark import write_diff_pdf
 from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
-from .sidebyside import Meta, write_side_by_side
+from .sidebyside import Meta, default_label, write_side_by_side
 
 __all__ = [
     "analyze",
@@ -154,6 +154,8 @@ def side_by_side(
     pdf_a: str,
     pdf_b: str,
     output_html: str | None = None,
+    label_a: str | None = None,
+    label_b: str | None = None,
 ) -> SideBySideResult:
     """Match two documents paragraph by paragraph and row by row.
 
@@ -165,6 +167,10 @@ def side_by_side(
         pdf_a: the reference PDF, shown on the left.
         pdf_b: the PDF compared against it, shown on the right.
         output_html: if given, write the side-by-side page here.
+        label_a: column heading for the first document. Defaults to how the PDF
+            was produced ("Excel export", "HTML print"), which is usually how
+            people refer to these files, and to the filename otherwise.
+        label_b: column heading for the second document.
     """
     units_a = units_of(segment(pdf_a))
     units_b = units_of(segment(pdf_b))
@@ -178,12 +184,20 @@ def side_by_side(
 
         doc_a, doc_b = fitz.open(pdf_a), fitz.open(pdf_b)
         try:
+            producer_a = doc_a.metadata.get("producer") or ""
+            producer_b = doc_b.metadata.get("producer") or ""
+            creator_a = doc_a.metadata.get("creator") or ""
+            creator_b = doc_b.metadata.get("creator") or ""
             meta = Meta(
                 pdf_a=pdf_a,
                 pdf_b=pdf_b,
                 pages_a=doc_a.page_count,
                 pages_b=doc_b.page_count,
                 summary=summary,
+                label_a=label_a or default_label(pdf_a, producer_a, creator_a),
+                label_b=label_b or default_label(pdf_b, producer_b, creator_b),
+                producer_a=producer_a,
+                producer_b=producer_b,
             )
         finally:
             doc_a.close()

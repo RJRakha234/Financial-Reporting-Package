@@ -307,6 +307,43 @@ def test_cli_writes_the_side_by_side_page(tmp_path, capsys):
     assert "worksheet" in printed
 
 
+def test_columns_are_named_after_how_each_pdf_was_produced(tmp_path):
+    """"the Excel one" and "the HTML one" is how people refer to these files."""
+    from fincheck.sidebyside import default_label
+
+    assert default_label("/x/q2.pdf", "Microsoft® Excel® for Microsoft 365") == (
+        "Excel export"
+    )
+    assert default_label("/x/q2.pdf", "Skia/PDF m150", "Chrome/150") == "HTML print"
+    # No recognisable producer falls back to the filename, without the suffix.
+    assert default_label("/x/statements_q2.pdf", "", "") == "statements_q2"
+
+
+def test_the_page_labels_its_two_columns(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "b.pdf",
+        [l.replace("11,502      10,106", "11,502      10,999") for l in STATEMENT],
+    )
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out), label_a="Source PDF", label_b="HTML PDF")
+    html = out.read_text()
+
+    assert '<span class="ch">Source PDF</span>' in html
+    assert '<span class="ch">HTML PDF</span>' in html
+    assert "colhead" in html, "the column names should be a sticky header"
+
+
+def test_short_tags_are_derived_for_the_stacked_layout(tmp_path):
+    from fincheck.sidebyside import _short_tag
+
+    assert _short_tag("Excel export") == "XLS"
+    assert _short_tag("HTML print") == "HTML"
+    assert _short_tag("Source PDF") == "SP"
+    assert _short_tag("statements") == "STAT"
+
+
 def test_identical_documents_produce_no_differences(tmp_path):
     a = make_pdf(tmp_path / "a.pdf", STATEMENT)
     b = make_pdf(tmp_path / "b.pdf", STATEMENT)

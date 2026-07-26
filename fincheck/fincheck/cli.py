@@ -91,6 +91,15 @@ def build_compare_parser() -> argparse.ArgumentParser:
         "structure: read it as a worksheet, not as proof",
     )
     parser.add_argument(
+        "--label-a",
+        metavar="NAME",
+        help="column heading for the first PDF in the side-by-side page "
+        "(default: how it was produced, e.g. 'Excel export' or 'HTML print')",
+    )
+    parser.add_argument(
+        "--label-b", metavar="NAME", help="column heading for the second PDF"
+    )
+    parser.add_argument(
         "--json", action="store_true", help="print the comparison as JSON"
     )
     return parser
@@ -128,7 +137,11 @@ def compare_main(argv: list[str]) -> int:
     aligned = None
     if args.side_by_side:
         aligned = side_by_side(
-            str(paths[0]), str(paths[1]), output_html=args.side_by_side
+            str(paths[0]),
+            str(paths[1]),
+            output_html=args.side_by_side,
+            label_a=args.label_a,
+            label_b=args.label_b,
         )
 
     if args.json:

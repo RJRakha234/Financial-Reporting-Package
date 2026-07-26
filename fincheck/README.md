@@ -315,6 +315,17 @@ side-by-side copies cannot both fit on screen, so A is laid above B with the
 columns aligned. Reading down a column beats scrolling sideways to find its
 counterpart — and a column the other document lost shows as a row of dashes.
 
+**Columns are named after how each PDF was made.** "The Excel one" and "the HTML
+one" is how people actually refer to two renderings of the same statements, so
+that is what the column headings say — read from each file's producer metadata,
+and shown in a header that stays on screen as you scroll. Override with
+`--label-a` / `--label-b`:
+
+```bash
+fincheck compare source.pdf filed.pdf --side-by-side review.html \
+    --label-a "Source PDF" --label-b "Filed exhibit"
+```
+
 The page opens with an index of the sections that differ on both sides, has
 filters for hiding identical and one-sided sections, and folds away the wrapped
 label lines a narrower page produces (counted, not dropped).
