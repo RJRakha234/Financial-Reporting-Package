@@ -356,6 +356,40 @@ for pair, cells in result.figure_changes():
         print(pair.a.text, f"col {column}:", before, "->", after)
 ```
 
+### Does it work on any pair of PDFs?
+
+**The exact comparison: yes, unconditionally.** Bytes, geometry, spans, graphics
+and pixels involve no tuning and no document model, so they behave the same on a
+statement, a contract or a scan.
+
+**The side-by-side: yes for text-based, single-column documents**, financial or
+not. Tested on deliberately unlike pairs:
+
+| Document | Result |
+|---|---|
+| Financial statements, two different toolchains | works; figure-level differences |
+| Legal contract — prose, numbered clauses, no tables | works; amendments as word diffs |
+| Statement using `1.234.567,89` (decimal comma) | works; figure-level differences |
+| Table with **left**-aligned figures | works; figure-level differences |
+| **Two-column page layout** (academic paper) | ⚠ columns merge — see below |
+| **Scanned pages**, no text layer | ⚠ nothing to align — use the exact layers |
+
+Two limitations are real and worth knowing before you trust a run:
+
+- **Multi-column page layouts merge.** Rows are built from shared text
+  baselines, so on a two-column page the left and right columns land on the same
+  baseline and become one row. Differences still surface, but they are attributed
+  to a merged passage rather than to the column they came from. Financial
+  statements are single-column, which is why this has not been addressed;
+  comparing academic or newspaper layouts would need column detection first.
+- **Scanned pages have nothing to reconstruct.** With no text layer there are no
+  paragraphs or tables to pair, so the side-by-side is empty and correctly says
+  so. The exact comparison still works — the image hash and pixel layers catch
+  the difference. OCR the files first if you need content-level comparison.
+
+Beyond those, the rules are heuristics and any of them can misfire on a layout
+they were not written for. The exact layers are always there to fall back on.
+
 ### What no layer can do
 
 Attributing a changed figure to a named line item *and column heading* needs

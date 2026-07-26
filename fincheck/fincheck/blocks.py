@@ -9,9 +9,11 @@ explicitly, in one place, with its rules written down:
 
 1. Spans sharing a text baseline form a **row**. Baselines are exact
    coordinates from the file, so this step is reliable.
-2. A row is a **figure row** when its numbers sit to the right of its label —
-   two or more numbers, or one number in the right-hand part of the page under
-   a short label. Prose with a figure quoted mid-sentence stays prose.
+2. A row is a **figure row** when its numbers form a run at the end of the
+   line, after whatever labels it. That holds wherever on the page the column
+   sits, so it needs no threshold: a clause number leads its text and stays
+   prose, a figure quoted mid-sentence has words after it and stays prose, and
+   a line of nothing but figures is a column header.
 3. Consecutive figure rows form a **table**; consecutive prose rows form a
    **paragraph**.
 4. A block continues across a page break when the text before the break does
@@ -33,9 +35,9 @@ from .numbers import parse_number
 
 # Baselines within this many points are the same row.
 _BASELINE_TOLERANCE = 2.0
-# A lone figure this far across the page (as a fraction of width) reads as a
-# column entry rather than as a number quoted in a sentence.
-_COLUMN_ZONE = 0.55
+# Tokens this short may follow a row's figures without making the line prose:
+# footnote asterisks and daggers routinely do.
+_TRAILING_MARKER = 2
 # Labels longer than this are prose, however many numbers they contain.
 _MAX_LABEL_WORDS = 16
 # A baseline gap this many times the page's usual line pitch starts a new block.
@@ -140,7 +142,33 @@ _FOLIO_RE = re.compile(r"^(?:page\s*)?\d{1,4}(?:\s*(?:of|/)\s*\d{1,4})?$", re.I)
 
 
 def _is_folio(row: "Row") -> bool:
+    """A page number, checked only against the page's first and last rows.
+
+    A bare number with nothing labelling it now reads as a figure row, so the
+    folio has to be recognised in that form too, not just as stray text.
+    """
+    if row.figures and not row.label:
+        return len(row.figures) == 1 and 0 < row.figures[0].value <= 9999
     return not row.figures and bool(_FOLIO_RE.match(row.label.strip()))
+
+
+def _is_number(word) -> bool:
+    return parse_number(word[4].strip()) is not None
+
+
+def _figures_trail_the_label(bucket) -> bool:
+    """Do this line's numbers form a run at its end, after any label text?
+
+    Trailing markers of a character or two — a footnote asterisk, a dagger — are
+    allowed to follow the figures, since they routinely do in a statement.
+    """
+    started = False
+    for word in sorted(bucket, key=lambda w: w[0]):
+        if _is_number(word):
+            started = True
+        elif started and len(word[4].strip()) > _TRAILING_MARKER:
+            return False
+    return started
 
 
 def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
@@ -163,8 +191,9 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
         else:
             buckets.append([word])
 
-    width = page.rect.width
-    rows: list[Row] = []
+    # Pass one: split every row into words and figures, without yet deciding
+    # whether those figures are table cells.
+    candidates = []
     for bucket in buckets:
         bucket.sort(key=lambda w: w[0])
         text_parts, figures = [], []
@@ -182,25 +211,46 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
                         x1=round(word[2], 2),
                     )
                 )
-        label = re.sub(r"\s+", " ", " ".join(text_parts)).strip()
+        candidates.append(
+            {
+                "bucket": bucket,
+                "label": re.sub(r"\s+", " ", " ".join(text_parts)).strip(),
+                "figures": figures,
+                "tabular": False,
+            }
+        )
 
-        # Decide whether those numbers are table cells or prose.
-        tabular = False
-        if figures and len(label.split()) <= _MAX_LABEL_WORDS:
-            if len(figures) >= 2:
-                tabular = True
-            elif figures[0].x0 > _COLUMN_ZONE * width:
-                tabular = True
-        if not tabular:
+    # Pass two: in a table row the figures form a run at the end of the line,
+    # after whatever labels it. That one property separates every case that
+    # matters, and needs no threshold on where the page the figures sit:
+    #
+    #   "Materialaufwand      456.789,12"   -> label, then figures: a row
+    #   "1.1 'Services' means the ..."      -> figure leads the text: prose
+    #   "...consideration of 1,234 crore"   -> text after the figure: prose
+    #   "30   2,025   31   2,025"           -> figures only: a header row
+    #
+    # A long label is prose whatever its numbers do, which catches a sentence
+    # that happens to end on a figure.
+    for row in candidates:
+        if row["figures"] and len(row["label"].split()) <= _MAX_LABEL_WORDS:
+            row["tabular"] = _figures_trail_the_label(row["bucket"])
+
+    rows: list[Row] = []
+    for row in candidates:
+        label, figures = row["label"], row["figures"]
+        if not row["tabular"]:
             # Keep the digits in the sentence they belong to.
             label = re.sub(
-                r"\s+", " ", " ".join(w[4].strip() for w in bucket)
+                r"\s+", " ", " ".join(w[4].strip() for w in row["bucket"])
             ).strip()
             figures = []
-
         rows.append(
-            Row(page=index + 1, baseline=round(bucket[0][3], 2),
-                label=label, figures=figures)
+            Row(
+                page=index + 1,
+                baseline=round(row["bucket"][0][3], 2),
+                label=label,
+                figures=figures,
+            )
         )
 
     # A bare number alone in the top or bottom margin is the folio, not content;

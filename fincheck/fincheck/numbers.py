@@ -24,6 +24,39 @@ def _strip_decorations(s: str) -> str:
     return s.strip()
 
 
+def _normalise_separators(s: str) -> str:
+    """Rewrite a figure's grouping so the decimal separator is a dot.
+
+    Conventions collide: ``1.234.567,89`` and ``1,234,567.89`` are the same
+    amount. Stripping commas and hoping, as this used to, turned the first into
+    ``456.78912`` -- a wrong number that still looks like a number, which is the
+    one failure mode a reconciliation must never have.
+
+    Only the unambiguous cases are rewritten, so nothing that parsed correctly
+    before changes meaning:
+
+    * both separators present -- whichever comes last is the decimal one;
+    * one separator repeated -- it must be grouping, not a decimal point;
+    * space-grouped digits with a single comma -- space grouping never pairs
+      with comma-as-thousands, so the comma is decimal.
+
+    A single separator on its own stays ambiguous (``1.234`` is 1.234 in one
+    convention and 1234 in another) and is left to the caller's default.
+    """
+    dot, comma = s.rfind("."), s.rfind(",")
+    if dot != -1 and comma != -1:
+        if comma > dot:
+            return s.replace(".", "").replace(",", ".")
+        return s.replace(",", "")
+    if s.count(",") > 1:
+        return s.replace(",", "")
+    if s.count(".") > 1:
+        return s.replace(".", "")
+    if s.count(",") == 1 and re.search(r"\d[\u00a0\u202f ]\d", s):
+        return s.replace(",", ".")
+    return s
+
+
 def parse_number(raw) -> float | None:
     """Return the numeric value of a financial token, or ``None``.
 
@@ -57,6 +90,8 @@ def parse_number(raw) -> float | None:
     s = _strip_decorations(s)
     # Drop a leading sign now that negativity has been recorded.
     s = s.lstrip("+-" + DASHES + " ")
+
+    s = _normalise_separators(s)
 
     # Thousands separators: commas, or spaces sitting between digit groups.
     compact = s.replace(",", "")

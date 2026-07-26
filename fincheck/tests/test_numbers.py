@@ -38,3 +38,31 @@ def test_is_numberish():
     assert is_numberish("(500)")
     assert not is_numberish("Total")
     assert not is_numberish("")
+
+
+def test_european_grouping_is_not_silently_mangled():
+    """1.234.567,89 and 1,234,567.89 are the same amount.
+
+    Stripping commas and hoping turned the first into 456.78912 — a wrong
+    number that still looks like a number, which is the one failure mode a
+    reconciliation must never have.
+    """
+    assert parse_number("1.234.567,89") == 1234567.89
+    assert parse_number("456.789,12") == 456789.12
+    assert parse_number("(1.234,56)") == -1234.56
+    # Space grouping never pairs with comma-as-thousands, so the comma decides.
+    assert parse_number("12 345,67") == 12345.67
+
+
+def test_anglo_grouping_still_parses_as_before():
+    assert parse_number("1,234,567.89") == 1234567.89
+    assert parse_number("1,234") == 1234.0
+    assert parse_number("(1,234)") == -1234.0
+    assert parse_number("1 234 567") == 1234567.0
+
+
+def test_a_single_separator_keeps_its_existing_reading():
+    """Genuinely ambiguous, so nothing that parsed before changes meaning."""
+    assert parse_number("1.234") == 1.234
+    assert parse_number("2.19") == 2.19
+    assert parse_number("1.5") == 1.5

@@ -307,6 +307,96 @@ def test_cli_writes_the_side_by_side_page(tmp_path, capsys):
     assert "worksheet" in printed
 
 
+# --------------------------------------------------------------------------
+# Documents that are not financial statements
+# --------------------------------------------------------------------------
+
+
+def test_a_single_money_column_is_found_by_right_edge_alignment(tmp_path):
+    """Figures that line up down the page form a column, wherever they sit.
+
+    A statement with one narrow money column keeps it well left of centre, so
+    asking whether a figure sits past some fraction of the page width missed it
+    and reduced the whole statement to prose.
+    """
+    lines = [
+        "Umsatzerloese          1.234.567,89",
+        "Materialaufwand          456.789,12",
+        "Personalaufwand          321.456,78",
+    ]
+    blocks = segment(make_pdf(tmp_path / "a.pdf", lines))
+    tables = [b for b in blocks if b.kind == "table"]
+
+    assert len(tables) == 1
+    assert len(tables[0].rows) == 3
+    assert [f.value for r in tables[0].rows for f in r.figures] == [
+        1234567.89,
+        456789.12,
+        321456.78,
+    ]
+
+
+def test_a_leading_clause_number_is_not_read_as_a_table_cell(tmp_path):
+    """Clause numbers align down the page too, but a cell follows its label."""
+    lines = [
+        "1.1 'Services' means the professional services described in a",
+        "1.2 'Deliverables' means any work product furnished to the Client",
+        "2.1 This Agreement commences on the Effective Date and continues",
+    ]
+    blocks = segment(make_pdf(tmp_path / "a.pdf", lines))
+
+    assert all(b.kind == "paragraph" for b in blocks)
+    assert not any(r.figures for b in blocks for r in b.rows)
+
+
+def test_a_contract_amendment_is_reported(tmp_path):
+    original = [
+        "2. TERM AND TERMINATION",
+        "2.1 This Agreement continues for a period of thirty-six (36) months.",
+        "2.2 Either party may terminate for material breach on 30 days notice.",
+    ]
+    amended = [
+        l.replace("thirty-six (36)", "twenty-four (24)").replace("30 days", "60 days")
+        for l in original
+    ]
+    a = make_pdf(tmp_path / "a.pdf", original)
+    b = make_pdf(tmp_path / "b.pdf", amended)
+
+    pairs, _, summary = compare(a, b)
+    changed = [p for p in pairs if p.a and p.b and p.changed]
+
+    assert summary.only_in_a == 0 and summary.only_in_b == 0
+    # The clauses run on consecutively, so they are one paragraph, and both
+    # amendments show up as word-level edits inside it.
+    assert len(changed) == 1
+    added = " ".join(t for op, t in changed[0].words if op == "+")
+    removed = " ".join(t for op, t in changed[0].words if op == "-")
+    assert "twenty-four" in added and "60" in added
+    assert "thirty-six" in removed and "30" in removed
+
+
+def test_a_page_with_no_text_layer_yields_nothing_to_align(tmp_path):
+    """A scan has no paragraphs to pair; only the exact pixel layer can speak."""
+    doc = fitz.open()
+    doc.new_page().insert_text((60, 100), "content", fontsize=12, fontname="helv")
+    src = tmp_path / "src.pdf"
+    doc.save(str(src))
+    doc.close()
+
+    rendered = fitz.open(str(src))[0].get_pixmap(dpi=72)
+    out = fitz.open()
+    page = out.new_page()
+    page.insert_image(page.rect, pixmap=rendered)
+    scan = tmp_path / "scan.pdf"
+    out.save(str(scan))
+    out.close()
+
+    _, sections, summary = compare(str(scan), str(scan))
+
+    assert summary.units_a == 0
+    assert sections == []
+
+
 def test_columns_are_named_after_how_each_pdf_was_produced(tmp_path):
     """"the Excel one" and "the HTML one" is how people refer to these files."""
     from fincheck.sidebyside import default_label
