@@ -1171,7 +1171,53 @@ def block_boundary_findings(pages_raw, soup):
             continue
         i = canon.find(c)
         if i < 0:
-            continue  # not located — the text check owns it
+            # Not located as a whole.  Before handing it to the text check —
+            # which can only call it a generic "close wording match" — test the
+            # specific shape a MOVED RUN OF WORDS makes: all but the last (or
+            # first) few words sit in the PDF as a complete line-bounded block,
+            # and the missing run appears somewhere else in the document.  Saying
+            # "these three words are in a different paragraph" is actionable;
+            # amber "close match" reads as probably-fine and was reported as a
+            # silent pass twice.
+            words = text.split()
+            for end in (True, False):
+                for k in range(1, 7):
+                    if len(words) - k < 8:
+                        break
+                    kept = words[:-k] if end else words[k:]
+                    run = words[-k:] if end else words[:k]
+                    ck = canonical(" ".join(kept), letters_only=True)
+                    cr = canonical(" ".join(run), letters_only=True)
+                    if len(ck) < BLOCK_BOUNDARY_MIN_LEN or len(cr) < 8:
+                        continue
+                    j = canon.find(ck)
+                    if j < 0:
+                        continue
+                    if not (j in starts and (j + len(ck)) in ends):
+                        continue
+                    if cr not in canon:
+                        continue  # the run is absent entirely — an omission
+                    if c in seen:
+                        break
+                    seen.add(c)
+                    where = "end" if end else "start"
+                    yield (
+                        "words-moved",
+                        "error",
+                        " ".join(run)[:80],
+                        f"Words in a different paragraph — “{' '.join(run)}” sits "
+                        f"at the {where} of this block in the HTML, but in the PDF "
+                        "this paragraph ends without them and those words appear "
+                        "in a DIFFERENT paragraph. Every word is present in both "
+                        "documents, so presence, count and canonical comparison "
+                        "all pass; only the paragraph they belong to has changed. "
+                        f"HTML block: “{text[:110]}”.",
+                    )
+                    break
+                else:
+                    continue
+                break
+            continue  # located or not, the text check owns the remainder
         seen.add(c)
         at_start, at_end = i in starts, (i + len(c)) in ends
         if at_start and at_end:

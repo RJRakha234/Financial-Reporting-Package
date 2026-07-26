@@ -625,3 +625,72 @@ def test_headings_and_lead_ins_are_exempt():
     pages = ["Extracted from the Condensed Consolidated Balance Sheet under IFRS "
              "as at: June 30, 2026"]
     assert list(block_boundary_findings(pages, soup)) == []
+
+
+# --- a run of words moved to a DIFFERENT paragraph ---------------------------
+#
+# The exact case from a segment-note stress test: the last three words of
+# "Business segments" ("in individual segments") moved to the end of "Segmental
+# capital employed". The boundary check flags the destination block, but the
+# SOURCE block previously got only a generic amber "close wording match", which
+# reads as probably-fine — reported as a silent pass twice. It is now named.
+
+_WM_BS = (
+    'Based on the "management approach" as required by Ind-AS 108 - Operating '
+    "Segments, the Chief Operating Decision Maker evaluates the Group's "
+    "performance and allocates resources based on an analysis of various "
+    "performance indicators by business segments. Accordingly, information has "
+    "been presented along these business segments. The accounting principles "
+    "used in the preparation of the financial statements are consistently "
+    "applied to record revenue and expenditure in individual segments."
+)
+_WM_SCE = (
+    "Assets and liabilities used in the Group's business are not identified to "
+    "any of the reportable segments, as these are used interchangeably between "
+    "segments. The Management believes that it is currently not practicable to "
+    "provide segment disclosures relating to total assets and liabilities since "
+    "a meaningful segregation of the available data is onerous."
+)
+
+
+def _wm_soup():
+    return BeautifulSoup(
+        "<html><body><p>Notes on segment information</p><p>Business segments</p>"
+        f"<p>{_WM_BS}</p><p>Segmental capital employed</p><p>{_WM_SCE}</p>"
+        "</body></html>", "html.parser")
+
+
+def _wm(bs, sce):
+    pages = ["Notes on segment information\nBusiness segments\n" + bs
+             + "\nSegmental capital employed\n" + sce]
+    return list(block_boundary_findings(pages, _wm_soup()))
+
+
+def test_faithful_segment_notes_are_silent():
+    assert _wm(_WM_BS, _WM_SCE) == []
+
+
+def test_moved_word_run_is_named_not_just_amber():
+    got = _wm(_WM_BS.replace(" in individual segments.", "."),
+              _WM_SCE + " in individual segments.")
+    moved = [g for g in got if g[0] == "words-moved"]
+    assert moved, "the moved run of words must be named, not left to amber"
+    assert moved[0][1] == "error"
+    assert "individual segments" in moved[0][2]
+    # and the destination block is flagged too, from the other direction
+    assert any(g[0] == "block-boundary" for g in got)
+
+
+def test_words_moved_from_the_START_of_a_block_is_caught():
+    # the mirror case: a run taken from the FRONT of a paragraph
+    bs = _WM_BS + " Assets and liabilities used"
+    sce = _WM_SCE.replace("Assets and liabilities used ", "", 1)
+    got = _wm(bs, sce)
+    assert any(g[0] in ("words-moved", "block-boundary") for g in got)
+
+
+def test_a_run_absent_from_the_pdf_entirely_is_not_called_moved():
+    # if the words appear NOWHERE in the PDF that is an addition, owned by the
+    # text check — calling it "moved" would misdescribe it
+    got = _wm(_WM_BS.replace(" in individual segments.", "."), _WM_SCE)
+    assert not [g for g in got if g[0] == "words-moved"]
