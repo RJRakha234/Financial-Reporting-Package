@@ -1049,3 +1049,56 @@ def test_reports_are_written_as_utf8_whatever_the_platform_default(tmp_path,
         # Declared, so a browser reads it back the same way.
         assert b'<meta charset="utf-8">' in raw
         assert path.read_text(encoding="utf-8")
+
+
+def test_a_table_row_shows_which_words_differ(tmp_path):
+    """The complaint this fixes: a row scores 98% and marks nothing.
+
+    Word diffs were computed for paragraphs only, so a table row whose wording
+    changed showed as a flat tint with no indication of *which* words moved —
+    which is the only question a reviewer has when they see 98%.
+    """
+    a = make_pdf(tmp_path / "a.pdf", ["Trade receivables, net of allowance   3,780   3,645"])
+    b = make_pdf(tmp_path / "b.pdf", ["Trade receivables, net of provision    3,780   3,645"])
+    out = tmp_path / "sbs.html"
+
+    result = side_by_side(a, b, output_html=str(out))
+    page = out.read_text()
+    pair = next(p for s in result.sections for p in s.pairs if p.a and p.b)
+
+    assert pair.kind == "row", "this is a table row, not prose"
+    assert pair.words, "a row must carry a word diff"
+    # The benchmark's word struck, the compared document's word inserted.
+    assert "<del>allowance</del>" in page
+    assert "<ins>provision</ins>" in page
+
+
+def test_a_formatting_only_difference_is_visible(tmp_path):
+    """99% with nothing you can see is not a usable answer.
+
+    Formatting marks were a dotted grey underline, invisible at a glance.
+    """
+    a = make_pdf(tmp_path / "a.pdf", ["Guidance for FY26 : strong growth ahead"])
+    b = make_pdf(tmp_path / "b.pdf", ["Guidance for FY26: strong growth ahead"])
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    page = out.read_text()
+
+    assert 'u.fmt{' in page
+    # Marked with a background colour of its own, not just an underline.
+    assert "u.fmt{text-decoration:none;background:var(--warn-bg)" in page
+    assert '<u class="fmt">' in page, "the differing token is marked"
+
+
+def test_the_legend_names_every_mark_used(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    page = out.read_text()
+
+    for legend in ("in benchmark only", "not in benchmark",
+                   "punctuation/spacing", "moved", "figure deviates"):
+        assert legend in page, legend

@@ -437,8 +437,13 @@ def align(
         pairs = _fuse_one_sided(pairs)
 
     for pair in pairs:
-        if pair.kind == "paragraph" and pair.a is not None and pair.b is not None:
-            pair.words = diff_words(pair.a.text, pair.b.text)
+        if pair.a is None or pair.b is None:
+            continue
+        # Table rows get a word diff on their label too, not just paragraphs.
+        # Without one, a row whose wording changed showed as a flat tint with
+        # no indication of *which* words moved — which is the only question the
+        # reviewer is actually asking when they see 98%.
+        pair.words = diff_words(pair.a.text, pair.b.text)
     return pairs
 
 

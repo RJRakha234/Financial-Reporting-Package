@@ -265,6 +265,44 @@ def _loc(text_html: str, unit, href: str, heights: dict, side: str) -> str:
     )
 
 
+def _marked(words, side: str) -> str:
+    """One side of a word diff, with every differing word marked.
+
+    ``side`` is ``"a"`` for the benchmark or ``"b"`` for the compared
+    document. Each side shows only what applies to it — the benchmark shows
+    what was struck, the other what was added — so the two read as documents
+    rather than as a merged diff.
+    """
+    out = []
+    for op, text in words:
+        if not text:
+            continue
+        if op == "=":
+            out.append(_e(text))
+        elif op == "~-" and side == "a":
+            out.append(f'<u class="fmt">{_e(text)}</u>')
+        elif op == "~+" and side == "b":
+            out.append(f'<u class="fmt">{_e(text)}</u>')
+        elif op == ">-" and side == "a":
+            out.append(f'<span class="mv">{_e(text)}</span>')
+        elif op == ">+" and side == "b":
+            out.append(f'<span class="mv">{_e(text)}</span>')
+        elif op == "-" and side == "a":
+            out.append(f"<del>{_e(text)}</del>")
+        elif op == "+" and side == "b":
+            out.append(f"<ins>{_e(text)}</ins>")
+    return " ".join(out)
+
+
+def _label_html(pair, unit, side: str) -> str:
+    """A row label, word-marked when the two sides word it differently."""
+    if pair.words and pair.a is not None and pair.b is not None:
+        marked = _marked(pair.words, side)
+        if marked.strip():
+            return marked
+    return _e(unit.text) or "&nbsp;"
+
+
 def _figure_cells(values, changed, missing: int = 0) -> str:
     """Figure spans; a changed cell names both readings in its tooltip.
 
@@ -317,13 +355,41 @@ def _tracked_figs(pair: Pair) -> str:
     return "".join(cells)
 
 
+def _tracked_words(words) -> str:
+    """A word diff as one tracked-changes pane: kept, struck and inserted."""
+    out = []
+    for op, text in words:
+        if not text:
+            continue
+        if op == "=":
+            out.append(_e(text))
+        elif op in ("~-", "~+"):
+            out.append(f'<u class="fmt">{_e(text)}</u>')
+        elif op in (">-", ">+"):
+            out.append(f'<span class="mv">{_e(text)}</span>')
+        elif op == "-":
+            out.append(f"<del>{_e(text)}</del>")
+        else:
+            out.append(f"<ins>{_e(text)}</ins>")
+    return " ".join(out)
+
+
 def _tracked_label(pair: Pair, tags: Tags) -> str:
-    """The row label as tracked changes: benchmark struck, replacement inserted."""
+    """The row label as tracked changes, marked word by word.
+
+    Striking the whole label and inserting the whole replacement was correct
+    but unreadable: on a row where one word changed it painted the entire line
+    twice and said nothing about which word it was.
+    """
     a, b = pair.a, pair.b
     if a is None:
         return f"<ins>{_e(b.text) or '&nbsp;'}</ins>"
     if b is None:
         return f"<del>{_e(a.text) or '&nbsp;'}</del>"
+    if pair.words and a.text != b.text:
+        marked = _tracked_words(pair.words)
+        if marked.strip():
+            return marked
     if pair.status == "label-differs" and a.text != b.text:
         return f"<del>{_e(a.text)}</del> <ins>{_e(b.text)}</ins>"
     return _loc(_e(a.text) or "&nbsp;", a, tags.href_a, tags.heights_a, "a")
@@ -356,7 +422,8 @@ def _stacked_row_html(pair: Pair, tags: Tags) -> str:
             f"</span>"
         )
 
-    label = (a or b).text
+    label_side = "a" if a is not None else "b"
+    label = _label_html(pair, a or b, label_side)
     label_cls = "label label--changed" if status == "label-differs" else "label"
     alt = ""
     if status == "label-differs" and a is not None and b is not None:
@@ -371,7 +438,7 @@ def _stacked_row_html(pair: Pair, tags: Tags) -> str:
         f'<td class="gut gut-a">{_spot_link(a, tags.href_a, tags.heights_a, "a")}</td>'
         f'<td class="stack">'
         f'<span class="{label_cls}">'
-        f'{_loc(_e(label) or "&nbsp;", a or b, tags.href_a if a else tags.href_b, tags.heights_a if a else tags.heights_b, "a" if a else "b")}'
+        f'{_loc(label, a or b, tags.href_a if a else tags.href_b, tags.heights_a if a else tags.heights_b, label_side)}'
         f"</span>{alt}"
         f'{line(a, b, tags.short_a, "a")}{line(b, a, tags.short_b, "b")}{tracked}'
         f"</td>"
@@ -400,7 +467,7 @@ def _row_pair_html(pair: Pair, tags: Tags) -> str:
         return (
             f'<td class="side side-{letter}">'
             f'<span class="{label_cls}">'
-            f'{_loc(_e(unit.text) or "&nbsp;", unit, href, heights, letter)}</span>'
+            f'{_loc(_label_html(pair, unit, letter), unit, href, heights, letter)}</span>'
             f'<span class="figs">{_figure_cells(unit.values, changed, gap)}</span>'
             f"</td>"
         )
@@ -1068,12 +1135,19 @@ body.view-tracked .colhead,body.view-before .colhead,body.view-after .colhead{
   border-bottom:1px solid var(--rule-soft);padding:.3rem 0}
 .prose .side{width:auto;min-width:0}
 .para{margin:0;font-size:.87rem;max-width:68ch}
-del{background:var(--del-bg);color:var(--del);text-decoration:line-through}
-u.fmt{text-decoration:none;border-bottom:1px dotted var(--muted);color:var(--ink-soft)}
+/* Every differing word carries a colour of its own, so what to look at is
+   never a matter of squinting. A formatting-only difference used to be a
+   dotted grey underline, which on a 99% row was invisible — and "99% and I
+   cannot see why" is the one thing a reviewer cannot work with. */
+del{background:var(--del-bg);color:var(--del);text-decoration:line-through;
+  border-radius:2px;padding:0 .12rem;font-weight:600}
+ins{background:var(--add-bg);color:var(--add);text-decoration:none;
+  border-radius:2px;padding:0 .12rem;font-weight:600}
+u.fmt{text-decoration:none;background:var(--warn-bg);color:var(--warn);
+  border-bottom:1px dotted var(--warn);border-radius:2px;padding:0 .12rem}
 /* Words that only changed place. Every one is present on both sides. */
 .mv{background:var(--bench-bg);border-bottom:1px dashed var(--bench);
-  color:var(--ink-soft)}
-ins{background:var(--add-bg);color:var(--add);text-decoration:none}
+  color:var(--bench);border-radius:2px;padding:0 .12rem}
 
 /* ---- executive verdict ---- */
 .verdict{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));
@@ -1650,8 +1724,10 @@ def write_side_by_side(
     <label><input type="checkbox" id="hide-oneside"> Hide {one_sided:,} one-sided</label>
     {unmarked_filter}
     <span class="key"><i style="background:var(--differs-bg)"></i> figure deviates</span>
-    <span class="key"><i style="background:var(--del-bg)"></i> text in benchmark only</span>
-    <span class="key"><i style="background:var(--add-bg)"></i> text not in benchmark</span>
+    <span class="key"><i style="background:var(--del-bg)"></i> in benchmark only</span>
+    <span class="key"><i style="background:var(--add-bg)"></i> not in benchmark</span>
+    <span class="key"><i style="background:var(--warn-bg)"></i> punctuation/spacing</span>
+    <span class="key"><i style="background:var(--bench-bg)"></i> moved</span>
     <span>{s.paragraphs_matched:,} paragraphs &middot; {s.rows_matched:,} table rows</span>
   </div>
 
