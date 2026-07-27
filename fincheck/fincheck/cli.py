@@ -324,7 +324,29 @@ def compare_main(argv: list[str]) -> int:
     return 0 if result.identical else 1
 
 
+def _make_output_safe() -> None:
+    """Never let the console's encoding kill a run that has already worked.
+
+    The tool prints document text — figures with rupee signs, en-dashes, curly
+    quotes — and a Windows console may be cp1252, cp437 or cp850, none of which
+    can represent all of it. Python then raises UnicodeEncodeError *while
+    printing the results*, after every output file has been written
+    successfully, which is the most infuriating possible moment to fail.
+
+    UTF-8 is requested, and characters the terminal genuinely cannot show are
+    replaced rather than fatal. The files on disk are always full UTF-8
+    regardless of what the terminal can display.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # A pipe, a captured stream, or an old Python: not worth failing for.
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _make_output_safe()
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "compare":
         return compare_main(argv[1:])

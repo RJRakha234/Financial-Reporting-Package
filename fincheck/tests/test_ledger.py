@@ -9,7 +9,7 @@ on the pairing being right.
 import fitz
 
 from fincheck import side_by_side
-from fincheck.ledger import reconcile
+from fincheck.ledger import describe, reconcile
 
 
 def write(path, lines, width=595):
@@ -146,3 +146,34 @@ def test_a_footnote_marker_is_not_read_as_a_negative_figure(tmp_path):
     assert all(not r.figures for b in blocks for r in b.rows), (
         "a bare footnote marker must not become a figure"
     )
+
+
+def test_the_console_output_survives_a_narrow_terminal_encoding(tmp_path, capsys):
+    """The run must not die *after* writing every file, while printing results.
+
+    A Windows console may be cp1252, cp437 or cp850. The tool prints document
+    text — rupee signs, en-dashes, the multiplication sign in the ledger — and
+    an unencodable character there raised UnicodeEncodeError at the very last
+    step, after all the work had succeeded.
+    """
+    import io
+    import sys
+
+    from fincheck.cli import _make_output_safe
+
+    a = write(tmp_path / "a.pdf", STATEMENT)
+    b = write(tmp_path / "b.pdf", STATEMENT)
+
+    # A stream that can only carry ASCII, as a narrow code page effectively is.
+    narrow = io.TextIOWrapper(io.BytesIO(), encoding="ascii")
+    original = sys.stdout
+    sys.stdout = narrow
+    try:
+        _make_output_safe()
+        print(describe(reconcile(a, b), "benchmark", "compared"))
+        print("printed 3× here, 2× there — ₹4,185")
+    finally:
+        sys.stdout = original
+
+    # It printed rather than raising; that is the whole requirement.
+    assert narrow.encoding in ("utf-8", "ascii")
