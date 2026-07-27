@@ -480,6 +480,12 @@ def _paragraph_html(pair: Pair, tags: Tags) -> str:
             tracked_parts.append(f'<u class="fmt">{_e(text)}</u>')
         elif op == "~+":
             right_parts.append(f'<u class="fmt">{_e(text)}</u>')
+        elif op == ">-":
+            # Same words, elsewhere in the passage. Not an edit.
+            left_parts.append(f'<span class="mv">{_e(text)}</span>')
+            tracked_parts.append(f'<span class="mv">{_e(text)}</span>')
+        elif op == ">+":
+            right_parts.append(f'<span class="mv">{_e(text)}</span>')
         elif op == "-":
             left_parts.append(f"<del>{_e(text)}</del>")
             tracked_parts.append(f"<del>{_e(text)}</del>")
@@ -534,6 +540,7 @@ def _collapse_wrapping(pairs: list[Pair], render, tags: Tags) -> list[str]:
 _STATUS_LABEL = {
     "same": "matches benchmark",
     "formatting": "formatting only",
+    "reordered": "same words, reordered",
     "changed": "deviates",
     "added": "not in benchmark",
     "removed": "benchmark only",
@@ -984,6 +991,7 @@ body.hide-unmarked .sec--unmarked{display:none}
   padding:.14rem .42rem;border:1px solid currentColor;border-radius:2px;white-space:nowrap}
 .chip--same{color:var(--muted)} .chip--changed{color:var(--differs)}
 .chip--formatting{color:var(--accent)}
+.chip--reordered{color:var(--bench)}
 .chip--added{color:var(--add)} .chip--removed{color:var(--del)}
 .chip--moved{color:var(--bench)}
 /* Composite match score, banded the way the reviewer reads it:
@@ -1062,6 +1070,9 @@ body.view-tracked .colhead,body.view-before .colhead,body.view-after .colhead{
 .para{margin:0;font-size:.87rem;max-width:68ch}
 del{background:var(--del-bg);color:var(--del);text-decoration:line-through}
 u.fmt{text-decoration:none;border-bottom:1px dotted var(--muted);color:var(--ink-soft)}
+/* Words that only changed place. Every one is present on both sides. */
+.mv{background:var(--bench-bg);border-bottom:1px dashed var(--bench);
+  color:var(--ink-soft)}
 ins{background:var(--add-bg);color:var(--add);text-decoration:none}
 
 /* ---- executive verdict ---- */
@@ -1417,6 +1428,7 @@ def write_side_by_side(
 
     def _pill(status: str) -> str:
         word = {"same": "agrees", "formatting": "formatting only",
+                "reordered": "reordered",
                 "changed": "deviates", "added": "not in benchmark",
                 "removed": "benchmark only"}.get(status, status)
         return f'<span class="chip chip--{status}">{word}</span>'

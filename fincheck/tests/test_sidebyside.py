@@ -930,3 +930,43 @@ def test_a_real_wording_change_is_still_a_change(tmp_path):
     assert pair.status == "changed"
     assert pair.changed
     assert any(op == "-" for op, _ in pair.words)
+
+
+def test_words_that_only_changed_place_are_not_an_edit():
+    """A signature block set in a different column order is not a rewording.
+
+    Reported as a deletion and an insertion, an auditor reads identical text
+    as wording that changed — the single most alarming false positive this
+    tool can produce.
+    """
+    from fincheck.align import diff_words
+
+    ops = diff_words(
+        "For DELOITTE Place: Bengaluru Date: July 23, 2025 Partner Membership",
+        "For DELOITTE Partner Membership Place: Bengaluru Date: July 23, 2025",
+    )
+
+    assert not any(op in ("-", "+") for op, _ in ops), "nothing added or removed"
+    assert any(op == ">-" for op, _ in ops) and any(op == ">+" for op, _ in ops)
+
+
+def test_a_reorder_does_not_swallow_a_real_addition():
+    """The relocation must be per word, or a genuine edit hides inside a move."""
+    from fincheck.align import diff_words
+
+    ops = diff_words("alpha beta gamma", "gamma alpha beta delta")
+
+    assert ("+", "delta") in ops, "the new word is still an addition"
+    assert any(op == ">+" for op, _ in ops), "the moved word is marked as moved"
+
+
+def test_reordered_text_scores_as_content_that_agrees(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", ["Place Bengaluru Date July Partner Membership"])
+    b = make_pdf(tmp_path / "b.pdf", ["Partner Membership Place Bengaluru Date July"])
+
+    result = side_by_side(a, b)
+    pair = next(p for s in result.sections for p in s.pairs if p.a and p.b)
+
+    assert pair.status == "reordered"
+    assert not pair.changed, "every word is present on both sides"
+    assert pair.score == 99

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import DEFAULT_DPI, analyze, compare, side_by_side
+from .combine import combine
 from .compare_report import comparison_to_console, comparison_to_json
 from .diffmark import write_diff_pdf
 from .ledger import describe
@@ -61,9 +62,13 @@ def build_compare_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source",
         metavar="PDF",
+        nargs="+",
         help="the benchmark PDF (auditor's form of the first positional); "
         "with --compared and --output DIR, writes comparison_report.html, "
-        "source_annotated.pdf and compared_annotated.pdf into DIR",
+        "source_annotated.pdf and compared_annotated.pdf into DIR. Give "
+        "several files — an auditor's report and the statements it opines on, "
+        "say — and they are joined in order into one benchmark, keeping their "
+        "section numbers",
     )
     parser.add_argument(
         "--compared",
@@ -180,12 +185,38 @@ def compare_main(argv: list[str]) -> int:
         if not (args.source and args.compared):
             print("error: --source and --compared go together", file=sys.stderr)
             return 2
-        source, compared = Path(args.source), Path(args.compared)
-        for path in (source, compared):
+        sources = [Path(p) for p in args.source]
+        compared = Path(args.compared)
+        for path in sources + [compared]:
             if not path.is_file():
                 print(f"error: file not found: {path}", file=sys.stderr)
                 return 2
-        return _audit_run(source, compared, Path(args.output or "./results"))
+
+        out_dir = Path(args.output or "./results")
+        source = sources[0]
+        if len(sources) > 1:
+            # A reporting package split across files is one benchmark. Joined
+            # here so the reviewer can hold the exact document compared.
+            out_dir.mkdir(parents=True, exist_ok=True)
+            joined = combine([str(p) for p in sources],
+                             str(out_dir / "source_combined.pdf"))
+            print(
+                f"Benchmark assembled from {len(sources)} files "
+                f"({joined.page_count} pages): {joined.path}"
+            )
+            for path, first, pages in joined.parts:
+                name = Path(path).name
+                print(f"  p{first}-{first + pages - 1}  {name}")
+            for label, one, two in joined.collisions:
+                print(
+                    f"  warning: section {label} is numbered in both "
+                    f"{Path(one).name} and {Path(two).name}",
+                    file=sys.stderr,
+                )
+            print()
+            source = Path(joined.path)
+
+        return _audit_run(source, compared, out_dir)
 
     if not (args.pdf_a and args.pdf_b):
         print(

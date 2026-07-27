@@ -215,12 +215,19 @@ class Pair:
             return "same"
         if all(op in ("=", "~-", "~+") for op, _ in self.words):
             return "formatting"
+        if all(op in ("=", "~-", "~+", ">-", ">+") for op, _ in self.words):
+            # Every word survives; only its place in the passage changed.
+            return "reordered"
         return "changed"
 
     @property
     def changed(self) -> bool:
-        """A difference in content. Formatting alone does not count."""
-        return self.status not in ("same", "formatting")
+        """A difference in content.
+
+        Formatting alone does not count, and neither does text that merely
+        moved within the passage: every word is still there.
+        """
+        return self.status not in ("same", "formatting", "reordered")
 
     @property
     def formatting_only(self) -> bool:
@@ -256,7 +263,7 @@ class Pair:
         status = self.status
         if status == "same":
             return 100
-        if status == "formatting":
+        if status in ("formatting", "reordered"):
             return 99
         if self.kind == "row":
             label = difflib.SequenceMatcher(
@@ -272,8 +279,8 @@ class Pair:
         # Prose: character-weighted share of the words the sides share.
         # Formatting variants ("FY26 :" vs "FY26:") count as shared.
         eq = sum(len(t) for op, t in self.words if op == "=")
-        fmt_a = sum(len(t) for op, t in self.words if op == "~-")
-        fmt_b = sum(len(t) for op, t in self.words if op == "~+")
+        fmt_a = sum(len(t) for op, t in self.words if op in ("~-", ">-"))
+        fmt_b = sum(len(t) for op, t in self.words if op in ("~+", ">+"))
         del_a = sum(len(t) for op, t in self.words if op == "-")
         ins_b = sum(len(t) for op, t in self.words if op == "+")
         total = 2 * eq + fmt_a + fmt_b + del_a + ins_b
@@ -730,14 +737,20 @@ def diff_words(a: str, b: str) -> list[tuple[str, str]]:
     """Word-level diff of two paragraphs, as ``(op, text)`` runs.
 
     Ops are ``=`` unchanged, ``-`` only on the left, ``+`` only on the right,
-    and ``~-`` / ``~+`` the same words set differently on each side.
+    ``~-`` / ``~+`` the same words set differently on each side, and ``>-`` /
+    ``>+`` words that appear on both sides but in a different place.
 
-    That last one matters. Words are split on whitespace, so "FY26 :" and
+    The ``~`` pair matters. Words are split on whitespace, so "FY26 :" and
     "FY26:" are different tokens and the whole of FY26 was being reported as
     deleted and re-added — alarming, and wrong, since nothing about the content
     changed. Where a replaced run holds the same letters and digits on both
     sides, only the punctuation, spacing or bullet glyph moved, and it is
     reported as such rather than as an edit.
+
+    The ``>`` pair matters for the same reason at a larger scale. Two documents
+    setting the same signature block in different column orders produce a run
+    deleted here and the identical run inserted there; reported as an edit, an
+    auditor reads it as wording that changed when not one word did.
     """
     wa, wb = a.split(), b.split()
     out: list[tuple[str, str]] = []
@@ -759,6 +772,47 @@ def diff_words(a: str, b: str) -> list[tuple[str, str]]:
         else:
             out.append(("-", left))
             out.append(("+", right))
+    return _mark_moved(out)
+
+
+def _mark_moved(ops: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Retag words that were only relocated inside the passage.
+
+    Words deleted in one place and inserted in another are the same words: the
+    passage was rearranged, not edited. Matching is per word and by multiset,
+    so a run that is half relocated and half genuinely new still reports the
+    new half as an addition.
+    """
+    removed = Counter(w.lower() for op, t in ops if op == "-" for w in t.split())
+    added = Counter(w.lower() for op, t in ops if op == "+" for w in t.split())
+    shared = removed & added
+    if not shared:
+        return ops
+
+    # One budget per side: a word relocated once is relocated on both sides,
+    # and a single shared counter would spend the left side's budget before
+    # the right side could claim it.
+    budget = {"-": Counter(shared), "+": Counter(shared)}
+    out: list[tuple[str, str]] = []
+    for op, text in ops:
+        if op not in ("-", "+"):
+            out.append((op, text))
+            continue
+        # Split the run at the boundary between relocated and genuinely
+        # one-sided words, so neither is mislabelled as the other.
+        run, run_op = [], None
+        for word in text.split():
+            moved = budget[op][word.lower()] > 0
+            if moved:
+                budget[op][word.lower()] -= 1
+            this_op = (">" + op[-1]) if moved else op
+            if this_op != run_op and run:
+                out.append((run_op, " ".join(run)))
+                run = []
+            run_op = this_op
+            run.append(word)
+        if run:
+            out.append((run_op, " ".join(run)))
     return out
 
 
