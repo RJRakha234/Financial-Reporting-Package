@@ -1166,3 +1166,26 @@ def test_previews_can_be_switched_off_for_a_small_file(tmp_path):
     assert "data:image/" not in small.read_text()
     # The way back to the source survives: the cells still link to the PDFs.
     assert ".marked.pdf#page=" in small.read_text() or "a2.pdf#page=" in small.read_text()
+
+
+def test_every_mark_is_a_shape_as_well_as_a_colour(tmp_path):
+    """Roughly one man in twelve cannot separate the red from the green.
+
+    Simulating deuteranopia on the mark tints puts deleted and inserted at a
+    contrast ratio of 1.01 — indistinguishable. The form has to carry the
+    meaning, so each mark gets one of its own.
+    """
+    a = make_pdf(tmp_path / "a.pdf", ["The term is thirty-six months",
+                                      "Revenue   4,941   4,714"])
+    b = make_pdf(tmp_path / "b.pdf", ["The term is twenty-four months",
+                                      "Revenue   4,941   4,715"])
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    css = out.read_text()
+
+    assert "del{" in css and "text-decoration:line-through" in css
+    assert "ins{" in css and "text-decoration:underline" in css
+    assert "u.fmt{" in css and "border-bottom:1px dotted" in css
+    assert ".mv{" in css and "border-bottom:1px dashed" in css
+    assert ".fig--changed{" in css and "box-shadow:inset 0 -2px 0" in css

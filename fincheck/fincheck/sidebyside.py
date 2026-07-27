@@ -817,7 +817,7 @@ _CSS = """
   --muted:#6C736E; --rule:#C8CEC9; --rule-soft:#E4E7E2; --accent:#0E5A56;
   --differs:#9B3220; --differs-bg:#F6E3DE; --same:#2C6A4E;
   --add:#1F6F4A; --add-bg:#DFF0E5; --del:#9B3220; --del-bg:#F8E4DF;
-  --bench:#8A6B2E; --bench-bg:#F5EEDC;
+  --bench:#7C5F26; --bench-bg:#F5EEDC;
   --warn:#7E6410; --warn-bg:#F3EDCC;
   --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
   --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -844,7 +844,7 @@ _CSS = """
   --muted:#6C736E; --rule:#C8CEC9; --rule-soft:#E4E7E2; --accent:#0E5A56;
   --differs:#9B3220; --differs-bg:#F6E3DE; --same:#2C6A4E;
   --add:#1F6F4A; --add-bg:#DFF0E5; --del:#9B3220; --del-bg:#F8E4DF;
-  --bench:#8A6B2E; --bench-bg:#F5EEDC;
+  --bench:#7C5F26; --bench-bg:#F5EEDC;
   --warn:#7E6410; --warn-bg:#F3EDCC;
 }
 *{box-sizing:border-box}
@@ -1142,7 +1142,11 @@ table.rows td{vertical-align:top;padding:.3rem .55rem;border-bottom:1px solid va
 .figs{display:block;margin-top:.15rem;white-space:nowrap}
 .fig{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.78rem;
   display:inline-block;min-width:4.6rem;text-align:right;padding:0 .25rem;color:var(--ink-soft)}
-.fig--changed{background:var(--differs-bg);color:var(--differs);font-weight:600;border-radius:2px}
+/* A deviating figure carries a rule under it as well as a colour: roughly one
+   man in twelve cannot separate the red from the green beside it, and a
+   reconciliation must not depend on that. */
+.fig--changed{background:var(--differs-bg);color:var(--differs);font-weight:600;
+  border-radius:2px;box-shadow:inset 0 -2px 0 var(--differs)}
 .fig--absent{color:var(--differs);opacity:.85}
 .absent{font-size:.74rem;color:var(--muted);font-style:italic}
 .r--figures-differ .label,.r--columns-differ .label{color:var(--ink)}
@@ -1188,7 +1192,12 @@ body.view-tracked .colhead,body.view-before .colhead,body.view-after .colhead{
    cannot see why" is the one thing a reviewer cannot work with. */
 del{background:var(--del-bg);color:var(--del);text-decoration:line-through;
   border-radius:2px;padding:0 .12rem;font-weight:600}
-ins{background:var(--add-bg);color:var(--add);text-decoration:none;
+/* Underlined, as an insertion is in tracked changes — and because roughly one
+   man in twelve cannot separate this green from the red beside it, so the
+   difference has to be a shape and not only a colour. Struck through, solid
+   underline, dotted, dashed: four marks, four forms. */
+ins{background:var(--add-bg);color:var(--add);text-decoration:underline;
+  text-decoration-thickness:1px;text-underline-offset:2px;
   border-radius:2px;padding:0 .12rem;font-weight:600}
 u.fmt{text-decoration:none;background:var(--warn-bg);color:var(--warn);
   border-bottom:1px dotted var(--warn);border-radius:2px;padding:0 .12rem}
