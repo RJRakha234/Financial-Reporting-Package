@@ -1554,7 +1554,8 @@ def write_side_by_side(
             f'<script id="previews" type="application/json">{payload}</script>\n'
         )
 
-    page = f"""<title>Benchmark comparison — {_e(meta.pdf_b.rsplit('/', 1)[-1])} against {_e(meta.pdf_a.rsplit('/', 1)[-1])}</title>
+    page = f"""<meta charset="utf-8">
+<title>Benchmark comparison — {_e(meta.pdf_b.rsplit('/', 1)[-1])} against {_e(meta.pdf_a.rsplit('/', 1)[-1])}</title>
 <style>{_CSS}</style>
 <div class="wrap">
   <div class="hero">
@@ -1674,6 +1675,9 @@ def write_side_by_side(
 </div>
 {previews_json}<script>{_JS}</script>
 """
-    with open(output_path, "w") as fh:
+    # UTF-8 explicitly: a filing is full of ₹, €, en-dashes and curly quotes,
+    # and on Windows the default encoding is cp1252, which cannot represent
+    # them. Writing the report crashed on the rupee sign.
+    with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(page)
     return output_path

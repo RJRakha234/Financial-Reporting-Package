@@ -1021,3 +1021,31 @@ def test_the_console_payload_marks_only_real_differences(tmp_path):
         assert item["cells"][0]["differs"] is False, "the benchmark never differs"
         # Identical documents: nothing requires a decision.
         assert item["cells"][1]["differs"] is False
+
+
+def test_reports_are_written_as_utf8_whatever_the_platform_default(tmp_path,
+                                                                   monkeypatch):
+    """A filing is full of ₹, € and curly quotes.
+
+    On Windows the default text encoding is cp1252, which cannot represent any
+    of them, so writing the report died with UnicodeEncodeError on the rupee
+    sign. The encoding must be stated, not inherited.
+    """
+    import locale
+
+    a = make_pdf(tmp_path / "a.pdf", ["Revenue   4,941   4,714"])
+    b = make_pdf(tmp_path / "b.pdf", ["Revenue   4,941   4,715"])
+    out, console = tmp_path / "sbs.html", tmp_path / "con.html"
+
+    # Pretend the platform default cannot encode the rupee sign, and put one
+    # into the page the way a filing does.
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda *a, **k: "cp1252")
+    side_by_side(a, b, output_html=str(out), console_html=str(console),
+                 label_a="Statements ₹ crore", label_b="Exhibit ₹ crore")
+
+    for path in (out, console):
+        raw = path.read_bytes()
+        assert "₹".encode("utf-8") in raw, f"{path.name} lost the rupee sign"
+        # Declared, so a browser reads it back the same way.
+        assert b'<meta charset="utf-8">' in raw
+        assert path.read_text(encoding="utf-8")

@@ -678,7 +678,8 @@ def write_console(sections, meta, output_path: str) -> str:
     need = sum(
         1 for x in sections if x.status in ("changed", "added", "removed")
     )
-    page = f"""<title>Review console — {_e(meta.label_b)} against {_e(meta.label_a)}</title>
+    page = f"""<meta charset="utf-8">
+<title>Review console — {_e(meta.label_b)} against {_e(meta.label_a)}</title>
 <style>{_CSS}</style>
 <div class="wrap">
   <p class="eyebrow">Financial reporting &middot; interactive review</p>
