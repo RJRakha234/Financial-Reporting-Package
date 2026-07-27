@@ -17,7 +17,7 @@ Optional: `pip install pytest` to run the test suite, `reportlab` for
 
 ```bash
 cd fincheck
-python3 -m pytest tests/ -q      # 126 tests, ~3 seconds
+python3 -m pytest tests/ -q      # 140 tests, ~4 seconds
 ```
 
 ## 3. Compare a filing against its source
@@ -45,12 +45,13 @@ python3 -m fincheck compare \
 
 | File | What it is |
 |---|---|
-| `comparison_report.html` | Self-contained review console. Open it in any browser. |
+| `comparison_report.html` | Side-by-side reading report: every passage beside its counterpart, tracked changes, match scores, in-page previews of the highlighted source. |
+| `review_console.html` | Working surface: one card per item, Accept/Reject on every difference, progress bar, CSV/JSON export. |
 | `source_annotated.pdf` | The benchmark with everything compared tinted by outcome, sections numbered, bookmarks per section. |
 | `compared_annotated.pdf` | The same for the filed document. |
 | `source_combined.pdf` | Only when several source files were joined — the exact benchmark that was compared. |
 
-Keep the three files **in the same folder**; the report links into the PDFs.
+Keep these **in the same folder**; both HTML files link into the PDFs.
 
 ### Reading the console output
 
@@ -72,7 +73,31 @@ document` means exactly that.
 Exit status is `0` when nothing deviates and `1` otherwise, so it drops
 straight into a release gate.
 
-## 4. Using the report
+## 4. Comparing against the HTML instead of a PDF of it
+
+If the filed exhibit is HTML, compare **that**, not a PDF printed from it:
+
+```bash
+python3 -m fincheck compare \
+    --source  statements.pdf \
+    --compared exv99w08.htm \
+    --output  ./results/
+```
+
+This matters more than it sounds. Printing an exhibit to PDF clips wide
+tables at the page margin and can mangle currency signs. Measured on a real
+filing, **every** amount the PDF comparison reported as missing was present in
+the HTML — a 100% false-alarm rate — while the same run against the HTML
+reported none. The tool detects real changes either way; it is specificity
+that the conversion destroys.
+
+Trade-off: an HTML filing has no pages, so no annotated copy is written for
+that side, and the row-level pairing is looser (an Excel-exported PDF and
+EDGAR markup group rows differently). Run both — the PDF pair for the readable
+worksheet and the annotated copies, the HTML pair for the reconciliation you
+rely on.
+
+## 5. Using the report
 
 - **Accept / Reject** on each deviating section; progress is saved in your
   browser and exports to **CSV or JSON**.
@@ -82,7 +107,22 @@ straight into a release gate.
   with the exact passage spotlighted.
 - **Only undecided** hides what you have already settled.
 
-## 5. Marking sections by hand (optional)
+### The review console
+
+`review_console.html` is the operating surface rather than the reading one:
+
+- One card per item, in order, one column per document.
+- Differences marked **word by word**. Orange = words the benchmark has that
+  this document does not; blue = words here the benchmark lacks.
+- **Track changes / Before / After** moves only the strikethrough — the text
+  and both colours stay on screen, so nothing re-flows under you. Global, or
+  per cell.
+- **Accept / Reject** on every difference, with a live progress bar. Benchmark
+  cells, matching cells and absent content need no decision and are excluded
+  from the count.
+- Decisions save to the browser and survive a reload; export as CSV or JSON.
+
+## 6. Marking sections by hand (optional)
 
 Unmarked documents are sectioned automatically — each page of the benchmark
 becomes a section — which on a real 41-page filing scored 95% with nothing left
@@ -94,7 +134,7 @@ region and type a **number** as the comment. Number the corresponding regions
 identically in both PDFs. Content marked `7` is then compared only against
 content marked `7`.
 
-## 6. Other commands
+## 7. Other commands
 
 ```bash
 # Exact comparison — bytes, glyphs, vectors, rendered pixels. Proof, not inference.
@@ -105,7 +145,7 @@ python3 -m fincheck compare old.pdf new.pdf --json
 python3 -m fincheck statements.pdf            # writes statements.highlighted.pdf
 ```
 
-## 7. Using it as a library
+## 8. Using it as a library
 
 ```python
 from fincheck import side_by_side
@@ -113,6 +153,7 @@ from fincheck import side_by_side
 result = side_by_side(
     "source.pdf", "filed.pdf",
     output_html="report.html",
+    console_html="review_console.html",
     marked_pdf_a="source_annotated.pdf",
     marked_pdf_b="filed_annotated.pdf",
 )
