@@ -345,8 +345,23 @@ def _heads_a_section(rows: list[Row], i: int) -> bool:
     return False
 
 
+def is_html(path: str) -> bool:
+    """Is this an HTML filing rather than a PDF?"""
+    return path.lower().endswith((".htm", ".html", ".xhtml"))
+
+
 def segment(pdf_path: str) -> list[Block]:
-    """Split a PDF into an ordered list of paragraph and table blocks."""
+    """Split a document into an ordered list of paragraph and table blocks.
+
+    Reads a PDF by reconstructing structure from page geometry, or an HTML
+    filing by reading the structure it states. The blocks are the same either
+    way, so nothing downstream needs to know which it got.
+    """
+    if is_html(pdf_path):
+        from .htmlblocks import segment_html
+
+        return segment_html(pdf_path)
+
     doc = fitz.open(pdf_path)
     try:
         rows: list[Row] = []

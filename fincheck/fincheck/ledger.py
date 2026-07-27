@@ -182,7 +182,22 @@ def _figures_on_page(page) -> list[Occurrence]:
 
 
 def read_figures(pdf_path: str) -> dict:
-    """``{value: [Occurrence]}`` for every figure printed in the document."""
+    """``{value: [Occurrence]}`` for every figure printed in the document.
+
+    Works on a PDF or an HTML filing; the reconciliation is the same either
+    way, because it only ever asks which numbers are present and how often.
+    """
+    from .blocks import is_html
+
+    if is_html(pdf_path):
+        from .htmlblocks import figures_in_html
+        from collections import defaultdict as _dd
+
+        out: dict = _dd(list)
+        for occurrence in figures_in_html(pdf_path):
+            out[occurrence.value].append(occurrence)
+        return dict(out)
+
     doc = fitz.open(pdf_path)
     try:
         out: dict = defaultdict(list)

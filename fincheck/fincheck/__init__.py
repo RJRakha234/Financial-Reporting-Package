@@ -318,6 +318,13 @@ def side_by_side(
 
     led = reconcile(pdf_a, pdf_b) if figure_ledger else None
 
+    # An HTML filing has no pages to annotate. The report still links its
+    # rows; there is simply no marked-up copy of that side to link into.
+    from .blocks import is_html
+
+    if is_html(pdf_a) or is_html(pdf_b):
+        marked_pdf_a = marked_pdf_b = None
+
     copies = None
     if marked_pdf_a and marked_pdf_b:
         copies = write_marked_copies(
@@ -328,7 +335,10 @@ def side_by_side(
     if output_html is not None:
         import fitz
 
-        doc_a, doc_b = fitz.open(pdf_a), fitz.open(pdf_b)
+        blank = fitz.open()
+        blank.new_page()
+        doc_a = blank if is_html(pdf_a) else fitz.open(pdf_a)
+        doc_b = blank if is_html(pdf_b) else fitz.open(pdf_b)
         try:
             producer_a = doc_a.metadata.get("producer") or ""
             producer_b = doc_b.metadata.get("producer") or ""
@@ -362,8 +372,11 @@ def side_by_side(
                 ledger=led,
             )
         finally:
-            doc_a.close()
-            doc_b.close()
+            if doc_a is not blank:
+                doc_a.close()
+            if doc_b is not blank:
+                doc_b.close()
+            blank.close()
         written = write_side_by_side(sections, meta, output_html)
 
     return SideBySideResult(
