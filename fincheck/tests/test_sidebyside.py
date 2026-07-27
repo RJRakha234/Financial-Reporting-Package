@@ -640,8 +640,8 @@ def test_the_report_embeds_the_marked_pages_for_in_page_preview(tmp_path):
 
     assert '<script id="previews" type="application/json">' in html
     assert "data:image/" in html
-    # Every spot link carries the region to spotlight on the rendered page.
-    assert 'data-peek="a:1:' in html and 'data-peek="b:1:' in html
+    # Every spot link carries the region to spotlight, page by page.
+    assert 'data-peek="a|1:' in html and 'data-peek="b|1:' in html
 
 
 def test_no_pages_are_embedded_without_marked_copies(tmp_path):
@@ -1102,3 +1102,67 @@ def test_the_legend_names_every_mark_used(tmp_path):
     for legend in ("in benchmark only", "not in benchmark",
                    "punctuation/spacing", "moved", "figure deviates"):
         assert legend in page, legend
+
+
+def test_a_passage_crossing_a_page_break_previews_both_pages(tmp_path):
+    """The complaint: the preview showed one page and hid the rest.
+
+    A paragraph that runs over a page break needs a spotlight on each page it
+    lands on, or a reviewer reads half of it and assumes that is all there is.
+    """
+    sentence = ["The Group operates in one reportable segment and evaluates",
+                "performance on a consolidated basis, reviewing revenue and",
+                "operating margin for each geography every quarter without",
+                "further disaggregation of the results presented herein."]
+    # Force the passage across a page boundary by starting it near the foot.
+    a = make_pdf(tmp_path / "a.pdf", sentence, height=200, start=120, pitch=16)
+    b = make_pdf(tmp_path / "b.pdf", sentence, height=200, start=120, pitch=16)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out),
+                 marked_pdf_a=str(tmp_path / "a.marked.pdf"),
+                 marked_pdf_b=str(tmp_path / "b.marked.pdf"))
+    html = out.read_text()
+
+    import re
+    peeks = re.findall(r'data-peek="([^"]+)"', html)
+    assert peeks, "links must carry preview data"
+    # At least one passage spans more than a single page: side|page:box|page:box
+    assert any(len(p.split("|")) > 2 for p in peeks), (
+        "a passage crossing a page break must name every page it occupies"
+    )
+
+
+def test_the_preview_offers_a_true_actual_size_zoom(tmp_path):
+    """Zooming must sharpen, not merely enlarge.
+
+    Sizing the page against the panel meant 240% upscaled a small image and
+    looked worse. Zoom is measured against the image's own pixels instead.
+    """
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out),
+                 marked_pdf_a=str(tmp_path / "a.marked.pdf"),
+                 marked_pdf_b=str(tmp_path / "b.marked.pdf"))
+    html = out.read_text()
+
+    assert "Actual size" in html and "Fit width" in html
+    assert "img.naturalWidth" in html, "zoom is relative to the image, not the panel"
+
+
+def test_previews_can_be_switched_off_for_a_small_file(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    big, small = tmp_path / "big.html", tmp_path / "small.html"
+
+    side_by_side(a, b, output_html=str(big),
+                 marked_pdf_a=str(tmp_path / "a1.pdf"), marked_pdf_b=str(tmp_path / "b1.pdf"))
+    side_by_side(a, b, output_html=str(small), preview_dpi=0,
+                 marked_pdf_a=str(tmp_path / "a2.pdf"), marked_pdf_b=str(tmp_path / "b2.pdf"))
+
+    assert small.stat().st_size < big.stat().st_size
+    assert "data:image/" not in small.read_text()
+    # The way back to the source survives: the cells still link to the PDFs.
+    assert ".marked.pdf#page=" in small.read_text() or "a2.pdf#page=" in small.read_text()

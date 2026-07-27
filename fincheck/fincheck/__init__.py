@@ -183,15 +183,32 @@ def _relative_to(target: str, html_path: str) -> str:
 def _preview_quality(total_pages: int) -> dict:
     """Preview resolution for the embedded page images, by document length.
 
-    The previews are locators — the pulsing box says *where*, and the PDF link
-    inside the panel serves anyone who needs to read the fine print — so long
-    documents trade sharpness for a report that still travels as one file.
+    The image must render *larger* than the panel that shows it, or the browser
+    displays it about one-to-one and it looks soft — which is what "not crisp"
+    actually meant. At these resolutions the page is downscaled into the panel,
+    which is sharp, and there is real detail left to magnify when the reader
+    zooms in. Long documents step down, because a report still has to travel as
+    one file, and the PDF link in the panel serves anyone who needs more.
     """
     if total_pages <= 24:
-        return {"dpi": 112, "quality": 70}
+        return {"dpi": 150, "quality": 65}
     if total_pages <= 48:
-        return {"dpi": 92, "quality": 62}
-    return {"dpi": 78, "quality": 55}
+        return {"dpi": 132, "quality": 58}
+    if total_pages <= 90:
+        return {"dpi": 118, "quality": 50}
+    return {"dpi": 100, "quality": 45}
+
+
+def _previews(copies, index: int, doc_a, doc_b, dpi: int | None) -> dict:
+    """Rendered pages for the in-report preview, or nothing if switched off."""
+    if not copies:
+        return {}
+    settings = _preview_quality(doc_a.page_count + doc_b.page_count)
+    if dpi is not None:
+        if dpi <= 0:
+            return {}
+        settings["dpi"] = dpi
+    return render_previews(copies[index], **settings)
 
 
 def _one_sided(pairs) -> int:
@@ -260,6 +277,7 @@ def side_by_side(
     auto_sections: bool = True,
     figure_ledger: bool = True,
     console_html: str | None = None,
+    preview_dpi: int | None = None,
 ) -> SideBySideResult:
     """Match two documents paragraph by paragraph and row by row.
 
@@ -288,6 +306,10 @@ def side_by_side(
             their own headings and compare section against matching section.
             This is how a reviewer marks these documents by hand, so the output
             matches whether or not anyone has been through them first.
+        preview_dpi: resolution for the page images embedded in the report.
+            ``None`` picks one from the document length; ``0`` embeds none,
+            which makes a much smaller file whose cells still link out to the
+            annotated PDFs.
         figure_ledger: also reconcile every printed figure in the two files as
             plain multisets, independent of the pairing. The alignment says
             *where* things differ; this says whether any figure was lost or
@@ -369,10 +391,8 @@ def side_by_side(
                 # source in the report itself — a PDF link at a viewer's mercy
                 # is a fallback, not the feature. Resolution steps down with
                 # length so a 60-page statement still ships as one file.
-                previews_a=render_previews(copies[0], **_preview_quality(
-                    doc_a.page_count + doc_b.page_count)) if copies else {},
-                previews_b=render_previews(copies[1], **_preview_quality(
-                    doc_a.page_count + doc_b.page_count)) if copies else {},
+                previews_a=_previews(copies, 0, doc_a, doc_b, preview_dpi),
+                previews_b=_previews(copies, 1, doc_a, doc_b, preview_dpi),
                 ledger=led,
             )
         finally:

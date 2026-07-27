@@ -176,39 +176,59 @@ def _unit_spot(unit, heights: dict):
     return (row.page, top)
 
 
+def _boxes_by_page(unit) -> dict:
+    """One bounding box per page the unit's rows touch.
+
+    A passage that runs over a page break needs a box on each page it lands
+    on, or the preview shows the first page and silently hides the rest —
+    which is exactly how a reviewer ends up reading half a paragraph.
+    """
+    if unit is None or not unit.rows:
+        return {}
+    out: dict = {}
+    for row in unit.rows:
+        box = out.get(row.page)
+        if box is None:
+            out[row.page] = [row.x0, row.y0, row.x1, row.y1]
+        else:
+            box[0] = min(box[0], row.x0)
+            box[1] = min(box[1], row.y0)
+            box[2] = max(box[2], row.x1)
+            box[3] = max(box[3], row.y1)
+    return out
+
+
+def _encode_peek(side: str, boxes: dict) -> str:
+    """``side|page:x0,y0,x1,y1|page:…`` — every page the passage occupies."""
+    if not boxes:
+        return ""
+    parts = [side]
+    for page in sorted(boxes)[:4]:  # a passage spanning more than four pages
+        x0, y0, x1, y1 = boxes[page]  # is a section, and the register covers it
+        parts.append(f"{page}:{x0:.0f},{y0:.0f},{x1:.0f},{y1:.0f}")
+    return ' data-peek="' + "|".join(parts) + '"'
+
+
 def _unit_rect(unit):
     """(page, x0, y0, x1, y1) around the unit's rows on its first page."""
-    if unit is None or not unit.rows:
+    boxes = _boxes_by_page(unit)
+    if not boxes:
         return None
-    page = unit.rows[0].page
-    rows = [r for r in unit.rows if r.page == page]
-    return (
-        page,
-        min(r.x0 for r in rows),
-        min(r.y0 for r in rows),
-        max(r.x1 for r in rows),
-        max(r.y1 for r in rows),
-    )
+    page = min(boxes)
+    x0, y0, x1, y1 = boxes[page]
+    return (page, x0, y0, x1, y1)
 
 
 def _peek_attr(side: str, unit) -> str:
     """Data the in-page preview needs to spotlight this passage."""
-    rect = _unit_rect(unit)
-    if rect is None:
-        return ""
-    page, x0, y0, x1, y1 = rect
-    return f' data-peek="{side}:{page}:{x0:.0f},{y0:.0f},{x1:.0f},{y1:.0f}"'
+    return _encode_peek(side, _boxes_by_page(unit))
 
 
 def _section_peek(section, side: str) -> str:
     regions = section.regions(side)
     if not regions:
         return ""
-    page, box = sorted(regions.items())[0]
-    return (
-        f' data-peek="{side}:{page}:'
-        f'{box[0]:.0f},{box[1]:.0f},{box[2]:.0f},{box[3]:.0f}"'
-    )
+    return _encode_peek(side, {p: list(b) for p, b in regions.items()})
 
 
 def _section_spot(section, side: str, heights: dict):
@@ -995,11 +1015,21 @@ table.ledger td{padding:.3rem .8rem .3rem 0;border-bottom:1px solid var(--rule-s
   color:var(--muted);padding:.15rem .4rem}
 .peek-x:hover,.peek-x:focus-visible{color:var(--ink)}
 .peek-body{overflow:auto;flex:1;background:var(--panel);padding:.8rem}
-.peek-canvas{position:relative;margin:0 auto;max-width:56rem;
-  box-shadow:0 2px 14px rgba(0,0,0,.18)}
-.peek-canvas img{display:block;width:100%;height:auto}
-.peek-box{position:absolute;border:2px solid var(--accent);border-radius:2px;
-  background:rgba(14,90,86,.13);box-shadow:0 0 0 4px rgba(14,90,86,.12)}
+#peek-pages{display:flex;flex-direction:column;gap:1rem;align-items:center}
+#peek-pages.zoom-fit .peek-canvas{width:min(58rem,100%)}
+#peek-pages.zoom-set{align-items:flex-start}
+.peek-canvas{position:relative;margin:0;flex:none;
+  box-shadow:0 2px 18px rgba(0,0,0,.22);background:#fff}
+.peek-canvas img{display:block;width:100%;height:auto;
+  image-rendering:-webkit-optimize-contrast}
+.peek-canvas figcaption{position:absolute;top:-.1rem;left:-.1rem;
+  font-family:var(--mono);font-size:.62rem;font-weight:700;color:var(--paper);
+  background:var(--ink);padding:.1rem .34rem;border-radius:0 0 4px 0}
+.peek-box{position:absolute;border:2px solid var(--accent);border-radius:3px;
+  background:rgba(255,214,0,.16);
+  box-shadow:0 0 0 3px rgba(14,90,86,.16),0 0 22px 6px rgba(255,200,0,.28)}
+.peek-zoom button{font-size:.68rem;padding:.2rem .45rem}
+.peek-zoom{flex:none}
 @media (prefers-reduced-motion:no-preference){
   .peek-box{animation:peekpulse 1.5s ease-in-out 2}
 }
@@ -1046,9 +1076,26 @@ h1{font-family:var(--serif);font-weight:400;font-size:clamp(1.7rem,3.6vw,2.5rem)
   background:var(--ink);padding:.1rem .42rem;border-radius:2px;white-space:nowrap}
 .snum{font-family:var(--mono);font-size:.74rem;font-weight:600;color:var(--paper);
   background:var(--accent);padding:.1rem .4rem;border-radius:2px;white-space:nowrap}
+/* A page reference is the way back to the source, so it has to look like a
+   control rather than a footnote. It was a faint dotted number in the gutter
+   that reviewers could not see, let alone aim at. */
 .pl{color:var(--accent);text-decoration:none;border-bottom:1px dotted currentColor}
 .pl:hover,.pl:focus-visible{background:var(--panel)}
-.gut .pl{border-bottom:0}
+.gut .pl{border-bottom:0;display:inline-flex;align-items:center;gap:.15rem;
+  font-family:var(--mono);font-size:.7rem;font-weight:700;line-height:1;
+  padding:.2rem .34rem;border-radius:4px;background:var(--accent-soft,var(--panel));
+  color:var(--accent);border:1px solid transparent;min-width:1.7rem;
+  justify-content:center;transition:background .12s,border-color .12s}
+.gut .pl::before{content:"\25A4";font-size:.78em;opacity:.75}
+.gut .pl:hover,.gut .pl:focus-visible{background:var(--accent);color:var(--paper);
+  border-color:var(--accent)}
+.gut .pl:hover::before,.gut .pl:focus-visible::before{opacity:1}
+.spages .pl{padding:.14rem .4rem;border-radius:4px;background:var(--panel);
+  border-bottom:0;font-weight:700}
+.spages .pl:hover,.spages .pl:focus-visible{background:var(--accent);color:var(--paper)}
+.rp .pl{padding:.1rem .36rem;border-radius:4px;background:var(--panel);
+  border-bottom:0;font-weight:700}
+.rp .pl:hover{background:var(--accent);color:var(--paper)}
 body.hide-unmarked .sec--unmarked{display:none}
 .skind{font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;
   color:var(--muted);border:1px solid var(--rule);padding:.12rem .38rem;border-radius:2px}
@@ -1357,7 +1404,7 @@ const PEEK = (() => {
   if (!el) return null;
   try { return JSON.parse(el.textContent); } catch (err) { return null; }
 })();
-let peekEl = null, peekReturn = null;
+let peekEl = null, peekReturn = null, peekZoom = 'fit';
 function closePeek() {
   if (peekEl) peekEl.hidden = true;
   if (peekReturn) { peekReturn.focus(); peekReturn = null; }
@@ -1369,47 +1416,100 @@ function buildPeek() {
   peekEl.innerHTML =
     '<div class="peek-card" role="dialog" aria-modal="true" aria-label="Highlighted source">' +
     '<div class="peek-head"><b id="peek-title"></b>' +
-    '<a id="peek-open" class="pl" target="_blank" rel="noopener">Open the PDF here</a>' +
+    '<span class="seg peek-zoom" role="group" aria-label="Zoom">' +
+      '<button data-zoom="fit" aria-pressed="true">Fit width</button>' +
+      '<button data-zoom="100" aria-pressed="false" ' +
+        'title="One image pixel per screen pixel - the sharpest this preview gets">' +
+        'Actual size</button>' +
+      '<button data-zoom="150" aria-pressed="false">150%</button>' +
+      '<button data-zoom="200" aria-pressed="false">200%</button>' +
+    '</span>' +
+    '<a id="peek-open" class="pl" target="_blank" rel="noopener">Open the PDF</a>' +
     '<button class="peek-x" aria-label="Close" title="Close (Esc)">&#215;</button></div>' +
-    '<div class="peek-body"><div class="peek-canvas">' +
-    '<img id="peek-img" alt="Rendered page of the marked-up PDF">' +
-    '<div class="peek-box" id="peek-box"></div></div></div></div>';
+    '<div class="peek-body"><div id="peek-pages"></div></div></div>';
   document.body.appendChild(peekEl);
   peekEl.addEventListener('click', e => { if (e.target === peekEl) closePeek(); });
   peekEl.querySelector('.peek-x').addEventListener('click', closePeek);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePeek(); });
+  peekEl.querySelector('.peek-zoom').addEventListener('click', e => {
+    const b = e.target.closest('[data-zoom]');
+    if (!b) return;
+    peekZoom = b.dataset.zoom;
+    for (const x of peekEl.querySelectorAll('[data-zoom]'))
+      x.setAttribute('aria-pressed', String(x === b));
+    applyZoom();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closePeek();
+  });
+}
+function applyZoom() {
+  // Zoom is measured against the image's own pixels, not the panel's width.
+  // A percentage of the container is meaningless: 240% of a panel merely
+  // upscales a small image and looks worse, which is the opposite of what a
+  // reader asking to zoom in wants. At "Actual size" one image pixel maps to
+  // one screen pixel, which is as sharp as an embedded preview can be.
+  const host = peekEl.querySelector('#peek-pages');
+  host.className = peekZoom === 'fit' ? 'zoom-fit' : 'zoom-set';
+  for (const fig of host.querySelectorAll('.peek-canvas')) {
+    if (peekZoom === 'fit') { fig.style.width = ''; continue; }
+    const img = fig.querySelector('img');
+    const natural = img.naturalWidth || 900;
+    fig.style.width = Math.round(natural * (Number(peekZoom) / 100)) + 'px';
+  }
 }
 document.addEventListener('click', e => {
   const link = e.target.closest('a[data-peek]');
   if (!link || !PEEK) return;
-  const [side, page, rectStr] = link.dataset.peek.split(':');
-  const pv = PEEK[side] && PEEK[side][page];
-  if (!pv) return;
+  const parts = link.dataset.peek.split('|');
+  const side = parts.shift();
+  const pages = parts.map(p => {
+    const [n, box] = p.split(':');
+    return { page: n, rect: box.split(',').map(Number) };
+  }).filter(p => PEEK[side] && PEEK[side][p.page]);
+  if (!pages.length) return;
   e.preventDefault();
   if (!peekEl) buildPeek();
   peekReturn = link;
-  const rect = rectStr.split(',').map(Number);
+
   const name = (PEEK.labels[side] || '') + (side === 'a' ? ' (benchmark)' : '');
-  peekEl.querySelector('#peek-title').textContent = name + ' \\u00b7 page ' + page;
+  const span = pages.length > 1
+    ? 'pages ' + pages[0].page + '\u2013' + pages[pages.length - 1].page +
+      ' \u00b7 this passage runs across the page break'
+    : 'page ' + pages[0].page;
+  peekEl.querySelector('#peek-title').textContent = name + ' \u00b7 ' + span;
   peekEl.querySelector('#peek-open').href = link.href;
-  const img = peekEl.querySelector('#peek-img');
-  const box = peekEl.querySelector('#peek-box');
-  const pad = 5;
-  box.style.left = (Math.max(0, rect[0] - pad) / pv.w * 100) + '%';
-  box.style.top = (Math.max(0, rect[1] - pad) / pv.h * 100) + '%';
-  box.style.width = (Math.min(pv.w, rect[2] - rect[0] + 2 * pad) / pv.w * 100) + '%';
-  box.style.height = (Math.min(pv.h, rect[3] - rect[1] + 2 * pad) / pv.h * 100) + '%';
-  const bringIntoView = () => {
-    const body = peekEl.querySelector('.peek-body');
-    body.scrollTop = Math.max(0, box.offsetTop - 120);
-  };
-  peekEl.hidden = false;
-  if (img.dataset.shown === side + page) { bringIntoView(); }
-  else {
-    img.dataset.shown = side + page;
-    img.onload = bringIntoView;
+
+  const host = peekEl.querySelector('#peek-pages');
+  host.textContent = '';
+  const pad = 6;
+  pages.forEach((p, i) => {
+    const pv = PEEK[side][p.page];
+    const wrap = document.createElement('figure');
+    wrap.className = 'peek-canvas';
+    const img = document.createElement('img');
+    img.alt = 'Page ' + p.page + ' of the marked-up PDF';
+    img.loading = i ? 'lazy' : 'eager';
     img.src = pv.src;
-  }
+    const box = document.createElement('div');
+    box.className = 'peek-box';
+    box.style.left = (Math.max(0, p.rect[0] - pad) / pv.w * 100) + '%';
+    box.style.top = (Math.max(0, p.rect[1] - pad) / pv.h * 100) + '%';
+    box.style.width = (Math.min(pv.w, p.rect[2] - p.rect[0] + 2 * pad) / pv.w * 100) + '%';
+    box.style.height = (Math.min(pv.h, p.rect[3] - p.rect[1] + 2 * pad) / pv.h * 100) + '%';
+    const tag = document.createElement('figcaption');
+    tag.textContent = 'p' + p.page;
+    wrap.appendChild(img); wrap.appendChild(box); wrap.appendChild(tag);
+    host.appendChild(wrap);
+    img.addEventListener('load', () => {
+      applyZoom();
+      if (!i) {
+        const body = peekEl.querySelector('.peek-body');
+        body.scrollTop = Math.max(0, box.offsetTop + wrap.offsetTop - 140);
+      }
+    });
+  });
+  applyZoom();
+  peekEl.hidden = false;
   peekEl.querySelector('.peek-x').focus();
 }, true);
 """

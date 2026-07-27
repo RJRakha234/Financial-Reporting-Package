@@ -138,12 +138,22 @@ def build_compare_parser() -> argparse.ArgumentParser:
         "counterpart exists",
     )
     parser.add_argument(
+        "--preview-dpi",
+        type=int,
+        metavar="N",
+        help="resolution of the page images embedded in the report, which is "
+        "what the in-page source preview shows. Higher is crisper and larger; "
+        "0 embeds none, giving a far smaller file whose cells still link out "
+        "to the annotated PDFs (default: chosen from the document length)",
+    )
+    parser.add_argument(
         "--json", action="store_true", help="print the comparison as JSON"
     )
     return parser
 
 
-def _audit_run(source: Path, compared: Path, out_dir: Path) -> int:
+def _audit_run(source: Path, compared: Path, out_dir: Path,
+               preview_dpi: int | None = None) -> int:
     """The auditor's one-command form: benchmark vs compared, into a folder.
 
     Writes ``comparison_report.html``, ``source_annotated.pdf`` and
@@ -158,9 +168,19 @@ def _audit_run(source: Path, compared: Path, out_dir: Path) -> int:
         console_html=str(out_dir / "review_console.html"),
         marked_pdf_a=str(out_dir / "source_annotated.pdf"),
         marked_pdf_b=str(out_dir / "compared_annotated.pdf"),
+        preview_dpi=preview_dpi,
     )
     s = result.summary
-    print(f"Report written to: {result.output_html}")
+    size = Path(result.output_html).stat().st_size / 1_048_576 if result.output_html else 0
+    print(f"Report written to: {result.output_html}  ({size:.1f} MB)")
+    if size > 8 and preview_dpi is None:
+        # The embedded page images are almost all of it. Say so, rather than
+        # let a reviewer discover it when they try to email the thing.
+        print(
+            "  Most of that is the page images the in-report preview shows. "
+            "Use --preview-dpi 90 for a smaller file, or --preview-dpi 0 to "
+            "drop them entirely (cells still link to the annotated PDFs)."
+        )
     if result.console_html:
         print(f"Review console written to: {result.console_html}")
     for path in result.marked_pdfs:
@@ -219,7 +239,7 @@ def compare_main(argv: list[str]) -> int:
             print()
             source = Path(joined.path)
 
-        return _audit_run(source, compared, out_dir)
+        return _audit_run(source, compared, out_dir, args.preview_dpi)
 
     if not (args.pdf_a and args.pdf_b):
         print(
