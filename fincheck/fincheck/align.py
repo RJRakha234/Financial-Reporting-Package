@@ -34,6 +34,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from .blocks import Block, Row
+from .columns import Grid, grid_for, match_columns
 
 # Below these, two units are unrelated and better reported as one-sided.
 PARAGRAPH_FLOOR = 0.45
@@ -121,6 +122,31 @@ def _runs_by_section(rows, marks):
     return runs
 
 
+# A heading band is only lifted out of the prose when the table below it has at
+# least this many columns; below that the "band" is as likely to be a sentence.
+_NAMED_COLUMNS = 2
+
+
+def _heading_rows(blocks: list[Block]) -> set:
+    """The rows that name a table's columns, by identity.
+
+    Only bands over a table whose columns were actually recovered count: those
+    are the ones whose names the report can show over the figures. Where the
+    geometry did not resolve into columns the lines stay in the prose, since
+    hiding content the report cannot show elsewhere would lose it.
+    """
+    found: set = set()
+    for block in blocks:
+        band = getattr(block, "headers", None)
+        if not band or block.kind != "table":
+            continue
+        grid = grid_for(block)
+        if len(grid) < _NAMED_COLUMNS or not grid.is_named:
+            continue
+        found.update(id(row) for row in band)
+    return found
+
+
 def units_of(blocks: list[Block], marks=None) -> list[Unit]:
     """Flatten blocks into comparable units, tagged with any marked section.
 
@@ -137,6 +163,14 @@ def units_of(blocks: list[Block], marks=None) -> list[Unit]:
                 return label
         return None
 
+    # Lines that name a table's columns are shown as that table's column
+    # headings. Left in the paragraph above it they read as scrambled text —
+    # "Financial Manufacturing Energy, Retail ... Particulars Resources and
+    # Services" is one heading band flattened into a sentence — and because the
+    # two documents wrap and order those names differently, comparing them as
+    # prose reports differences that are only the shape of the page.
+    headings = _heading_rows(blocks)
+
     out: list[Unit] = []
     for index, block in enumerate(blocks):
         if block.kind == "paragraph":
@@ -145,7 +179,8 @@ def units_of(blocks: list[Block], marks=None) -> list[Unit]:
             # of a reviewer's marks; left whole it would take the first one's
             # number and silently swallow the rest, which is how sections went
             # missing entirely.
-            for label, rows in _runs_by_section(block.rows, marks):
+            kept = [r for r in block.rows if id(r) not in headings]
+            for label, rows in _runs_by_section(kept, marks):
                 text = " ".join(r.label for r in rows if r.label).strip()
                 if not text:
                     continue
@@ -269,7 +304,16 @@ class Pair:
             label = difflib.SequenceMatcher(
                 None, _norm(self.a.text), _norm(self.b.text)
             ).ratio()
-            cells = max(len(self.a.values), len(self.b.values))
+            # Columns neither side fills are spacing, not agreement: a row that
+            # states one amount under Total should not score as eight cells
+            # matching because the seven it leaves blank are blank on both.
+            va, vb = self.a.values, self.b.values
+            cells = sum(
+                1
+                for i in range(max(len(va), len(vb)))
+                if (va[i] if i < len(va) else None) is not None
+                or (vb[i] if i < len(vb) else None) is not None
+            )
             if cells:
                 agreeing = (cells - len(self.changed_figures)) / cells
                 raw = 100 * (0.4 * label + 0.6 * agreeing)
@@ -502,6 +546,34 @@ def _merge_paragraphs(units: list[Unit]) -> Unit:
     )
 
 
+# A spare row is treated as prose the other document ran together only when this
+# much of its wording is actually there to run together with.
+_READ_AS_PROSE_FLOOR = 0.7
+
+
+def _split_by_prose(spare: list[Unit], other: list[Unit]) -> tuple[list, list]:
+    """Separate rows the other document wrote as prose from rows it has not got.
+
+    Returns ``(keep, give)`` — the rows to show as rows, and the rows to fold
+    into the passage comparison. A row without figures is always folded in:
+    there is nothing to line up in columns, and its words read better in place.
+    """
+    if not spare:
+        return [], []
+    words: set = set()
+    for unit in other:
+        words |= unit.tokens
+    keep, give = [], []
+    for unit in spare:
+        mine = unit.tokens
+        covered = len(mine & words) / len(mine) if mine else 1.0
+        if not unit.values or covered >= _READ_AS_PROSE_FLOOR:
+            give.append(unit)
+        else:
+            keep.append(unit)
+    return keep, give
+
+
 def _align_marked_section(sub_a: list[Unit], sub_b: list[Unit]) -> list[Pair]:
     """Compare one section a reviewer numbered in both documents.
 
@@ -526,13 +598,23 @@ def _align_marked_section(sub_a: list[Unit], sub_b: list[Unit]) -> list[Pair]:
             rows_a, rows_b, floor_scale=_MARKED_FLOOR_SCALE, pair_leftovers=True
         )
         out += [p for p in aligned if p.a is not None and p.b is not None]
-        # A line one document read as a table row and the other read as prose
-        # leaves a row with no row to face. Rather than show it against a blank,
-        # hand it to the prose comparison, where its words can still be diffed.
-        prose_a = prose_a + [p.a for p in aligned if p.b is None]
-        prose_b = prose_b + [p.b for p in aligned if p.a is None]
+        spare_a = [p.a for p in aligned if p.b is None]
+        spare_b = [p.b for p in aligned if p.a is None]
     else:
-        prose_a, prose_b = prose_a + rows_a, prose_b + rows_b
+        spare_a, spare_b = list(rows_a), list(rows_b)
+
+    # A line one document read as a table row and the other read as prose leaves
+    # a row with no row to face. Where the other document really does carry that
+    # line inside its prose, hand it to the prose comparison so its words can
+    # still be diffed. Where it does not, keep it a row: merged into a passage a
+    # table's figures are strung into a sentence, and a column of amounts that
+    # has to be checked against its counterpart cannot be read that way.
+    keep_a, give_a = _split_by_prose(spare_a, prose_b + spare_b)
+    keep_b, give_b = _split_by_prose(spare_b, prose_a + spare_a)
+    out += [Pair(a=u, b=None) for u in keep_a]
+    out += [Pair(a=None, b=u) for u in keep_b]
+    prose_a += give_a
+    prose_b += give_b
 
     # Back into the order they appear on the page. A line handed over from the
     # row comparison would otherwise be appended to the end of the passage, and
@@ -946,6 +1028,11 @@ class Section:
     # Content matched, but sitting at a different position in the sequence of
     # the other document. Set by :func:`flag_moved`.
     moved: bool = False
+    # A table's column headings, and the ones the compared document prints
+    # somewhere else. Both set by :func:`realign_columns`, and empty unless the
+    # columns were actually shuffled.
+    columns: list = field(default_factory=list)
+    reordered_columns: list = field(default_factory=list)
 
     @property
     def changed(self) -> int:
@@ -1124,7 +1211,70 @@ def group(pairs: list[Pair]) -> list[Section]:
                 found = _heading_of(text)
                 if found:
                     heading = found
+
+    for section in sections:
+        if section.kind == "table":
+            realign_columns(section)
     return sections
+
+
+def _grid_of(section: "Section", side: str) -> Grid:
+    for pair in section.pairs:
+        unit = getattr(pair, side)
+        if unit is not None and unit.kind == "row" and unit.block is not None:
+            grid = grid_for(unit.block)
+            if len(grid):
+                return grid
+    return Grid()
+
+
+def realign_columns(section: "Section") -> None:
+    """Put a table's figures under the columns they were printed under.
+
+    A statement that prints its segments in a different order than the
+    benchmark states different amounts against the same headings while the
+    figures read identically down the page. Compared by position that is a
+    perfect match, which is exactly backwards: nothing agrees except the
+    sequence. Where both documents name their columns and name the same ones,
+    the figures are placed by heading instead, so a cell holds the same column
+    of the same statement on both sides.
+
+    Only a table whose columns actually moved is touched. Everywhere else the
+    figures already sit where position says they do, and rewriting them would
+    trade a correct answer for a differently-derived one.
+    """
+    grid_a, grid_b = _grid_of(section, "a"), _grid_of(section, "b")
+    match = match_columns(grid_a, grid_b)
+    width = len(grid_a)
+    if width and grid_a.is_named:
+        # Name the columns whether or not they moved: a figure under "Retail" is
+        # easier to check than a figure under "column 4".
+        section.columns = list(grid_a.headings)
+    if not match.reordered:
+        return
+
+    section.reordered_columns = [
+        grid_a.headings[i] for i in range(width) if match.order[i] != i
+    ]
+    for pair in section.pairs:
+        placed_a = _place(pair.a, grid_a, width)
+        placed_b = _place(pair.b, grid_b, width)
+        if placed_a is None or placed_b is None:
+            continue
+        pair.a.values = tuple(placed_a)
+        pair.b.values = tuple(placed_b[j] for j in match.order)
+
+
+def _place(unit, grid: Grid, width: int):
+    """The unit's figures spread across ``width`` columns, or ``None``."""
+    if unit is None:
+        return [None] * width
+    if unit.kind != "row" or unit.row is None:
+        return None
+    slots = grid.place(unit.row)
+    if slots is None or len(slots) != width:
+        return None
+    return slots
 
 
 # A one-sided leftover this similar to a leftover on the other side is the

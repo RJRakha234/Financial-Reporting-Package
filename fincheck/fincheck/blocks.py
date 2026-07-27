@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 
 import fitz  # PyMuPDF
 
+from .columns import build_grid
 from .numbers import parse_number
 
 # Baselines within this many points are the same row.
@@ -51,6 +52,10 @@ _TABLE_GAP = 3.2
 # How far to look ahead for a figure row before deciding a label-only row ended
 # the table rather than heading a section inside it.
 _SECTION_LOOKAHEAD = 3
+# How far above a line to look for the table row whose columns it shares.
+_TABLE_LOOKBACK = 3
+# Two figures this close to the same right edge are in the same column.
+_COLUMN_MATCH = 2.0
 # Sentence-final punctuation, used to decide whether a paragraph continues.
 _ENDS_SENTENCE = re.compile(r"[.:;!?…]['\")\]]?\s*$")
 
@@ -71,6 +76,9 @@ class Row:
     baseline: float
     label: str
     figures: list[Figure] = field(default_factory=list)
+    # The label's words with their horizontal extent, so a table's column
+    # headings can be read back off the page and put over the right columns.
+    words: list[tuple[float, float, str]] = field(default_factory=list)
     # Extent of the row's words, so it can be tested against a marked region.
     x0: float = 0.0
     y0: float = 0.0
@@ -107,6 +115,11 @@ class Block:
     rows: list[Row]
     page_start: int
     page_end: int
+    # The label-only rows that name this table's columns, in reading order. They
+    # are not comparable content — they carry no figures and each document wraps
+    # them differently — but they are what tells a reader which column a figure
+    # is in, so they are kept beside the table rather than compared as rows.
+    headers: list[Row] = field(default_factory=list)
 
     @property
     def text(self) -> str:
@@ -177,14 +190,42 @@ def _is_bare_year(text: str) -> bool:
     )
 
 
-def _figures_trail_the_label(bucket) -> bool:
+_FOOTNOTE_MARKER = re.compile(r"\(\s*(\d)\s*\)")
+
+
+def _all_footnote_markers(figures: list[Figure]) -> bool:
+    """Is every number on this line a footnote reference rather than a value?
+
+    A footnote reference is a single parenthesised digit, and the references on
+    one line are always distinct — "(1) (2) (3)" numbers three columns, it never
+    states three amounts. Requiring distinctness is what keeps a genuine row of
+    small bracketed losses, where a value can repeat, out of this rule; a real
+    row of nothing but distinct single-digit negatives and no other figure is
+    not something a statement contains.
+    """
+    if not figures:
+        return False
+    seen = set()
+    for figure in figures:
+        matched = _FOOTNOTE_MARKER.fullmatch(figure.text.strip())
+        if matched is None or matched.group(1) in seen:
+            return False
+        seen.add(matched.group(1))
+    return True
+
+
+def _figures_trail_the_label(bucket, punctuation=()) -> bool:
     """Do this line's numbers form a run at its end, after any label text?
 
     Trailing markers of a character or two — a footnote asterisk, a dagger — are
     allowed to follow the figures, since they routinely do in a statement.
+    ``punctuation`` holds the offsets of dashes that punctuate the label rather
+    than state a nil cell; those are label, not figures.
     """
     started = False
-    for word in sorted(bucket, key=lambda w: w[0]):
+    for offset, word in sorted(enumerate(bucket), key=lambda pair: pair[1][0]):
+        if offset in punctuation:
+            continue
         if _is_number(word):
             started = True
         elif started and len(word[4].strip()) > _TRAILING_MARKER:
@@ -217,12 +258,14 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
     candidates = []
     for bucket in buckets:
         bucket.sort(key=lambda w: w[0])
-        text_parts, figures = [], []
-        for word in bucket:
+        text_parts, figures, placed = [], [], []
+        punctuation = _dashes_in_the_label(bucket)
+        for offset, word in enumerate(bucket):
             text = word[4].strip()
-            value = parse_number(text)
+            value = None if offset in punctuation else parse_number(text)
             if value is None:
                 text_parts.append(text)
+                placed.append((round(word[0], 2), round(word[2], 2), text))
             else:
                 figures.append(
                     Figure(
@@ -237,7 +280,12 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
                 "bucket": bucket,
                 "label": re.sub(r"\s+", " ", " ".join(text_parts)).strip(),
                 "figures": figures,
+                "words": placed,
+                "punctuation": punctuation,
                 "tabular": False,
+                # Rejected for a reason alignment cannot overturn: these are
+                # footnote markers and dates, not amounts in a column.
+                "settled": False,
             }
         )
 
@@ -254,7 +302,9 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
     # that happens to end on a figure.
     for row in candidates:
         if row["figures"] and len(row["label"].split()) <= _MAX_LABEL_WORDS:
-            row["tabular"] = _figures_trail_the_label(row["bucket"])
+            row["tabular"] = _figures_trail_the_label(
+                row["bucket"], row["punctuation"]
+            )
             # A sentence ending on a year ("...PEAK Matrix Assessment 2025") is
             # still a sentence. Left alone it became a one-column table row, and
             # because the other document wrapped the same sentence differently it
@@ -265,27 +315,32 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
                 and _is_bare_year(row["figures"][0].text)
                 and len(row["label"].split()) > _PROSE_WORDS
             ):
-                row["tabular"] = False
-            # A line that is nothing but "(1)" is a footnote marker, not a
-            # figure of -1. Read as a figure it deviates against every
-            # counterpart — a false alarm a reconciliation must never raise.
-            if (
-                row["tabular"]
-                and not row["label"].strip()
-                and len(row["figures"]) == 1
-                and re.fullmatch(r"\(\d\)", row["figures"][0].text.strip())
-            ):
-                row["tabular"] = False
+                row["tabular"], row["settled"] = False, True
+            # "(1)" is a footnote marker, not a figure of -1. Read as figures,
+            # the markers strung along a column heading — "Financial Services (1)
+            # Retail (2) Communication (3)" — turn the heading band into data
+            # rows that deviate against every counterpart, which is a false alarm
+            # a reconciliation must never raise.
+            if row["tabular"] and _all_footnote_markers(row["figures"]):
+                row["tabular"], row["settled"] = False, True
+
+    # Pass three: take back the rows the label-length rule rejected, where the
+    # figures line up with a table's columns.
+    _rescue_aligned_rows(candidates)
 
     rows: list[Row] = []
     for row in candidates:
-        label, figures = row["label"], row["figures"]
+        label, figures, words = row["label"], row["figures"], row["words"]
         if not row["tabular"]:
             # Keep the digits in the sentence they belong to.
             label = re.sub(
                 r"\s+", " ", " ".join(w[4].strip() for w in row["bucket"])
             ).strip()
             figures = []
+            words = [
+                (round(w[0], 2), round(w[2], 2), w[4].strip())
+                for w in row["bucket"]
+            ]
         bucket = row["bucket"]
         rows.append(
             Row(
@@ -293,6 +348,7 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
                 baseline=round(bucket[0][3], 2),
                 label=label,
                 figures=figures,
+                words=words,
                 x0=round(min(w[0] for w in bucket), 2),
                 y0=round(min(w[1] for w in bucket), 2),
                 x1=round(max(w[2] for w in bucket), 2),
@@ -345,6 +401,157 @@ def _heads_a_section(rows: list[Row], i: int) -> bool:
     return False
 
 
+# How many lines above a table can still be part of its column headings.
+_MAX_HEADER_ROWS = 8
+# Past this many words a line above a table is the sentence introducing it,
+# unless it is set to the columns.
+_HEADER_ROW_WORDS = 5
+# A heading is aligned to its column, so it ends this close to the column's
+# right edge. Looser than the figures' own tolerance: a heading set centred
+# over a narrow column still lands near the edge, and the alternative is
+# reading none of its names.
+_HEADING_TOLERANCE = 9.0
+# A word that names something: two letters together, not a figure, a note
+# reference or a bracketed marker.
+_NAMES_SOMETHING = re.compile(r"[A-Za-z]{2}")
+# "(In ₹ crore)", "(Amounts in millions)" — the units note that sits between the
+# introduction and the headings, and marks the top of the heading band.
+_UNITS_NOTE = re.compile(
+    r"\(?\s*(?:in|amounts?\s+in)\b.{0,24}?"
+    r"(crores?|lakhs?|millions?|billions?|thousands?|units?)\b",
+    re.I,
+)
+
+
+_BARE_DASH = re.compile(r"^[-–—]$")
+
+
+def _dashes_in_the_label(bucket) -> set:
+    """Which of this line's dashes punctuate it rather than state nil.
+
+    A statement writes a nil cell as a dash, so a dash has to read as a figure.
+    But it also writes "Liquid mutual fund units - carried at fair value through
+    profit or loss", and read as a figure that dash puts a number in the middle
+    of the line, which makes the whole row prose: its real amounts are then
+    strung into a sentence instead of standing in their columns.
+
+    A nil cell is in the figures at the end of the line. A dash with ordinary
+    words still to come is punctuation.
+    """
+    found, seen_label = set(), False
+    for offset in range(len(bucket) - 1, -1, -1):
+        text = bucket[offset][4].strip()
+        if _BARE_DASH.match(text):
+            if seen_label:
+                found.add(offset)
+        elif parse_number(text) is None and len(text) > _TRAILING_MARKER:
+            seen_label = True
+    return found
+
+
+def _rescue_aligned_rows(candidates: list[dict]) -> None:
+    """Take back the table rows the label-length rule turned into prose.
+
+    A statement whose middle column is a description — "Tax free bonds and
+    government bonds - carried at amortized cost | Quoted price and market
+    observable inputs | 1,408 | 1,812" — runs past any length a label can be
+    given. Rejected for length, the whole table dissolves into a paragraph with
+    its amounts strung through it, which is no way to check a figure against its
+    counterpart.
+
+    Alignment says what length cannot: prose does not put its numbers on the
+    same right edge line after line. A line whose every figure sits in a column
+    of a table row within a few lines of it is part of that table. Rescued rows
+    become anchors themselves, so a table whose first rows are all long is
+    recovered from whichever of its rows was short enough to be recognised.
+    """
+    while True:
+        anchors = [
+            (position, [f.x1 for f in row["figures"]])
+            for position, row in enumerate(candidates)
+            if row["tabular"]
+        ]
+        rescued = False
+        for position, row in enumerate(candidates):
+            if row["tabular"] or row["settled"] or not row["figures"]:
+                continue
+            if not _figures_trail_the_label(row["bucket"], row["punctuation"]):
+                continue
+            near = [
+                edges
+                for at, edges in anchors
+                if 0 < abs(at - position) <= _TABLE_LOOKBACK
+            ]
+            if any(
+                all(
+                    any(abs(edge - f.x1) <= _COLUMN_MATCH for edge in edges)
+                    for f in row["figures"]
+                )
+                for edges in near
+            ):
+                row["tabular"] = True
+                rescued = True
+        if not rescued:
+            return
+
+
+def _sits_over_columns(row: Row, edges: list[float]) -> bool:
+    """Are this line's words set to the table's columns rather than run on?
+
+    A heading is aligned to the column it names, so its words end where the
+    figures end. Two such words is enough and is what separates a heading band
+    from the sentence that introduces the table, which no length test can do:
+    "Particulars Financial Services Manufacturing Retail Communication Total" is
+    seven words, and so is a sentence.
+    """
+    # A column is named, never only numbered. Without this a row of figures the
+    # numbering rules left as text — "(2,734) (149) (12) 2,998" — reads as a
+    # heading band and its amounts are lost to the comparison. The test is on
+    # the line, not the word: "June 30, 2025   March 31, 2025" names two columns
+    # and the words that land on their edges are the years.
+    if not _NAMES_SOMETHING.search(row.label):
+        return False
+    hits = {
+        min(range(len(edges)), key=lambda i: abs(edges[i] - x1))
+        for _, x1, _ in row.words
+        if any(abs(edge - x1) <= _HEADING_TOLERANCE for edge in edges)
+    }
+    return len(hits) >= 2
+
+
+def _header_band(rows: list[Row], start: int, edges: list[float]) -> list[Row]:
+    """The lines above a table that name its columns.
+
+    Walks back from the table's first row while the lines still look like
+    headings: set to the columns, or short enough to be a heading that wrapped.
+    The units note above the headings ends the walk, as does the sentence that
+    introduces the table.
+    """
+    first = rows[start]
+    band: list[Row] = []
+    for row in reversed(rows[max(0, start - _MAX_HEADER_ROWS) : start]):
+        if row.page != first.page or row.is_figure_row:
+            break
+        if _UNITS_NOTE.search(row.label):
+            break
+        if (
+            not _sits_over_columns(row, edges)
+            and len(row.label.split()) > _HEADER_ROW_WORDS
+        ):
+            break
+        band.append(row)
+        # A paragraph-sized gap above this line means the headings start here.
+        if row.pitch > 0 and row.gap > _PARAGRAPH_GAP * row.pitch:
+            break
+    band.reverse()
+    # Short lines alone are not a heading band — they are as likely the title of
+    # the section. At least one line has to be set to the columns for the band
+    # to be naming them; a heading that wrapped supplies the rest.
+    if not any(_sits_over_columns(row, edges) for row in band):
+        return []
+    return band
+
+
 def is_html(path: str) -> bool:
     """Is this an HTML filing rather than a PDF?"""
     return path.lower().endswith((".htm", ".html", ".xhtml"))
@@ -373,6 +580,7 @@ def segment(pdf_path: str) -> list[Block]:
         doc.close()
 
     blocks: list[Block] = []
+    starts: list[int] = []
     for i, row in enumerate(rows):
         current = blocks[-1] if blocks else None
         in_table = current is not None and current.kind == "table"
@@ -397,4 +605,12 @@ def segment(pdf_path: str) -> list[Block]:
         blocks.append(
             Block(kind=kind, rows=[row], page_start=row.page, page_end=row.page)
         )
+        starts.append(i)
+
+    for block, start in zip(blocks, starts):
+        if block.kind != "table":
+            continue
+        grid = build_grid(block.rows)
+        if len(grid):
+            block.headers = _header_band(rows, start, grid.edges)
     return blocks

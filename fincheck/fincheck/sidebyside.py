@@ -12,6 +12,7 @@ page states that plainly. It is a reviewer's worksheet, not evidence.
 
 import html
 from dataclasses import dataclass, field
+from functools import partial
 from typing import NamedTuple
 
 from .align import Pair, Section, Summary
@@ -467,6 +468,166 @@ def _stacked_row_html(pair: Pair, tags: Tags) -> str:
     )
 
 
+@dataclass
+class Layout:
+    """How one table's columns are drawn, and how the two sides map onto them."""
+
+    count: int
+    head: str = ""
+    notice: str = ""
+
+    def values_a(self, unit) -> list:
+        return _slots(unit, self.count)
+
+    def values_b(self, unit) -> list:
+        return _slots(unit, self.count)
+
+
+def _slots(unit, count: int) -> list:
+    """The unit's figures, padded to the table's width."""
+    if unit is None:
+        return [None] * count
+    return (list(unit.values) + [None] * count)[:count]
+
+
+def _table_layout(section: Section) -> Layout:
+    """Work out the columns to draw a table's line items against.
+
+    Where the alignment has matched the two documents' columns by name, the
+    headings it read off the page are used, and a column the compared document
+    prints somewhere else is called out. Otherwise the columns are numbered:
+    an unnamed column is still a column, and numbering it beats implying a name
+    the statement does not give.
+    """
+    count = max(
+        max(len(p.a.values) if p.a else 0, len(p.b.values) if p.b else 0)
+        for p in section.pairs
+    )
+    headings = section.columns
+    moved = set(section.reordered_columns)
+
+    cells = []
+    for i in range(count):
+        name = headings[i] if i < len(headings) else ""
+        flag = (
+            '<span class="colmoved" title="the compared document prints this '
+            'column somewhere else">moved</span>'
+            if name and name in moved
+            else ""
+        )
+        cells.append(
+            f'<th class="fc{" fc--moved" if flag else ""}" title="{_e(name)}">'
+            f'<span class="chname">{_e(name) or i + 1}</span>{flag}</th>'
+        )
+    head = (
+        f'<tr class="fh"><th class="gut"></th><th class="fl">Line item</th>'
+        + "".join(cells)
+        + '<th class="gut"></th></tr>'
+    )
+
+    notice = ""
+    if section.reordered_columns:
+        notice = (
+            '<p class="colnote"><strong>Columns reordered.</strong> '
+            "The compared document prints "
+            + _e(", ".join(section.reordered_columns))
+            + " in different places. Figures below are matched by column "
+            "heading, not by position &mdash; read down the page the two "
+            "statements look identical, but the amounts stand against "
+            "different columns."
+            "</p>"
+        )
+
+    return Layout(count=count, head=head, notice=notice)
+
+
+def _delta(va, vb):
+    """The difference a reviewer would write in the margin."""
+    if va is None or vb is None:
+        return ""
+    d = vb - va
+    if d == 0:
+        return ""
+    sign = "\u25b2" if d > 0 else "\u25bc"
+    return f"{sign}{format_number(abs(d))}"
+
+
+def _paired_row_html(pair: Pair, tags: Tags, layout: Layout) -> str:
+    """One line item, with each column's two figures stacked in one cell.
+
+    Reading a figure against its counterpart across two separate blocks means
+    counting columns twice and holding a number in your head while your eye
+    travels. Here the benchmark's value and the compared document's sit one
+    above the other in the same cell, with the difference beside them, so a
+    line item is checked by looking at one place.
+
+    A column that agrees collapses to a single value, because a page of
+    duplicated numbers hides the handful that do not.
+    """
+    a, b = pair.a, pair.b
+    status = pair.status
+    slots_a, slots_b = layout.values_a(a), layout.values_b(b)
+
+    cells = []
+    for i in range(layout.count):
+        va, vb = slots_a[i], slots_b[i]
+        if va is None and vb is None:
+            cells.append('<td class="fc"></td>')
+            continue
+        if va == vb:
+            cells.append(
+                f'<td class="fc fc--agree"><span class="fv">'
+                f"{_e(format_number(va))}</span></td>"
+            )
+            continue
+        klass = "fc fc--absent" if va is None or vb is None else "fc fc--differ"
+        side_a = format_number(va) if va is not None else "absent"
+        side_b = format_number(vb) if vb is not None else "absent"
+        title = f' title="benchmark: {side_a} \u00b7 compared: {side_b}"'
+        parts = [
+            f'<span class="fv fv-a">'
+            f'{_e(format_number(va)) if va is not None else "&mdash;"}</span>',
+            f'<span class="fv fv-b">'
+            f'{_e(format_number(vb)) if vb is not None else "&mdash;"}</span>',
+        ]
+        d = _delta(va, vb)
+        if d:
+            parts.append(f'<span class="fd">{_e(d)}</span>')
+        elif va is None or vb is None:
+            parts.append('<span class="fd">absent</span>')
+        cells.append(f'<td class="{klass}"{title}>' + "".join(parts) + "</td>")
+
+    label_unit = a or b
+    label_side = "a" if a is not None else "b"
+    label = _loc(
+        _label_html(pair, label_unit, label_side),
+        label_unit,
+        tags.href_a if a is not None else tags.href_b,
+        tags.heights_a if a is not None else tags.heights_b,
+        label_side,
+    )
+    if a is not None and b is not None and pair.words:
+        # Show the compared document's wording underneath when it differs, so
+        # the line item itself can be checked as well as its figures.
+        other = _marked(pair.words, "b")
+        if other.strip() and _e(a.text) != _e(b.text):
+            label += f'<span class="alt2">{other}</span>'
+    only = ""
+    if a is None:
+        only = '<span class="onlytag">not in benchmark</span>'
+    elif b is None:
+        only = '<span class="onlytag">benchmark only</span>'
+
+    return (
+        f'<tr class="r fr r--{status}" title="match {pair.score}%">'
+        f'<td class="gut gut-a">{_spot_link(a, tags.href_a, tags.heights_a, "a")}</td>'
+        f'<td class="fl">{label}{only}</td>'
+        + "".join(cells)
+        + f'<td class="gut gut-b">{_spot_link(b, tags.href_b, tags.heights_b, "b")}</td>'
+        f"</tr>"
+    )
+
+
 def _row_pair_html(pair: Pair, tags: Tags) -> str:
     changed = {i: (va, vb) for i, va, vb in pair.changed_figures}
     status = pair.status
@@ -788,15 +949,19 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
     )
 
     if section.kind == "table":
-        columns = max(
-            max(len(p.a.values) if p.a else 0, len(p.b.values) if p.b else 0)
-            for p in section.pairs
-        )
-        wide = columns > WIDE_TABLE_COLUMNS
-        render = _stacked_row_html if wide else _row_pair_html
+        layout = _table_layout(section)
+        # One row per line item, the two documents' figures stacked in each
+        # column's cell. Checking a figure against its counterpart then means
+        # looking at one place rather than counting columns twice.
         body = (
-            f'<div class="scroll"><table class="rows rows--{"stacked" if wide else "cols"}">'
-            + "".join(_collapse_wrapping(section.pairs, render, tags))
+            layout.notice
+            + '<div class="scroll"><table class="rows rows--paired">'
+            + layout.head
+            + "".join(
+                _collapse_wrapping(
+                    section.pairs, partial(_paired_row_html, layout=layout), tags
+                )
+            )
             + "</table></div>"
         )
     else:
@@ -1181,6 +1346,65 @@ body.view-tracked .colhead,body.view-before .colhead,body.view-after .colhead{
   grid-template-columns:2.4rem 1fr 2.4rem}
 /* Two real columns when the table is narrow enough for them to fit. */
 .rows--cols .side+.side{border-left:1px solid var(--rule)}
+
+/* ---- line-item table: both documents' figures inside one cell ---- */
+.rows--paired{min-width:max-content}
+.rows--paired .gut{width:2.4rem}
+tr.fh th{font-size:.6rem;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--muted);font-weight:700;text-align:right;padding:.15rem .55rem .3rem;
+  border-bottom:1px solid var(--rule);background:var(--paper);
+  position:sticky;top:0;z-index:3;max-width:10rem;white-space:nowrap}
+/* A column named "Energy, Utilities, Resources and Services" would otherwise
+   set the width of a column holding five digits, so the name is clipped and
+   given in full on the cell's tooltip. Only the name is clipped: a badge on
+   the heading has to stay visible however long the name is. */
+.chname{display:inline-block;max-width:7rem;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+th.fc--moved .chname{max-width:5.2rem}
+tr.fh th.fl{text-align:left;max-width:none}
+/* Scrolled sideways, a figure with no line item beside it says nothing, so the
+   label column travels with it. */
+.rows--paired .gut-a,tr.fh th.gut:first-child{position:sticky;left:0;z-index:2;
+  background:var(--paper)}
+tr.fh th.fl,td.fl{position:sticky;left:2.4rem;z-index:2;background:var(--paper)}
+tr.fh th.fl,tr.fh th.gut:first-child{z-index:4}
+tr.fr:hover td.fl{background:var(--panel)}
+.colmoved{display:inline-block;margin-left:.35rem;padding:0 .25rem;
+  font-size:.55rem;letter-spacing:.06em;color:var(--differs);
+  border:1px solid currentColor;border-radius:2px;vertical-align:middle}
+.colnote{margin:.3rem 0 .6rem;padding:.5rem .7rem;font-size:.82rem;
+  background:var(--differs-bg);border-left:3px solid var(--differs);
+  border-radius:0 3px 3px 0;max-width:80ch}
+.colnote strong{color:var(--differs)}
+td.fl{min-width:15rem;max-width:34rem;font-size:.85rem;vertical-align:top;
+  padding-right:1rem}
+td.fc{text-align:right;white-space:nowrap;vertical-align:top;
+  font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.79rem;
+  min-width:5.4rem;padding:.28rem .55rem}
+/* A column both documents agree on collapses to one number, so the handful
+   that differ are not buried under a page of duplicated figures. */
+.fc--agree .fv{color:var(--ink-soft)}
+.fv{display:block;line-height:1.35}
+.fc--differ,.fc--absent{background:var(--differs-bg);border-radius:3px;
+  box-shadow:inset 2px 0 0 var(--differs)}
+.fc--differ .fv-a,.fc--absent .fv-a{color:var(--del);
+  text-decoration:line-through;text-decoration-thickness:1px}
+.fc--differ .fv-b,.fc--absent .fv-b{color:var(--add);font-weight:700;
+  text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+.fd{display:block;font-size:.7rem;font-weight:700;color:var(--differs);
+  letter-spacing:.02em;margin-top:.05rem}
+.alt2{display:block;font-size:.8rem;color:var(--ink-soft);margin-top:.1rem;
+  padding-left:.6rem;border-left:2px solid var(--rule)}
+.onlytag{display:inline-block;font-size:.6rem;font-weight:700;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--differs);border:1px solid currentColor;
+  border-radius:3px;padding:.02rem .3rem;margin-left:.4rem;vertical-align:middle}
+tr.fr:hover td{background:var(--panel)}
+tr.fr:hover .fc--differ,tr.fr:hover .fc--absent{background:var(--differs-bg)}
+/* Before shows the benchmark as written, After the compared document. */
+.sec[data-view=before] .fv-b,.sec[data-view=before] .fd{display:none}
+.sec[data-view=after] .fv-a,.sec[data-view=after] .fd{display:none}
+.sec[data-view=before] .fc--differ .fv-a{text-decoration:none;color:var(--ink)}
+.sec[data-view=after] .fc--differ .fv-b{text-decoration:none}
 
 .prose{display:grid;grid-template-columns:2.4rem 1fr 1fr 2.4rem;gap:.55rem;
   border-bottom:1px solid var(--rule-soft);padding:.3rem 0}

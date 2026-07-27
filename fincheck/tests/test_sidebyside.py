@@ -271,7 +271,12 @@ def test_html_is_written_and_shows_both_documents(tmp_path):
     assert 'data-theme="dark"' in html or "data-theme=dark" in html
 
 
-def test_wide_tables_stack_a_over_b_instead_of_scrolling(tmp_path):
+def test_a_wide_table_keeps_one_row_per_line_item(tmp_path):
+    """A wide statement must not force the reader to count columns twice.
+
+    Both documents' figures for a column sit in the same cell, so the row
+    stays one row however many columns it carries.
+    """
     wide = ["Balance " + "  ".join(f"{i:,}00" for i in range(1, 12))]
     a = make_pdf(tmp_path / "a.pdf", wide, width=842)
     b = make_pdf(tmp_path / "b.pdf", wide, width=842)
@@ -280,7 +285,12 @@ def test_wide_tables_stack_a_over_b_instead_of_scrolling(tmp_path):
     side_by_side(a, b, output_html=str(out))
     html = out.read_text()
 
-    assert 'class="stack"' in html, "a wide table should use the stacked layout"
+    assert 'rows--paired' in html
+    assert html.count('<tr class="r fr') >= 1, "one row per line item"
+    # Eleven columns, each its own cell, and the table scrolls rather than
+    # the page.
+    assert html.count('class="fc') >= 11
+    assert 'class="scroll"' in html
 
 
 def test_figure_changes_are_available_on_the_result(tmp_path):
@@ -618,10 +628,13 @@ def test_a_deviating_figure_row_gets_a_tracked_cell_and_a_tooltip(tmp_path):
     side_by_side(a, b, output_html=str(out))
     html = out.read_text()
 
-    # The tracked cell shows old-struck, new-inserted, in one run of figures.
-    assert '<td class="side tracked">' in html
-    assert "<del>10,106</del><ins>10,999</ins>" in html
-    # And each deviating cell names both readings without leaving the page.
+    # Both readings sit in the same cell, one above the other, with the
+    # difference beside them — no counting columns across two blocks.
+    assert 'class="fc fc--differ"' in html
+    assert '<span class="fv fv-a">10,106</span>' in html
+    assert '<span class="fv fv-b">10,999</span>' in html
+    assert "893" in html, "the difference is stated"
+    # And the cell names both readings on hover.
     assert 'title="benchmark: 10,106 · compared: 10,999"' in html
 
 
