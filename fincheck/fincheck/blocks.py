@@ -266,6 +266,16 @@ def _rows_on_page(page: "fitz.Page", index: int) -> list[Row]:
                 and len(row["label"].split()) > _PROSE_WORDS
             ):
                 row["tabular"] = False
+            # A line that is nothing but "(1)" is a footnote marker, not a
+            # figure of -1. Read as a figure it deviates against every
+            # counterpart — a false alarm a reconciliation must never raise.
+            if (
+                row["tabular"]
+                and not row["label"].strip()
+                and len(row["figures"]) == 1
+                and re.fullmatch(r"\(\d\)", row["figures"][0].text.strip())
+            ):
+                row["tabular"] = False
 
     rows: list[Row] = []
     for row in candidates:

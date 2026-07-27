@@ -753,6 +753,47 @@ def test_the_auditor_cli_form_writes_the_named_outputs(tmp_path, capsys):
     assert "Composite match with benchmark:" in printed
 
 
+def test_a_deviating_section_carries_an_accept_reject_decision(tmp_path):
+    """The review console: a decision per deviation, and progress over them."""
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "b.pdf",
+        [l.replace("11,502      10,106", "11,502      10,999") for l in STATEMENT],
+    )
+    out = tmp_path / "sbs.html"
+
+    result = side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    assert 'data-decide="accepted"' in html and 'data-decide="rejected"' in html
+    assert 'id="pbar"' in html, "progress over the decisions still to make"
+    assert 'id="exp-csv"' in html and 'id="exp-json"' in html
+    assert 'id="only-open"' in html
+    # One decision per deviating section, and no more.
+    deviating = sum(
+        1 for s in result.sections if s.status in ("changed", "added", "removed")
+    )
+    assert html.count('data-decide="accepted"') == deviating >= 1
+
+    # A pair that agrees throughout asks for no decisions at all.
+    same = tmp_path / "same.html"
+    side_by_side(a, make_pdf(tmp_path / "c.pdf", STATEMENT), output_html=str(same))
+    assert 'data-decide="accepted"' not in same.read_text()
+
+
+def test_each_section_can_be_viewed_its_own_way(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    assert 'data-sview="tracked"' in html
+    # Views are section-scoped, so one section can differ from the global mode.
+    assert ".sec[data-view=tracked]" in html
+
+
 def test_the_left_document_is_presented_as_the_benchmark(tmp_path):
     a = make_pdf(tmp_path / "source.pdf", STATEMENT)
     b = make_pdf(tmp_path / "filed.pdf", STATEMENT)

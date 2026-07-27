@@ -316,6 +316,39 @@ segments. Exit status is non-zero when anything deviates, for CI use.
 relocated in one document still pairs with its counterpart and is flagged
 `moved` in the register rather than reported as a removal plus an addition.
 
+### The independent figure reconciliation
+
+Everything above rests on a similarity judgement, and a judgement can be
+wrong: a mis-paired row compares a figure against the wrong counterpart, or
+against none. For financial reporting that is not good enough on its own, so
+every run also produces a check that owes the alignment nothing:
+
+> Every numeric token on every page of both files, reconciled as two
+> multisets. No paragraphs, no rows, no similarity anywhere in the chain.
+
+It cannot tell you a figure moved — only whether one was **lost or invented**,
+and how many times each document prints it. Amounts printed in the benchmark
+and *nowhere* in the compared document are called out as `absent`; a figure
+printed three times in one and twice in the other is reported as exactly that,
+not as missing. Values are compared as parsed numbers with no rounding, so
+`1,234.50` reconciles with `1,234.5` and never with `1,234.51`.
+
+The report leads with this panel, the console prints it, and `result.ledger`
+exposes it (`reconciled`, `coverage`, `absent_amounts`, `only_in_a`,
+`only_in_b`). Pass `figure_ledger=False` to skip it.
+
+### Reviewing in the report
+
+The report is a working console, not just a document:
+
+- **Accept / Reject** on every deviating section, with a progress bar over the
+  decisions still open, saved in the browser and exportable as **CSV or JSON**.
+- **Only undecided** hides everything already settled.
+- **Four views** — side by side, tracked changes, before (benchmark as
+  written), after (compared as written) — set globally *and* overridable per
+  section, because a reviewer reads most of a report one way and one passage
+  another.
+
 ## Side by side, every paragraph and table
 
 The exact layers above answer *whether* two documents differ. They will not put

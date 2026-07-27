@@ -8,6 +8,7 @@ from pathlib import Path
 from . import DEFAULT_DPI, analyze, compare, side_by_side
 from .compare_report import comparison_to_console, comparison_to_json
 from .diffmark import write_diff_pdf
+from .ledger import describe
 from .report import to_console, to_json
 
 
@@ -164,6 +165,10 @@ def _audit_run(source: Path, compared: Path, out_dir: Path) -> int:
         f"\n  {s.only_in_a:,} in the benchmark only, {s.only_in_b:,} not in the "
         f"benchmark, {s.moved:,} section(s) moved."
     )
+    if result.ledger is not None:
+        # Stated separately because it owes nothing to the pairing above.
+        print()
+        print(describe(result.ledger, "benchmark", "compared document"))
     clean = not (s.changed or s.changed_figures or s.only_in_a or s.only_in_b)
     return 0 if clean else 1
 

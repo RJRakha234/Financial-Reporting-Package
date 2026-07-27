@@ -32,6 +32,7 @@ from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 from .sidebyside import Meta, default_label, write_side_by_side
+from .ledger import Ledger, reconcile
 from .sidemarks import coverage, render_previews, write_marked_copies
 
 __all__ = [
@@ -149,6 +150,8 @@ class SideBySideResult:
     output_html: str | None = None
     marked_sections: list = field(default_factory=list)
     marked_pdfs: list = field(default_factory=list)
+    # Alignment-independent figure reconciliation, or None if not run.
+    ledger: object = None
 
     @property
     def changed_sections(self) -> list:
@@ -225,6 +228,7 @@ def side_by_side(
     marked_pdf_a: str | None = None,
     marked_pdf_b: str | None = None,
     auto_sections: bool = True,
+    figure_ledger: bool = True,
 ) -> SideBySideResult:
     """Match two documents paragraph by paragraph and row by row.
 
@@ -253,6 +257,10 @@ def side_by_side(
             their own headings and compare section against matching section.
             This is how a reviewer marks these documents by hand, so the output
             matches whether or not anyone has been through them first.
+        figure_ledger: also reconcile every printed figure in the two files as
+            plain multisets, independent of the pairing. The alignment says
+            *where* things differ; this says whether any figure was lost or
+            invented, and cannot be misled by a mis-paired row.
     """
     marks_a = read_marks(pdf_a) if use_marks else None
     marks_b = read_marks(pdf_b) if use_marks else None
@@ -279,6 +287,8 @@ def side_by_side(
         if sectioned
         else []
     )
+
+    led = reconcile(pdf_a, pdf_b) if figure_ledger else None
 
     copies = None
     if marked_pdf_a and marked_pdf_b:
@@ -321,6 +331,7 @@ def side_by_side(
                     doc_a.page_count + doc_b.page_count)) if copies else {},
                 previews_b=render_previews(copies[1], **_preview_quality(
                     doc_a.page_count + doc_b.page_count)) if copies else {},
+                ledger=led,
             )
         finally:
             doc_a.close()
@@ -336,4 +347,5 @@ def side_by_side(
         output_html=written,
         marked_sections=shared_marks,
         marked_pdfs=list(copies) if copies else [],
+        ledger=led,
     )

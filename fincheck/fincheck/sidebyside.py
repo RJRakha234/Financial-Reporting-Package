@@ -48,6 +48,8 @@ class Meta:
     # viewers cannot be relied on to honour a link's page-and-position.
     previews_a: dict = field(default_factory=dict)
     previews_b: dict = field(default_factory=dict)
+    # Alignment-independent figure reconciliation (see fincheck.ledger).
+    ledger: object = None
 
     @property
     def made_a(self) -> str:
@@ -538,6 +540,88 @@ _STATUS_LABEL = {
 }
 
 
+def _ledger_panel(ledger, label_a: str, label_b: str) -> str:
+    """The reconciliation that owes nothing to the alignment.
+
+    Placed above the section detail because it answers the question a
+    reconciliation exists to answer — was any figure lost or invented — with no
+    similarity judgement anywhere in the chain.
+    """
+    if ledger is None:
+        return ""
+    from .ledger import Ledger
+
+    def rows(items, side_label) -> str:
+        amounts, _ = Ledger._split(items)
+        if not amounts:
+            return ""
+        out = []
+        for item in amounts[:40]:
+            first = item.occurrences[0]
+            note = (
+                '<span class="labsent">absent</span>'
+                if item.absent
+                else f'<span class="lcount">{item.here}&times; vs {item.there}&times;</span>'
+            )
+            out.append(
+                f'<tr><td class="lv">{_e(format_number(item.value))}</td>'
+                f'<td class="lc">{note}</td>'
+                f'<td class="lp">p{first.page}</td>'
+                f'<td class="lx">{_e(first.context)}</td></tr>'
+            )
+        more = (
+            f'<tr><td colspan="4" class="lmore">and {len(amounts) - 40:,} '
+            "more amount(s)</td></tr>"
+            if len(amounts) > 40
+            else ""
+        )
+        return (
+            f'<h3 class="lh">{_e(side_label)}</h3>'
+            f'<div class="scroll"><table class="ledger">'
+            f"<thead><tr><th>Amount</th><th>Reading</th><th>Page</th>"
+            f"<th>Printed on this line</th></tr></thead>"
+            f"<tbody>{''.join(out)}{more}</tbody></table></div>"
+        )
+
+    missing = rows(ledger.only_in_a, f"Surplus in {label_a} (the benchmark)")
+    extra = rows(ledger.only_in_b, f"Surplus in {label_b}")
+    clean = not missing and not extra
+    state = "good" if clean else "bad"
+    absent = ledger.absent_amounts
+    if clean:
+        verdict = (
+            "Every amount printed in one document is printed in the other, the "
+            "same number of times."
+        )
+    elif absent:
+        verdict = (
+            f"{len(absent)} amount(s) printed in the benchmark appear "
+            "<strong>nowhere</strong> in the compared document. Stated without "
+            "any pairing, so this does not depend on the matching below."
+        )
+    else:
+        verdict = (
+            "Every amount appears in both documents, but some are printed a "
+            "different number of times. Stated without any pairing, so this "
+            "does not depend on the matching below."
+        )
+    return (
+        f'<section class="assure assure--{state}" id="ledger">'
+        f'<div class="ahead"><h2>Independent figure reconciliation</h2>'
+        f'<span class="acov">{ledger.coverage:.2f}% of the benchmark&rsquo;s '
+        f"figures found</span></div>"
+        f'<p class="sub">Every numeric token on every page of both files, '
+        f"reconciled as two multisets — no paragraphs, no rows, no similarity. "
+        f"It cannot tell you a figure moved; it can tell you, without "
+        f"qualification, whether one was lost or invented. "
+        f"{ledger.total_a:,} figures in the benchmark, "
+        f"{ledger.total_b:,} in the compared document.</p>"
+        f'<p class="averdict">{verdict}</p>'
+        f"{missing}{extra}"
+        f"</section>"
+    )
+
+
 def _tier(score: int) -> str:
     """CSS class for a composite score, following the reviewer's bands."""
     if score == 100:
@@ -569,6 +653,26 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
     badge = f'<span class="serial">{section.serial}</span>'
     if section.marked is not None:
         badge += f'<span class="snum">&sect;{_e(section.marked)}</span>'
+    # A section that deviates needs a decision; one that agrees does not.
+    needs_decision = status in ("changed", "added", "removed")
+    decide = (
+        f'<span class="decide" data-serial="{section.serial}">'
+        f'<button class="dbtn dbtn--acc" data-decide="accepted" '
+        f'title="Accept this variation">Accept</button>'
+        f'<button class="dbtn dbtn--rej" data-decide="rejected" '
+        f'title="Reject: needs correction">Reject</button>'
+        f'<span class="dstate"></span></span>'
+        if needs_decision
+        else ""
+    )
+    views = (
+        '<span class="secviews" role="group" aria-label="view this section as">'
+        '<button data-sview="sbs" title="Side by side">Side</button>'
+        '<button data-sview="tracked" title="Tracked changes">Track</button>'
+        '<button data-sview="before" title="Benchmark as written">Before</button>'
+        '<button data-sview="after" title="Compared as written">After</button>'
+        "</span>"
+    )
     spot_a = _section_spot(section, "a", tags.heights_a)
     spot_b = _section_spot(section, "b", tags.heights_b)
     moved_chip = (
@@ -585,6 +689,7 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
         f'<span class="chip chip--{status}">{label}</span>'
         f"{moved_chip}"
         f'{f"<span class=sdetail>{detail}</span>" if detail else ""}'
+        f"{views}{decide}"
         f"</div>"
     )
 
@@ -604,8 +709,10 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
         body = "".join(_paragraph_html(p, tags) for p in section.pairs)
 
     marked_cls = " sec--marked" if section.marked is not None else " sec--unmarked"
+    needs = " sec--needs" if needs_decision else ""
     return (
-        f'<section class="sec sec--{status}{marked_cls}" id="s{index}">'
+        f'<section class="sec sec--{status}{marked_cls}{needs}" id="s{index}"'
+        f' data-serial="{section.serial}" data-score="{section.score}">'
         f"{head}{body}</section>"
     )
 
@@ -694,19 +801,108 @@ tr.r:hover td,.prose:hover{background:var(--panel)}
 .tracked{display:none}
 td.side.tracked{display:none}
 .fig del{margin-right:.3rem}
-/* Tracked changes: one pane, benchmark struck where it was not carried over. */
-body.view-tracked .side-a,body.view-tracked .side-b,
-body.view-tracked .ln-a,body.view-tracked .ln-b{display:none}
-body.view-tracked div.side.tracked,body.view-tracked span.ln.tracked{display:block}
-body.view-tracked td.side.tracked{display:table-cell}
-body.view-tracked .prose{grid-template-columns:2.4rem 1fr 2.4rem}
+/* View modes are section-scoped: the global switch stamps every section's
+   data-view, and a section's own mini switch overrides it. */
+.sec[data-view=tracked] .side-a,.sec[data-view=tracked] .side-b,
+.sec[data-view=tracked] .ln-a,.sec[data-view=tracked] .ln-b{display:none}
+.sec[data-view=tracked] div.side.tracked,
+.sec[data-view=tracked] span.ln.tracked{display:block}
+.sec[data-view=tracked] td.side.tracked{display:table-cell}
+.sec[data-view=tracked] .prose{grid-template-columns:2.4rem 1fr 2.4rem}
 /* Before: the benchmark as written. After: the compared document as written. */
-body.view-before .side-b,body.view-before .gut-b,body.view-before .ln-b{display:none}
-body.view-after .side-a,body.view-after .gut-a,body.view-after .ln-a{display:none}
-body.view-before .prose,body.view-after .prose{grid-template-columns:2.4rem 1fr 2.4rem}
-body.view-before .sec--added,body.view-before .prose--added,body.view-before .r--added{display:none}
-body.view-after .sec--removed,body.view-after .prose--removed,body.view-after .r--removed{display:none}
-body.view-before .alt,body.view-after .alt{display:none}
+.sec[data-view=before] .side-b,.sec[data-view=before] .gut-b,
+.sec[data-view=before] .ln-b{display:none}
+.sec[data-view=after] .side-a,.sec[data-view=after] .gut-a,
+.sec[data-view=after] .ln-a{display:none}
+.sec[data-view=before] .prose,.sec[data-view=after] .prose{
+  grid-template-columns:2.4rem 1fr 2.4rem}
+.sec--added[data-view=before],.sec[data-view=before] .prose--added,
+.sec[data-view=before] .r--added{display:none}
+.sec--removed[data-view=after],.sec[data-view=after] .prose--removed,
+.sec[data-view=after] .r--removed{display:none}
+.sec[data-view=before] .alt,.sec[data-view=after] .alt{display:none}
+/* The per-section switch, quiet until hovered. */
+.secviews{display:inline-flex;border:1px solid var(--rule-soft);border-radius:3px;
+  overflow:hidden;opacity:.55}
+.shead:hover .secviews,.secviews:focus-within{opacity:1}
+.secviews button{font:inherit;font-size:.62rem;font-weight:600;letter-spacing:.04em;
+  padding:.14rem .45rem;border:0;background:none;color:var(--muted);cursor:pointer;
+  border-left:1px solid var(--rule-soft)}
+.secviews button:first-child{border-left:0}
+.secviews button.on{background:var(--accent);color:var(--accent-ink,#fff)}
+.secviews button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* ---- review console: a decision per deviating section ---- */
+.decide{display:inline-flex;gap:.3rem;align-items:center}
+.dbtn{font:inherit;font-size:.64rem;font-weight:700;letter-spacing:.05em;
+  text-transform:uppercase;padding:.16rem .5rem;border-radius:3px;cursor:pointer;
+  border:1px solid currentColor;background:none}
+.dbtn--acc{color:var(--same)} .dbtn--rej{color:var(--differs)}
+.dbtn--acc:hover,.dbtn--acc.on{background:var(--add-bg)}
+.dbtn--rej:hover,.dbtn--rej.on{background:var(--differs-bg)}
+.dbtn.on{box-shadow:inset 0 0 0 1px currentColor}
+.dstate{font-size:.64rem;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted)}
+.sec--decided{opacity:.72}
+.sec--decided:hover,.sec--decided:focus-within{opacity:1}
+body.only-open .sec--decided,body.only-open .sec:not(.sec--needs){display:none}
+/* Progress: how much of the review is done, not how much matches. */
+.console{position:sticky;top:0;z-index:6;background:var(--paper);
+  border-top:2px solid var(--ink);border-bottom:1px solid var(--rule);
+  padding:.7rem 0 .75rem;margin:0 0 1.5rem;display:flex;gap:1.1rem;
+  align-items:center;flex-wrap:wrap}
+.pwrap{flex:1 1 15rem;min-width:12rem}
+.ptop{display:flex;justify-content:space-between;font-size:.7rem;
+  letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+  margin-bottom:.32rem}
+.ppct{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink);
+  font-weight:600}
+.ptrack{height:5px;background:var(--rule-soft);border-radius:3px;overflow:hidden}
+.pbar{height:100%;width:0;background:var(--same);border-radius:3px;
+  transition:width .5s cubic-bezier(.22,.61,.36,1)}
+@media (prefers-reduced-motion:reduce){.pbar{transition:none}}
+.cbtn{font:inherit;font-size:.75rem;font-weight:600;padding:.36rem .7rem;
+  border:1px solid var(--rule);border-radius:5px;background:var(--card,var(--paper));
+  color:var(--ink-soft);cursor:pointer}
+.cbtn:hover{border-color:var(--muted);color:var(--ink)}
+.done-note{display:none;align-items:center;gap:.6rem;background:var(--add-bg);
+  border-left:3px solid var(--same);color:var(--same);font-weight:600;
+  padding:.7rem 1rem;border-radius:0 5px 5px 0;margin:0 0 1.2rem;font-size:.88rem}
+body.all-done .done-note{display:flex}
+.done-note b{font-size:1.15rem}
+
+/* ---- independent reconciliation ---- */
+.assure{border-top:2px solid var(--ink);padding:1rem 0 1.3rem;margin:0 0 2rem}
+.assure--good{border-top-color:var(--same)}
+.assure--bad{border-top-color:var(--differs)}
+.ahead{display:flex;gap:1rem;align-items:baseline;flex-wrap:wrap}
+.ahead h2{font-family:var(--serif);font-weight:400;font-size:1.3rem;margin:0;flex:1}
+.acov{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:.9rem;
+  color:var(--ink-soft)}
+.assure .sub{margin:.4rem 0 .7rem;max-width:74ch}
+.averdict{font-family:var(--serif);font-size:1rem;margin:0 0 1rem;max-width:74ch}
+.assure--good .averdict{color:var(--same)}
+.assure--bad .averdict{color:var(--differs)}
+.lh{font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);font-weight:600;margin:1rem 0 .4rem}
+table.ledger{border-collapse:collapse;width:100%;font-size:.84rem}
+table.ledger th{font-size:.64rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);text-align:left;font-weight:600;padding:0 .8rem .35rem 0;
+  border-bottom:1px solid var(--ink)}
+table.ledger td{padding:.3rem .8rem .3rem 0;border-bottom:1px solid var(--rule-soft);
+  vertical-align:top}
+.lv{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600;
+  color:var(--differs);white-space:nowrap;text-align:right}
+.lc{font-family:var(--mono);font-size:.76rem;color:var(--muted);white-space:nowrap}
+.lp{font-family:var(--mono);font-size:.78rem;color:var(--muted);white-space:nowrap}
+.lx{font-family:var(--mono);font-size:.74rem;color:var(--ink-soft);
+  max-width:44rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lmore{font-size:.78rem;color:var(--muted);font-style:italic}
+.labsent{font-size:.62rem;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:#fff;background:var(--differs);
+  padding:.08rem .35rem;border-radius:2px;white-space:nowrap}
+.lcount{font-family:var(--mono);font-size:.72rem;color:var(--muted);
+  white-space:nowrap}
 
 /* ---- in-page source preview: the highlighted page, spotlighted ---- */
 .peek{position:fixed;inset:0;z-index:50;display:flex;align-items:center;
@@ -945,18 +1141,127 @@ if (seal) requestAnimationFrame(() => requestAnimationFrame(() => {
 
 // Review views: side by side, tracked changes (Word-style redline against the
 // benchmark), before (the benchmark as written), after (the compared document).
+// The global switch sets every section; a section's own switch overrides it,
+// because a reviewer reads most of a report one way and one passage another.
 const MODE_NOTE = {
   tracked: 'Tracked changes \\u2014 struck through: in the benchmark, not carried over \\u00b7 underlaid green: added, not in the benchmark',
   before: '', after: ''
 };
+const SECTIONS = Array.from(document.querySelectorAll('.sec'));
+function setSectionView(sec, view) {
+  if (view === 'sbs') sec.removeAttribute('data-view');
+  else sec.setAttribute('data-view', view);
+  for (const b of sec.querySelectorAll('.secviews button'))
+    b.classList.toggle('on', b.dataset.sview === view);
+}
 for (const radio of document.querySelectorAll('input[name="view"]')) {
   radio.addEventListener('change', () => {
-    document.body.classList.remove('view-tracked', 'view-before', 'view-after');
-    if (radio.value !== 'sbs') document.body.classList.add('view-' + radio.value);
+    for (const sec of SECTIONS) setSectionView(sec, radio.value);
     const note = document.querySelector('.ch-mode');
     if (note) note.textContent = MODE_NOTE[radio.value] || '';
+    document.body.classList.toggle('view-tracked', radio.value === 'tracked');
+    document.body.classList.toggle('view-before', radio.value === 'before');
+    document.body.classList.toggle('view-after', radio.value === 'after');
   });
 }
+for (const sec of SECTIONS) setSectionView(sec, 'sbs');
+document.addEventListener('click', e => {
+  const b = e.target.closest('.secviews button');
+  if (!b) return;
+  setSectionView(b.closest('.sec'), b.dataset.sview);
+});
+
+// Accept / reject, saved in this browser. A reviewer working through a long
+// statement over two sittings should not lose the first one; the key includes
+// the two documents and the serial count, so a regenerated report with
+// different content starts clean rather than showing stale decisions.
+const DKEY = 'fincheck:' + document.title + ':' + SECTIONS.length;
+let decisions = {};
+try { decisions = JSON.parse(localStorage.getItem(DKEY) || '{}') || {}; } catch (e) {}
+const NEEDED = SECTIONS.filter(s => s.classList.contains('sec--needs'));
+
+function paintDecision(sec) {
+  const serial = sec.dataset.serial;
+  const verdict = decisions[serial];
+  const box = sec.querySelector('.decide');
+  if (box) {
+    for (const b of box.querySelectorAll('.dbtn'))
+      b.classList.toggle('on', b.dataset.decide === verdict);
+    const state = box.querySelector('.dstate');
+    if (state) state.textContent = verdict ? verdict : '';
+  }
+  sec.classList.toggle('sec--decided', !!verdict);
+}
+function paintProgress() {
+  const done = NEEDED.filter(s => decisions[s.dataset.serial]).length;
+  const pct = NEEDED.length ? Math.round(100 * done / NEEDED.length) : 100;
+  const bar = document.getElementById('pbar');
+  const label = document.getElementById('ppct');
+  const count = document.getElementById('pcount');
+  if (bar) bar.style.width = pct + '%';
+  if (label) label.textContent = pct + '%';
+  if (count) count.textContent = done + ' of ' + NEEDED.length;
+  document.body.classList.toggle('all-done', NEEDED.length > 0 && done === NEEDED.length);
+}
+function save() {
+  try { localStorage.setItem(DKEY, JSON.stringify(decisions)); } catch (e) {}
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('.dbtn');
+  if (!b) return;
+  const sec = b.closest('.sec');
+  const serial = sec.dataset.serial;
+  decisions[serial] = decisions[serial] === b.dataset.decide ? undefined : b.dataset.decide;
+  if (!decisions[serial]) delete decisions[serial];
+  save(); paintDecision(sec); paintProgress();
+});
+for (const sec of SECTIONS) paintDecision(sec);
+paintProgress();
+
+const openOnly = document.getElementById('only-open');
+if (openOnly) openOnly.addEventListener('change', e => {
+  document.body.classList.toggle('only-open', e.target.checked);
+});
+
+// Export the decisions, so a review can leave the browser it was made in.
+function download(name, text, mime) {
+  const blob = new Blob([text], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function record() {
+  return SECTIONS.map(s => ({
+    serial: s.dataset.serial,
+    section: (s.querySelector('h3') || {}).textContent || '',
+    match: Number(s.dataset.score),
+    status: (s.querySelector('.chip') || {}).textContent || '',
+    decision: decisions[s.dataset.serial] || (s.classList.contains('sec--needs') ? 'open' : 'n/a'),
+  }));
+}
+const csvBtn = document.getElementById('exp-csv');
+if (csvBtn) csvBtn.addEventListener('click', () => {
+  const q = v => '"' + String(v).replace(/"/g, '""') + '"';
+  const rows = [['Serial', 'Section', 'Match %', 'Status', 'Decision']];
+  for (const r of record()) rows.push([r.serial, r.section, r.match, r.status, r.decision]);
+  download('review_decisions.csv', rows.map(r => r.map(q).join(',')).join('\\r\\n'),
+           'text/csv');
+});
+const jsonBtn = document.getElementById('exp-json');
+if (jsonBtn) jsonBtn.addEventListener('click', () => {
+  download('review_decisions.json', JSON.stringify({
+    report: document.title, exported: new Date().toISOString(), sections: record(),
+  }, null, 2), 'application/json');
+});
+const resetBtn = document.getElementById('exp-reset');
+if (resetBtn) resetBtn.addEventListener('click', () => {
+  if (!Object.keys(decisions).length) return;
+  if (!confirm('Clear every accept/reject decision in this report?')) return;
+  decisions = {}; save();
+  for (const sec of SECTIONS) paintDecision(sec);
+  paintProgress();
+});
 
 // In-page source preview. External PDF viewers cannot be relied on to honour
 // a link's page-and-position, so clicking a cell shows the rendered page of
@@ -1216,6 +1521,11 @@ def write_side_by_side(
         else ""
     )
 
+    ledger_panel = _ledger_panel(meta.ledger, meta.label_a, meta.label_b)
+    needs_decision = sum(
+        1 for x in sections if x.status in ("changed", "added", "removed")
+    )
+
     previews_json = ""
     if meta.previews_a or meta.previews_b:
         import json
@@ -1297,6 +1607,24 @@ def write_side_by_side(
 
   {marks_note}
   {copies_note}
+  {ledger_panel}
+
+  <div class="done-note"><b>&#10003;</b>
+    <span>Every deviation has been reviewed. Export the decisions to keep the
+    record with the file.</span></div>
+
+  <div class="console">
+    <div class="pwrap">
+      <div class="ptop"><span>Review decisions</span>
+        <span><span id="pcount">0 of {needs_decision:,}</span>
+        &middot; <span class="ppct" id="ppct">0%</span></span></div>
+      <div class="ptrack"><div class="pbar" id="pbar"></div></div>
+    </div>
+    <label><input type="checkbox" id="only-open"> Only undecided</label>
+    <button class="cbtn" id="exp-csv" type="button">Export CSV</button>
+    <button class="cbtn" id="exp-json" type="button">Export JSON</button>
+    <button class="cbtn" id="exp-reset" type="button">Reset</button>
+  </div>
 
   <div class="bar">
     <span class="views" role="radiogroup" aria-label="Review view">
