@@ -368,3 +368,91 @@ def test_reviewer_marks_take_precedence_over_derived_headings(tmp_path):
 
     assert result.marked_sections == ["1", "2"]
     assert {s.marked for s in result.sections if s.marked} == {"1", "2"}
+
+
+# --------------------------------------------------------------------------
+# Pages as sections: the marking nobody has to do
+# --------------------------------------------------------------------------
+
+
+def multipage(path, pages_of_lines):
+    """One PDF with each list of lines on its own page."""
+    doc = fitz.open()
+    for lines in pages_of_lines:
+        page = doc.new_page(width=595, height=842)
+        y = 80
+        for line in lines:
+            page.insert_text((60, y), line, fontsize=10, fontname="helv")
+            y += 16
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+PAGE_ONE = ["Condensed Consolidated Balance Sheet",
+            "Property, plant and equipment   11,596   11,778",
+            "Goodwill                        11,502   10,106"]
+PAGE_TWO = ["Notes to the financial statements",
+            "The Group provides for gratuity, a defined benefit retirement plan",
+            "covering eligible employees of the parent and its subsidiaries."]
+
+
+def test_each_benchmark_page_becomes_a_section(tmp_path):
+    from fincheck.align import page_sections, units_of
+    from fincheck.blocks import segment
+
+    a = multipage(tmp_path / "a.pdf", [PAGE_ONE, PAGE_TWO])
+    b = multipage(tmp_path / "b.pdf", [PAGE_ONE + PAGE_TWO])  # both on one page
+
+    ua, ub = units_of(segment(a)), units_of(segment(b))
+    count = page_sections(ua, ub)
+
+    assert count == 2, "one section per page of the benchmark"
+    assert {u.section for u in ua} == {"1", "2"}
+    # Every unit of the compared document is placed, whatever its own paging.
+    assert all(u.section is not None for u in ub)
+    assert {u.section for u in ub} == {"1", "2"}
+
+
+def test_content_the_first_pass_cannot_pair_is_placed_by_what_it_says(tmp_path):
+    """The costly failure: a re-wrapped passage stranding its whole page.
+
+    Handing every unpaired passage to the section behind it left the page it
+    belonged to empty on the compared side, reporting a page of the benchmark
+    as missing when every word of it was present.
+    """
+    from fincheck.align import page_sections, units_of
+    from fincheck.blocks import segment
+
+    a = multipage(tmp_path / "a.pdf", [PAGE_ONE, PAGE_TWO])
+    # Page two's prose re-wrapped end to end, so no line matches a line.
+    b = multipage(tmp_path / "b.pdf", [
+        PAGE_ONE,
+        ["Notes to the financial statements",
+         "covering eligible employees of the parent",
+         "and its subsidiaries. The Group provides for",
+         "gratuity, a defined benefit retirement plan"],
+    ])
+
+    ua, ub = units_of(segment(a)), units_of(segment(b))
+    page_sections(ua, ub)
+
+    gratuity = [u for u in ub if "gratuity" in u.text.lower()]
+    assert gratuity, "the passage should be found"
+    assert all(u.section == "2" for u in gratuity), (
+        "it belongs to the benchmark page it matches, not the one behind it"
+    )
+
+
+def test_paging_beats_headings_when_it_strands_less(tmp_path):
+    """Whichever sectioning leaves fewest passages against a blank wins."""
+    a = multipage(tmp_path / "a.pdf", [PAGE_ONE, PAGE_TWO])
+    b = multipage(tmp_path / "b.pdf", [PAGE_ONE + PAGE_TWO])
+
+    result = side_by_side(a, b)
+
+    assert all(p.a is not None and p.b is not None
+               for s in result.sections for p in s.pairs), (
+        "an unmarked pair should leave nothing without a counterpart"
+    )
+    assert result.summary.only_in_a == 0 and result.summary.only_in_b == 0

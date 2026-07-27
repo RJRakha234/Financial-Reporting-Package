@@ -696,6 +696,110 @@ def align_by_derived_sections(units_a: list[Unit], units_b: list[Unit]) -> list[
     return pairs
 
 
+def page_sections(units_a: list[Unit], units_b: list[Unit]) -> int:
+    """Number every page of the benchmark as a section, and carry it across.
+
+    Reviewer marks work because they assert correspondence rather than infer
+    it: content numbered *n* is compared only against content numbered *n*, so
+    it cannot come out against a blank. Their cost is that someone has to sit
+    with a highlighter first.
+
+    This gets the same guarantee for nothing. Each page of the benchmark
+    becomes a section — page 1 is section 1, page 2 section 2 — which covers
+    every word of the benchmark by construction, with no judgement about where
+    a section starts. The only thing left to find is which part of the compared
+    document corresponds, and that is done in two passes:
+
+    1. An ordinary order-preserving alignment pairs whatever it confidently
+       can. Each paired unit on the compared side inherits its counterpart's
+       page number.
+    2. The compared units that paired with nothing take the page number of the
+       nearest labelled unit before them in document order. Because the first
+       pass preserves order, this fills the gaps without ever crossing a
+       boundary the pass was sure about.
+
+    The result is a labelling of both documents that :func:`align_by_section`
+    can then use, so the per-section merge — which is what actually rescues
+    re-wrapped prose — applies to an unmarked pair.
+
+    Returns the number of sections created.
+    """
+    for unit in units_a:
+        page = unit.rows[0].page if unit.rows else unit.block.page_start
+        unit.section = str(page)
+    for unit in units_b:
+        unit.section = None
+
+    # Pass one: carry the numbering across on the pairings we are sure of.
+    for pair in align(units_a, units_b):
+        if pair.a is not None and pair.b is not None:
+            pair.b.section = pair.a.section
+
+    # Pass two: place what pass one could not pair.
+    ordered = sorted(units_b, key=_document_order)
+    _fill_page_gaps(units_a, ordered)
+    return len({u.section for u in units_a})
+
+
+# How much of an unplaced unit's vocabulary must appear on a benchmark page
+# before that page is a better home for it than "wherever the last one went".
+_CONTAINMENT_FLOOR = 0.34
+
+
+def _fill_page_gaps(units_a: list[Unit], ordered_b: list[Unit]) -> None:
+    """Assign every unlabelled compared unit to a benchmark page.
+
+    Handing each gap to the section behind it looks reasonable and is wrong in
+    one specific, costly way: when pass one fails to pair a whole passage — an
+    accounting policy re-wrapped end to end, say — the entire passage inherits
+    the *previous* page's number, and the page it really belongs to comes out
+    with nothing on the compared side. The report then shows a page of the
+    benchmark as missing when every word of it is present.
+
+    So each gap is placed by what it says. The candidates are bounded by the
+    labelled units either side of the run, which keeps document order and keeps
+    the search small; within that range the page whose vocabulary best contains
+    the unit's wins, and the neighbour behind is only the fallback.
+    """
+    pages: dict = {}
+    for unit in units_a:
+        pages.setdefault(unit.section, set()).update(unit.tokens)
+
+    order: list[str] = []
+    for unit in sorted(units_a, key=_document_order):
+        if not order or order[-1] != unit.section:
+            order.append(unit.section)
+    rank = {label: i for i, label in enumerate(order)}
+    if not order:
+        return
+
+    index, total = 0, len(ordered_b)
+    while index < total:
+        if ordered_b[index].section is not None:
+            index += 1
+            continue
+        end = index
+        while end < total and ordered_b[end].section is None:
+            end += 1
+
+        behind = ordered_b[index - 1].section if index else order[0]
+        ahead = ordered_b[end].section if end < total else order[-1]
+        lo, hi = rank.get(behind, 0), rank.get(ahead, len(order) - 1)
+        if hi < lo:
+            lo, hi = hi, lo
+        candidates = order[lo : hi + 1]
+
+        for unit in ordered_b[index:end]:
+            best, best_score = behind, _CONTAINMENT_FLOOR
+            for label in candidates:
+                shared = unit.tokens & pages.get(label, set())
+                score = len(shared) / len(unit.tokens) if unit.tokens else 0.0
+                if score > best_score:
+                    best, best_score = label, score
+            unit.section = best
+        index = end
+
+
 def align_by_section(units_a: list[Unit], units_b: list[Unit]) -> list[Pair]:
     """Align within each numbered section, then across the unmarked remainder.
 

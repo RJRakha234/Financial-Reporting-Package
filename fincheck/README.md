@@ -337,6 +337,38 @@ The report leads with this panel, the console prints it, and `result.ledger`
 exposes it (`reconciled`, `coverage`, `absent_amounts`, `only_in_a`,
 `only_in_b`). Pass `figure_ledger=False` to skip it.
 
+### Sectioning an unmarked pair
+
+Reviewer marks work because they *assert* correspondence rather than infer it,
+so a marked section cannot come out against a blank. Their cost is that someone
+has to sit with a highlighter first. With no marks, sections are derived
+instead, and three candidates are computed — every page of the benchmark as its
+own section, the documents' own headings, and no sectioning at all. Whichever
+leaves fewest passages without a counterpart wins.
+
+**Pages usually win, by a wide margin.** A page boundary can never fail to be
+found, and it covers every word of the benchmark by construction. Measured on a
+41-page Ind AS filing against its 28-page HTML conversion:
+
+| Sectioning | Composite match | Passages left one-sided |
+|---|---|---|
+| Reviewer marks (50 sections, by hand) | 97% | 4 |
+| **Benchmark pages (41 sections, automatic)** | **95%** | **0** |
+| Document headings | 58% | 363 |
+
+Each page of the benchmark becomes a section; the compared document's content
+is placed into those sections in two passes — an ordinary order-preserving
+alignment first, then the passages it could not pair are placed by *what they
+say*, bounded by the labelled units either side. That second pass matters:
+handing each unpaired passage to the section behind it left one whole page of
+the benchmark showing as missing when every word of it was present in the other
+document.
+
+The trade-off is honest and worth knowing: forcing every passage into a section
+means content genuinely present in only one document no longer shows as a
+one-sided row — it appears as an insertion or deletion inside its section's
+word diff instead. The figure ledger is unaffected either way.
+
 ### Reviewing in the report
 
 The report is a working console, not just a document:
