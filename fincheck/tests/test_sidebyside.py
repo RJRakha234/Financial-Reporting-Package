@@ -970,3 +970,54 @@ def test_reordered_text_scores_as_content_that_agrees(tmp_path):
     assert pair.status == "reordered"
     assert not pair.changed, "every word is present on both sides"
     assert pair.score == 99
+
+
+def test_the_review_console_is_written_and_self_contained(tmp_path):
+    """One card per item, one column per document, a decision per difference."""
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "b.pdf",
+        [l.replace("11,502      10,106", "11,502      10,999") for l in STATEMENT],
+    )
+    out = tmp_path / "console.html"
+
+    result = side_by_side(a, b, output_html=str(tmp_path / "sbs.html"),
+                          console_html=str(out))
+    page = out.read_text()
+
+    assert result.console_html == str(out)
+    # Data drives the page; nothing is fetched.
+    assert '<script id="data" type="application/json">' in page
+    assert "http://" not in page and "https://" not in page
+    # The three view states, and the strikethrough that is all that moves.
+    assert 'data-view="markup"' in page and 'data-view="before"' in page
+    assert ".v-before .ins{text-decoration:line-through" in page
+    assert ".v-after  .ext{text-decoration:line-through" in page
+    # Decisions, exports, persistence.
+    assert 'data-decide="accepted"' in page and 'data-decide="rejected"' in page
+    assert 'id="csv"' in page and 'id="json"' in page
+    assert "localStorage" in page
+    # Both themes, addressed through tokens.
+    assert "prefers-color-scheme:dark" in page
+    assert ':root[data-theme=dark]' in page and ':root[data-theme=light]' in page
+
+
+def test_the_console_payload_marks_only_real_differences(tmp_path):
+    from fincheck.console import build_payload
+    from fincheck.sidebyside import Meta
+
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(tmp_path / "b.pdf", STATEMENT)
+    result = side_by_side(a, b, figure_ledger=False)
+
+    meta = Meta(pdf_a=a, pdf_b=b, pages_a=1, pages_b=1, summary=result.summary,
+                label_a="source", label_b="filed")
+    payload = build_payload(result.sections, meta)
+
+    assert payload["benchmark"] == "source"
+    assert payload["items"], "every section becomes an item"
+    for item in payload["items"]:
+        assert item["cells"][0]["isBenchmark"] is True
+        assert item["cells"][0]["differs"] is False, "the benchmark never differs"
+        # Identical documents: nothing requires a decision.
+        assert item["cells"][1]["differs"] is False

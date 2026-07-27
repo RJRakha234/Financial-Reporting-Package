@@ -33,6 +33,7 @@ from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 from .sidebyside import Meta, default_label, write_side_by_side
+from .console import write_console
 from .ledger import Ledger, reconcile
 from .sidemarks import coverage, render_previews, write_marked_copies
 
@@ -149,6 +150,7 @@ class SideBySideResult:
     pairs: list
     summary: object
     output_html: str | None = None
+    console_html: str | None = None
     marked_sections: list = field(default_factory=list)
     marked_pdfs: list = field(default_factory=list)
     # Alignment-independent figure reconciliation, or None if not run.
@@ -257,6 +259,7 @@ def side_by_side(
     marked_pdf_b: str | None = None,
     auto_sections: bool = True,
     figure_ledger: bool = True,
+    console_html: str | None = None,
 ) -> SideBySideResult:
     """Match two documents paragraph by paragraph and row by row.
 
@@ -332,6 +335,7 @@ def side_by_side(
         )
 
     written = None
+    console = None
     if output_html is not None:
         import fitz
 
@@ -378,6 +382,8 @@ def side_by_side(
                 doc_b.close()
             blank.close()
         written = write_side_by_side(sections, meta, output_html)
+        if console_html is not None:
+            console = write_console(sections, meta, console_html)
 
     return SideBySideResult(
         pdf_a=pdf_a,
@@ -386,6 +392,7 @@ def side_by_side(
         pairs=pairs,
         summary=summary,
         output_html=written,
+        console_html=console,
         marked_sections=shared_marks,
         marked_pdfs=list(copies) if copies else [],
         ledger=led,

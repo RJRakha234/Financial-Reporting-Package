@@ -155,11 +155,14 @@ def _audit_run(source: Path, compared: Path, out_dir: Path) -> int:
         str(source),
         str(compared),
         output_html=str(out_dir / "comparison_report.html"),
+        console_html=str(out_dir / "review_console.html"),
         marked_pdf_a=str(out_dir / "source_annotated.pdf"),
         marked_pdf_b=str(out_dir / "compared_annotated.pdf"),
     )
     s = result.summary
     print(f"Report written to: {result.output_html}")
+    if result.console_html:
+        print(f"Review console written to: {result.console_html}")
     for path in result.marked_pdfs:
         print(f"Annotated copy written to: {path}")
     print(
