@@ -17,7 +17,9 @@ from .align import (
     align_by_derived_sections,
     align_by_section,
     derive_sections,
+    flag_moved,
     group,
+    rescue_moved,
     summarise,
     units_of,
 )
@@ -172,6 +174,20 @@ def _relative_to(target: str, html_path: str) -> str:
         return target
 
 
+def _preview_quality(total_pages: int) -> dict:
+    """Preview resolution for the embedded page images, by document length.
+
+    The previews are locators — the pulsing box says *where*, and the PDF link
+    inside the panel serves anyone who needs to read the fine print — so long
+    documents trade sharpness for a report that still travels as one file.
+    """
+    if total_pages <= 24:
+        return {"dpi": 112, "quality": 70}
+    if total_pages <= 48:
+        return {"dpi": 92, "quality": 62}
+    return {"dpi": 78, "quality": 55}
+
+
 def _one_sided(pairs) -> int:
     return sum(1 for p in pairs if p.a is None or p.b is None)
 
@@ -251,8 +267,13 @@ def side_by_side(
         pairs = _best_alignment(units_a, units_b)
     else:
         pairs = align(units_a, units_b)
+    # A relocated section pairs up by content even though the order-preserving
+    # alignment could not reach across; it is then flagged rather than shown
+    # as a removal here and an unrelated addition there.
+    pairs = rescue_moved(pairs)
     sections = group(pairs)
     summary = summarise(pairs, units_a, units_b)
+    summary.moved = flag_moved(sections)
     shared_marks = (
         sorted(set(marks_a.labels) & set(marks_b.labels), key=_label_order)
         if sectioned
@@ -294,9 +315,12 @@ def side_by_side(
                 heights_b={i + 1: doc_b[i].rect.height for i in range(doc_b.page_count)},
                 # Embed the marked pages so a click can show the highlighted
                 # source in the report itself — a PDF link at a viewer's mercy
-                # is a fallback, not the feature.
-                previews_a=render_previews(copies[0]) if copies else {},
-                previews_b=render_previews(copies[1]) if copies else {},
+                # is a fallback, not the feature. Resolution steps down with
+                # length so a 60-page statement still ships as one file.
+                previews_a=render_previews(copies[0], **_preview_quality(
+                    doc_a.page_count + doc_b.page_count)) if copies else {},
+                previews_b=render_previews(copies[1], **_preview_quality(
+                    doc_a.page_count + doc_b.page_count)) if copies else {},
             )
         finally:
             doc_a.close()

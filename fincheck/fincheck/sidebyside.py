@@ -275,13 +275,9 @@ def _figure_cells(values, changed, missing: int = 0) -> str:
         title = ""
         if i in changed and isinstance(changed, dict):
             va, vb = changed[i]
-            if vb is None:
-                title = f' title="benchmark: {format_number(va)} · no counterpart here"'
-            else:
-                title = (
-                    f' title="benchmark: {format_number(va)}'
-                    f' · compared: {format_number(vb)}"'
-                )
+            side_a = format_number(va) if va is not None else "absent"
+            side_b = format_number(vb) if vb is not None else "absent"
+            title = f' title="benchmark: {side_a} · compared: {side_b}"'
         cls = " fig--changed" if i in changed else ""
         cells.append(
             f'<span class="fig{cls}"{title}>{_e(format_number(v))}</span>'
@@ -369,7 +365,7 @@ def _stacked_row_html(pair: Pair, tags: Tags) -> str:
     )
 
     return (
-        f'<tr class="r r--{status}">'
+        f'<tr class="r r--{status}" title="match {pair.score}%">'
         f'<td class="gut gut-a">{_spot_link(a, tags.href_a, tags.heights_a, "a")}</td>'
         f'<td class="stack">'
         f'<span class="{label_cls}">'
@@ -413,7 +409,7 @@ def _row_pair_html(pair: Pair, tags: Tags) -> str:
         f'<span class="figs">{_tracked_figs(pair)}</span></td>'
     )
     return (
-        f'<tr class="r r--{status}">'
+        f'<tr class="r r--{status}" title="match {pair.score}%">'
         f'<td class="gut gut-a">{_spot_link(a, tags.href_a, tags.heights_a, "a")}</td>'
         f'{side(a, b, tags.href_a, tags.heights_a, "a")}'
         f'{side(b, a, tags.href_b, tags.heights_b, "b")}'
@@ -439,7 +435,7 @@ def _paragraph_html(pair: Pair, tags: Tags) -> str:
             f'<span class="figs">{_figure_cells(b.values, set())}</span>'
         )
         return (
-            f'<div class="prose prose--{pair.status}">'
+            f'<div class="prose prose--{pair.status}" title="match {pair.score}%">'
             f"{gut_a}"
             f'<div class="side side-a"><p class="para">{left}</p></div>'
             f'<div class="side side-b"><p class="para">{right}</p></div>'
@@ -462,7 +458,7 @@ def _paragraph_html(pair: Pair, tags: Tags) -> str:
         left = f'<div class="side side-a">{text}</div>' if a is not None else empty.format("a")
         right = f'<div class="side side-b">{text}</div>' if b is not None else empty.format("b")
         return (
-            f'<div class="prose prose--{pair.status}">'
+            f'<div class="prose prose--{pair.status}" title="match {pair.score}%">'
             f"{gut_a}{left}{right}{tracked}"
             f"{gut_b}</div>"
         )
@@ -490,7 +486,7 @@ def _paragraph_html(pair: Pair, tags: Tags) -> str:
             tracked_parts.append(f"<ins>{_e(text)}</ins>")
 
     return (
-        f'<div class="prose prose--{pair.status}">'
+        f'<div class="prose prose--{pair.status}" title="match {pair.score}%">'
         f"{gut_a}"
         f'<div class="side side-a"><p class="para">{" ".join(left_parts)}</p></div>'
         f'<div class="side side-b"><p class="para">{" ".join(right_parts)}</p></div>'
@@ -542,6 +538,21 @@ _STATUS_LABEL = {
 }
 
 
+def _tier(score: int) -> str:
+    """CSS class for a composite score, following the reviewer's bands."""
+    if score == 100:
+        return "t-exact"
+    if score >= 75:
+        return "t-high"
+    if score >= 50:
+        return "t-part"
+    return "t-low"
+
+
+def _score_chip(score: int) -> str:
+    return f'<span class="scorechip {_tier(score)}">{score}%</span>'
+
+
 def _section_html(section: Section, index: int, tags: Tags) -> str:
     pages_a, pages_b = section.pages
     status = section.status
@@ -560,6 +571,9 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
         badge += f'<span class="snum">&sect;{_e(section.marked)}</span>'
     spot_a = _section_spot(section, "a", tags.heights_a)
     spot_b = _section_spot(section, "b", tags.heights_b)
+    moved_chip = (
+        '<span class="chip chip--moved">moved</span>' if section.moved else ""
+    )
     head = (
         f'<div class="shead">'
         f'{badge}'
@@ -567,7 +581,9 @@ def _section_html(section: Section, index: int, tags: Tags) -> str:
         f'<h3>{_e(section.title) or "&nbsp;"}</h3>'
         f'<span class="spages">{_page_link(pages_a, tags.href_a, top=spot_a[1] if spot_a else None, peek=_section_peek(section, "a"))}'
         f' &middot; {_page_link(pages_b, tags.href_b, top=spot_b[1] if spot_b else None, peek=_section_peek(section, "b"))}</span>'
+        f"{_score_chip(section.score)}"
         f'<span class="chip chip--{status}">{label}</span>'
+        f"{moved_chip}"
         f'{f"<span class=sdetail>{detail}</span>" if detail else ""}'
         f"</div>"
     )
@@ -601,6 +617,7 @@ _CSS = """
   --differs:#9B3220; --differs-bg:#F6E3DE; --same:#2C6A4E;
   --add:#1F6F4A; --add-bg:#DFF0E5; --del:#9B3220; --del-bg:#F8E4DF;
   --bench:#8A6B2E; --bench-bg:#F5EEDC;
+  --warn:#7E6410; --warn-bg:#F3EDCC;
   --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
   --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
@@ -611,6 +628,7 @@ _CSS = """
   --differs:#E08A72; --differs-bg:#3A211B; --same:#79C7A0;
   --add:#79C7A0; --add-bg:#16301F; --del:#E08A72; --del-bg:#361D18;
   --bench:#CFA95F; --bench-bg:#2C2415;
+  --warn:#D6C05E; --warn-bg:#2E2A15;
 }}
 :root[data-theme=dark]{
   --paper:#121614; --panel:#191F1D; --ink:#E7EAE7; --ink-soft:#B3BAB6;
@@ -618,6 +636,7 @@ _CSS = """
   --differs:#E08A72; --differs-bg:#3A211B; --same:#79C7A0;
   --add:#79C7A0; --add-bg:#16301F; --del:#E08A72; --del-bg:#361D18;
   --bench:#CFA95F; --bench-bg:#2C2415;
+  --warn:#D6C05E; --warn-bg:#2E2A15;
 }
 :root[data-theme=light]{
   --paper:#FBFAF7; --panel:#F3F2ED; --ink:#16191A; --ink-soft:#4A514D;
@@ -625,6 +644,7 @@ _CSS = """
   --differs:#9B3220; --differs-bg:#F6E3DE; --same:#2C6A4E;
   --add:#1F6F4A; --add-bg:#DFF0E5; --del:#9B3220; --del-bg:#F8E4DF;
   --bench:#8A6B2E; --bench-bg:#F5EEDC;
+  --warn:#7E6410; --warn-bg:#F3EDCC;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
@@ -769,6 +789,17 @@ body.hide-unmarked .sec--unmarked{display:none}
 .chip--same{color:var(--muted)} .chip--changed{color:var(--differs)}
 .chip--formatting{color:var(--accent)}
 .chip--added{color:var(--add)} .chip--removed{color:var(--del)}
+.chip--moved{color:var(--bench)}
+/* Composite match score, banded the way the reviewer reads it:
+   100 exact / 75-99 close / 50-74 partial / below 50 low. */
+.scorechip{font-family:var(--mono);font-variant-numeric:tabular-nums;
+  font-size:.72rem;font-weight:600;padding:.1rem .38rem;border-radius:2px;
+  white-space:nowrap}
+.t-exact{color:var(--same);background:var(--add-bg)}
+.t-high{color:var(--warn);background:var(--warn-bg)}
+.t-part{color:var(--differs);background:var(--differs-bg)}
+.t-low{color:#fff;background:var(--differs)}
+.rm{white-space:nowrap}
 
 .scroll{overflow-x:auto}
 table.rows{border-collapse:collapse;width:100%}
@@ -1051,11 +1082,11 @@ def write_side_by_side(
             f"including {s.rows_matched:,} table rows, carry its content exactly."
         )
 
-    # The agreement seal: how much of what was compared matches the benchmark,
-    # drawn as a ring. Formatting-only differences count as agreement.
-    agree = s.matched - s.changed
-    pct = (100.0 * agree / s.matched) if s.matched else 0.0
-    pct_text = f"{pct:.1f}".rstrip("0").rstrip(".") + "%"
+    # The agreement seal shows the composite match: every segment's 0-100
+    # score, weighted by how much content it carries, one-sided segments
+    # counting as zero. One number, and the ring is drawn to it.
+    pct = float(s.overall)
+    pct_text = f"{s.overall}%"
     circumference = 351.86  # 2 * pi * r, r = 56
     seal_target = circumference * (1 - pct / 100.0)
     seal_state = " seal--bad" if s.changed_figures else ""
@@ -1066,7 +1097,7 @@ def write_side_by_side(
     )
     seal = (
         f'<figure class="seal{seal_state}" role="img" '
-        f'aria-label="{pct_text} of compared passages match the benchmark; {fig_note}">'
+        f'aria-label="composite match with the benchmark {pct_text}; {fig_note}">'
         f'<svg viewBox="0 0 132 132" aria-hidden="true">'
         f'<circle class="seal-bg" cx="66" cy="66" r="56"></circle>'
         f'<circle class="seal-fg" cx="66" cy="66" r="56" '
@@ -1074,7 +1105,7 @@ def write_side_by_side(
         f'data-target="{seal_target:.1f}"></circle>'
         f"</svg>"
         f"<figcaption><b>{pct_text}</b>"
-        f"<span>agreement with benchmark</span>"
+        f"<span>composite match with benchmark</span>"
         f"<i>{fig_note}</i></figcaption>"
         f"</figure>"
     )
@@ -1088,13 +1119,17 @@ def write_side_by_side(
     def _register_row(x) -> str:
         spot_a = _section_spot(x, "a", meta.heights_a)
         spot_b = _section_spot(x, "b", meta.heights_b)
+        flags = _pill(x.status)
+        if x.moved:
+            flags += ' <span class="chip chip--moved">moved</span>'
         return (
             f'<tr class="reg reg--{x.status}">'
             f'<td class="rn">{x.serial}</td>'
             f'<td class="rt">{_e(x.title) or "&nbsp;"}</td>'
             f'<td class="rp">{_page_link(x.pages[0], meta.marked_href_a, top=spot_a[1] if spot_a else None, peek=_section_peek(x, "a"))}</td>'
             f'<td class="rp">{_page_link(x.pages[1], meta.marked_href_b, top=spot_b[1] if spot_b else None, peek=_section_peek(x, "b"))}</td>'
-            f'<td class="rs">{_pill(x.status)}</td>'
+            f'<td class="rm">{_score_chip(x.score)}</td>'
+            f'<td class="rs">{flags}</td>'
             f'<td class="rd">{f"{x.changed} of {len(x.pairs)}" if x.status == "changed" else ""}</td>'
             f'<td class="rl"><a href="#s{sections.index(x)}">view</a></td>'
             f"</tr>"
@@ -1109,7 +1144,7 @@ def write_side_by_side(
         "<thead><tr><th>#</th><th>Section</th>"
         f'<th>{_e(meta.label_a)}<span class="btag">benchmark</span></th>'
         f"<th>{_e(meta.label_b)}</th>"
-        "<th>Status</th><th>Deviations</th><th></th></tr></thead>"
+        "<th>Match</th><th>Status</th><th>Deviations</th><th></th></tr></thead>"
         f"<tbody>{register_rows}</tbody></table></div></section>"
     )
 
@@ -1228,7 +1263,7 @@ def write_side_by_side(
     <div class="v">
       <b>{s.only_in_a + s.only_in_b:,}</b>
       <span>present on one side</span>
-      <i>{s.only_in_a:,} benchmark only &middot; {s.only_in_b:,} not in benchmark</i>
+      <i>{s.only_in_a:,} benchmark only &middot; {s.only_in_b:,} not in benchmark{f" &middot; {s.moved:,} moved" if s.moved else ""}</i>
     </div>
   </div>
 

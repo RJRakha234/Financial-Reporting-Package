@@ -277,6 +277,45 @@ every line would carry a highlight, and the mark-up would obscure rather than
 show. The summary page says how many pages were skipped, and the console and
 JSON reports still list every change.
 
+## The auditor's one-command form
+
+For the review workflow — a **source document** (the benchmark) converted to
+HTML and re-exported as PDF, verified back against the source — one command
+produces the full deliverable set in a folder:
+
+```bash
+python -m fincheck compare --source source.pdf --compared filed.pdf --output ./results/
+```
+
+```
+Report written to: results/comparison_report.html
+Annotated copy written to: results/source_annotated.pdf
+Annotated copy written to: results/compared_annotated.pdf
+
+Composite match with benchmark: 97%
+  1,135 segments matched (266 passages, 869 table rows); 12 deviate, 0 figure cells deviate.
+  3 in the benchmark only, 5 not in the benchmark, 1 section(s) moved.
+```
+
+- `comparison_report.html` — self-contained (all CSS/JS inline): side-by-side
+  and Word-style tracked-changes views, per-segment 0–100 match scores, a
+  section register with page links, filters, and an in-page preview of the
+  highlighted source for every cell.
+- `source_annotated.pdf` / `compared_annotated.pdf` — each input with every
+  compared passage tinted by outcome, sections outlined and stamped with their
+  serial from the report, and matching bookmarks. Untinted content was **not**
+  covered by the comparison, visibly.
+
+**Scores.** Each segment scores 100 for an exact content match, 99 for a
+formatting-only difference (punctuation, bullet glyphs), 50–98 for a partial
+match in proportion to the content shared, and 0 for a segment with no
+counterpart. The headline number is the length-weighted composite across all
+segments. Exit status is non-zero when anything deviates, for CI use.
+
+**Moved content.** Matching is content-based, never page-based; a section
+relocated in one document still pairs with its counterpart and is flagged
+`moved` in the register rather than reported as a removal plus an addition.
+
 ## Side by side, every paragraph and table
 
 The exact layers above answer *whether* two documents differ. They will not put

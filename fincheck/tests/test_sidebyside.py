@@ -656,6 +656,103 @@ def test_no_pages_are_embedded_without_marked_copies(tmp_path):
     assert 'data-peek="' not in html
 
 
+def test_a_column_missing_from_the_benchmark_still_renders(tmp_path):
+    """The tooltip must not assume the benchmark side has the value.
+
+    A compared document can carry a column the benchmark lacks; formatting a
+    ``None`` crashed the whole report.
+    """
+    a = make_pdf(tmp_path / "a.pdf", ["Balance " + "  ".join(f"{i:,}00" for i in range(1, 11))],
+                 width=842)
+    b = make_pdf(tmp_path / "b.pdf", ["Balance " + "  ".join(f"{i:,}00" for i in range(1, 12))],
+                 width=842)
+    out = tmp_path / "sbs.html"
+
+    side_by_side(a, b, output_html=str(out))
+
+    assert "absent" in out.read_text()
+
+
+def test_composite_scores_follow_the_reviewer_bands(tmp_path):
+    """100 exact; 99 formatting-only; <99 real change; 0 one-sided."""
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT + [None, "Guidance for FY26 : strong",
+                                                  None, "an extra closing note only here"])
+    changed = [l.replace("11,502      10,106", "11,502      10,999") for l in STATEMENT]
+    b = make_pdf(tmp_path / "b.pdf", changed + [None, "Guidance for FY26: strong"])
+
+    pairs, _, summary = compare(a, b)
+    by_status = {}
+    for p in pairs:
+        by_status.setdefault(p.status, p)
+
+    assert by_status["same"].score == 100
+    assert by_status["formatting"].score == 99
+    assert 1 <= by_status["figures-differ"].score <= 98
+    assert by_status["removed"].score == 0
+    assert 0 < summary.overall < 100
+
+
+def test_a_moved_section_is_flagged_but_still_matched(tmp_path):
+    """Content-based matching pairs a relocated section; the flag says it moved."""
+    from fincheck.align import flag_moved
+
+    para = ["The Group operates in one reportable segment and evaluates",
+            "performance on a consolidated basis every quarter."]
+    other = ["Basic earnings per share is computed by dividing net profit",
+             "by the weighted average number of shares outstanding."]
+    third = ["The financial statements were authorised for issue by the",
+             "board of directors at its meeting held in July."]
+    gap = [None, None]
+    a = make_pdf(tmp_path / "a.pdf", para + gap + other + gap + third)
+    b = make_pdf(tmp_path / "b.pdf", other + gap + third + gap + para)
+
+    result = side_by_side(a, b, use_marks=False, auto_sections=False)
+    moved = [s for s in result.sections if s.moved]
+
+    assert result.summary.moved == len(moved) >= 1
+    for section in moved:
+        assert all(p.a is not None and p.b is not None for p in section.pairs)
+
+
+def test_the_report_shows_scores_and_the_composite(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "b.pdf",
+        [l.replace("11,502      10,106", "11,502      10,999") for l in STATEMENT],
+    )
+    out = tmp_path / "sbs.html"
+
+    result = side_by_side(a, b, output_html=str(out))
+    html = out.read_text()
+
+    assert 'class="scorechip' in html, "each section shows its match score"
+    assert f"<b>{result.summary.overall}%</b>" in html, "the seal shows the composite"
+    assert 'title="match ' in html, "each segment's score is inspectable"
+
+
+def test_the_auditor_cli_form_writes_the_named_outputs(tmp_path, capsys):
+    from fincheck.cli import main
+
+    a = make_pdf(tmp_path / "source.pdf", STATEMENT)
+    b = make_pdf(
+        tmp_path / "compared.pdf",
+        [l.replace("54,613      51,804", "54,613      51,900") for l in STATEMENT],
+    )
+    out = tmp_path / "results"
+
+    code = main([
+        "compare", "--source", str(a), "--compared", str(b),
+        "--output", str(out),
+    ])
+    printed = capsys.readouterr().out
+
+    assert code == 1  # the documents deviate
+    assert (out / "comparison_report.html").is_file()
+    assert (out / "source_annotated.pdf").is_file()
+    assert (out / "compared_annotated.pdf").is_file()
+    assert "Composite match with benchmark:" in printed
+
+
 def test_the_left_document_is_presented_as_the_benchmark(tmp_path):
     a = make_pdf(tmp_path / "source.pdf", STATEMENT)
     b = make_pdf(tmp_path / "filed.pdf", STATEMENT)

@@ -191,6 +191,9 @@ class Pair:
     b: Unit | None
     similarity: float = 0.0
     words: list[tuple[str, str]] = field(default_factory=list)
+    # Matched by content, but from a different place in the other document's
+    # order. Set by :func:`rescue_moved`.
+    moved: bool = False
 
     @property
     def kind(self) -> str:
@@ -236,6 +239,48 @@ class Pair:
             if x != y:
                 out.append((i, x, y))
         return out
+
+    @property
+    def score(self) -> int:
+        """Composite match score, 0..100.
+
+        The tiers follow how a reviewer reads them: 100 is an exact content
+        match, 99 a formatting-only difference, anything lower the share of
+        content the two sides actually have in common — characters for prose,
+        label similarity and agreeing cells for a table row — and 0 a segment
+        with no counterpart at all. Capped at 98 for real differences so a
+        changed segment can never display as "exact" through rounding.
+        """
+        if self.a is None or self.b is None:
+            return 0
+        status = self.status
+        if status == "same":
+            return 100
+        if status == "formatting":
+            return 99
+        if self.kind == "row":
+            label = difflib.SequenceMatcher(
+                None, _norm(self.a.text), _norm(self.b.text)
+            ).ratio()
+            cells = max(len(self.a.values), len(self.b.values))
+            if cells:
+                agreeing = (cells - len(self.changed_figures)) / cells
+                raw = 100 * (0.4 * label + 0.6 * agreeing)
+            else:
+                raw = 100 * label
+            return max(1, min(98, round(raw)))
+        # Prose: character-weighted share of the words the sides share.
+        # Formatting variants ("FY26 :" vs "FY26:") count as shared.
+        eq = sum(len(t) for op, t in self.words if op == "=")
+        fmt_a = sum(len(t) for op, t in self.words if op == "~-")
+        fmt_b = sum(len(t) for op, t in self.words if op == "~+")
+        del_a = sum(len(t) for op, t in self.words if op == "-")
+        ins_b = sum(len(t) for op, t in self.words if op == "+")
+        total = 2 * eq + fmt_a + fmt_b + del_a + ins_b
+        if not total:
+            return 98
+        raw = 100 * (2 * eq + fmt_a + fmt_b) / total
+        return max(1, min(98, round(raw)))
 
 
 def _jaccard(x: set, y: set) -> float:
@@ -735,10 +780,34 @@ class Section:
     # Position in the report, stamped onto the marked-up PDFs so a point here
     # can be found on the page it came from.
     serial: int = 0
+    # Content matched, but sitting at a different position in the sequence of
+    # the other document. Set by :func:`flag_moved`.
+    moved: bool = False
 
     @property
     def changed(self) -> int:
         return sum(1 for p in self.pairs if p.changed)
+
+    @property
+    def score(self) -> int:
+        """Length-weighted composite score across the section's segments.
+
+        A section carrying any deviation is capped below 100, so rounding can
+        never present a flagged section as an exact match.
+        """
+        total = weighted = 0
+        for pair in self.pairs:
+            weight = (
+                len(pair.a.text if pair.a else "")
+                + len(pair.b.text if pair.b else "")
+                + 1
+            )
+            total += weight
+            weighted += weight * pair.score
+        score = round(weighted / total) if total else 0
+        if score == 100 and self.status != "same":
+            score = 99
+        return score
 
     @property
     def status(self) -> str:
@@ -895,6 +964,97 @@ def group(pairs: list[Pair]) -> list[Section]:
     return sections
 
 
+# A one-sided leftover this similar to a leftover on the other side is the
+# same content relocated, not a removal plus an unrelated addition.
+_MOVED_FLOOR = 0.75
+
+
+def rescue_moved(pairs: list[Pair]) -> list[Pair]:
+    """Reunite one-sided leftovers that plainly match content elsewhere.
+
+    The alignment preserves document order, because financial statements
+    repeat their labels endlessly and a matcher free to reorder pairs the
+    wrong ones. The cost is that a section relocated wholesale comes out as
+    removed in one place and added in another. This pass pairs those
+    leftovers back up by similarity — and marks the pair as moved, which is
+    what a reviewer actually needs to know about it.
+    """
+    b_only = [i for i, p in enumerate(pairs) if p.a is None]
+    used: set = set()
+    for i, pair in enumerate(pairs):
+        if pair.b is not None:
+            continue
+        best, best_sim = None, _MOVED_FLOOR
+        for j in b_only:
+            if j in used or pairs[j].b.kind != pair.a.kind:
+                continue
+            sim = similarity(pair.a, pairs[j].b)
+            if sim > best_sim:
+                best, best_sim = j, sim
+        if best is None:
+            continue
+        used.add(best)
+        merged = Pair(a=pair.a, b=pairs[best].b, similarity=best_sim, moved=True)
+        if merged.kind == "paragraph":
+            merged.words = diff_words(merged.a.text, merged.b.text)
+        pairs[i] = merged
+    return [p for k, p in enumerate(pairs) if k not in used]
+
+
+def _section_position(section: Section, side: str):
+    """Where the section's first content sits in one document, or ``None``."""
+    for pair in section.pairs:
+        unit = pair.a if side == "a" else pair.b
+        if unit is not None:
+            return _document_order(unit)
+    return None
+
+
+def _longest_increasing(seq: list[int]) -> set[int]:
+    """Indices of one longest strictly-increasing subsequence of ``seq``."""
+    if not seq:
+        return set()
+    best = [1] * len(seq)
+    prev = [-1] * len(seq)
+    for i in range(len(seq)):
+        for j in range(i):
+            if seq[j] < seq[i] and best[j] + 1 > best[i]:
+                best[i] = best[j] + 1
+                prev[i] = j
+    end = max(range(len(seq)), key=lambda i: best[i])
+    keep: set[int] = set()
+    while end != -1:
+        keep.add(end)
+        end = prev[end]
+    return keep
+
+
+def flag_moved(sections: list[Section]) -> int:
+    """Mark sections whose relative order differs between the two documents.
+
+    Matching is content-based throughout, so a section moved to a different
+    place still pairs correctly — but a reviewer needs to know it moved. The
+    longest run of sections that keeps its order on both sides is taken as the
+    document's spine; everything matched outside that run is flagged.
+    """
+    for section in sections:
+        section.moved = any(p.moved for p in section.pairs)
+    placed = [
+        s
+        for s in sections
+        if _section_position(s, "a") is not None
+        and _section_position(s, "b") is not None
+    ]
+    order_a = sorted(placed, key=lambda s: _section_position(s, "a"))
+    by_b = sorted(placed, key=lambda s: _section_position(s, "b"))
+    rank_b = {id(s): rank for rank, s in enumerate(by_b)}
+    keep = _longest_increasing([rank_b[id(s)] for s in order_a])
+    for index, section in enumerate(order_a):
+        if index not in keep:
+            section.moved = True
+    return sum(1 for s in sections if s.moved)
+
+
 @dataclass
 class Summary:
     units_a: int
@@ -908,10 +1068,22 @@ class Summary:
     changed_figures: int
     unchanged: int
     formatting: int
+    # Length-weighted composite match across every segment, one-sided ones
+    # counting as zero. The single number a summary header quotes.
+    overall: int = 0
+    # Sections matched but sitting elsewhere in the other document's order.
+    moved: int = 0
 
 
 def summarise(pairs: list[Pair], units_a, units_b) -> Summary:
     both = [p for p in pairs if p.a is not None and p.b is not None]
+    total = weighted = 0
+    for p in pairs:
+        weight = (
+            len(p.a.text if p.a else "") + len(p.b.text if p.b else "") + 1
+        )
+        total += weight
+        weighted += weight * p.score
     return Summary(
         units_a=len(units_a),
         units_b=len(units_b),
@@ -926,4 +1098,5 @@ def summarise(pairs: list[Pair], units_a, units_b) -> Summary:
         # Matched and found to agree. Not the same as the anchor count, which is
         # an internal detail of how the pairing was reached.
         unchanged=sum(1 for p in both if not p.changed),
+        overall=round(weighted / total) if total else 0,
     )

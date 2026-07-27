@@ -51,8 +51,24 @@ def build_compare_parser() -> argparse.ArgumentParser:
         "colour and position), every vector path and image, and the rendered "
         "pixels. No layout, row or column is inferred.",
     )
-    parser.add_argument("pdf_a", help="reference PDF")
-    parser.add_argument("pdf_b", help="PDF to compare against it")
+    parser.add_argument(
+        "pdf_a", nargs="?", help="reference PDF (or use --source)"
+    )
+    parser.add_argument(
+        "pdf_b", nargs="?", help="PDF to compare against it (or use --compared)"
+    )
+    parser.add_argument(
+        "--source",
+        metavar="PDF",
+        help="the benchmark PDF (auditor's form of the first positional); "
+        "with --compared and --output DIR, writes comparison_report.html, "
+        "source_annotated.pdf and compared_annotated.pdf into DIR",
+    )
+    parser.add_argument(
+        "--compared",
+        metavar="PDF",
+        help="the PDF verified against the benchmark (second positional)",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -121,8 +137,57 @@ def build_compare_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _audit_run(source: Path, compared: Path, out_dir: Path) -> int:
+    """The auditor's one-command form: benchmark vs compared, into a folder.
+
+    Writes ``comparison_report.html``, ``source_annotated.pdf`` and
+    ``compared_annotated.pdf`` into ``out_dir``. Reviewer marks are honoured
+    when both PDFs carry them; otherwise sections derive from headings.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result = side_by_side(
+        str(source),
+        str(compared),
+        output_html=str(out_dir / "comparison_report.html"),
+        marked_pdf_a=str(out_dir / "source_annotated.pdf"),
+        marked_pdf_b=str(out_dir / "compared_annotated.pdf"),
+    )
+    s = result.summary
+    print(f"Report written to: {result.output_html}")
+    for path in result.marked_pdfs:
+        print(f"Annotated copy written to: {path}")
+    print(
+        f"\nComposite match with benchmark: {s.overall}%"
+        f"\n  {s.matched:,} segments matched ({s.paragraphs_matched:,} passages, "
+        f"{s.rows_matched:,} table rows); {s.changed:,} deviate, "
+        f"{s.changed_figures:,} figure cells deviate."
+        f"\n  {s.only_in_a:,} in the benchmark only, {s.only_in_b:,} not in the "
+        f"benchmark, {s.moved:,} section(s) moved."
+    )
+    clean = not (s.changed or s.changed_figures or s.only_in_a or s.only_in_b)
+    return 0 if clean else 1
+
+
 def compare_main(argv: list[str]) -> int:
     args = build_compare_parser().parse_args(argv)
+
+    if args.source or args.compared:
+        if not (args.source and args.compared):
+            print("error: --source and --compared go together", file=sys.stderr)
+            return 2
+        source, compared = Path(args.source), Path(args.compared)
+        for path in (source, compared):
+            if not path.is_file():
+                print(f"error: file not found: {path}", file=sys.stderr)
+                return 2
+        return _audit_run(source, compared, Path(args.output or "./results"))
+
+    if not (args.pdf_a and args.pdf_b):
+        print(
+            "error: two PDFs required (positionally, or --source/--compared)",
+            file=sys.stderr,
+        )
+        return 2
 
     paths = [Path(args.pdf_a), Path(args.pdf_b)]
     for path in paths:
