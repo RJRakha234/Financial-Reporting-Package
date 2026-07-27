@@ -66,3 +66,28 @@ def test_a_single_separator_keeps_its_existing_reading():
     assert parse_number("1.234") == 1.234
     assert parse_number("2.19") == 2.19
     assert parse_number("1.5") == 1.5
+
+
+def test_a_currency_sign_lost_in_conversion_still_reads_as_a_figure():
+    """An HTML-to-PDF converter can write the rupee sign as the letters "ru".
+
+    Observed in a real filing: 43 figures came out as "ru4,185". None was
+    visible to the reconciliation, so every one reported as an amount printed
+    in the source and nowhere in the exhibit — while the figure sat plainly on
+    the page. A reconciliation may not raise false alarms of that shape.
+    """
+    from fincheck.numbers import is_numberish, parse_number
+
+    assert is_numberish("ru4,185") and parse_number("ru4,185") == 4185.0
+    assert is_numberish("ru424") and parse_number("ru424") == 424.0
+    # The properly-encoded form must of course still work, and reconcile.
+    assert parse_number("₹4,185") == parse_number("ru4,185")
+
+
+def test_letters_that_are_not_currency_stay_out_of_the_figures():
+    """The fix must not turn identifiers into amounts."""
+    from fincheck.numbers import is_numberish, parse_number
+
+    for token in ("A21918", "exv99w08.htm", "due(1)", "run5", "DIN00041245"):
+        assert not is_numberish(token), token
+        assert parse_number(token) is None, token

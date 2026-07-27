@@ -14,7 +14,14 @@ DASHES = "–—−‒"
 _NIL_TOKENS = {"-", "--", "—", "–", "−", "nil", "n/a", "na"}
 
 # ISO codes / common prefixes that hug a figure in disclosures.
-_CODE_RE = re.compile(r"(?i)\b(?:inr|usd|eur|gbp|aed|jpy|cny|sgd|rs|rmb)\.?")
+#
+# ``ru`` is not a currency code: it is what the rupee sign becomes when an
+# HTML-to-PDF converter loses the glyph and writes the two letters instead.
+# A real filing produced 43 figures as "ru4,185", none of which the
+# reconciliation could see — so every one of them reported as an amount printed
+# in the source and nowhere in the exhibit. False alarms of that shape are the
+# ones that destroy trust in a reconciliation, so the mojibake is decoded here.
+_CODE_RE = re.compile(r"(?i)\b(?:inr|usd|eur|gbp|aed|jpy|cny|sgd|rs|ru|rmb)\.?")
 _PURE_NUMBER_RE = re.compile(r"^\d+(?:\.\d+)?$")
 
 
@@ -114,13 +121,22 @@ def is_numberish(token: str) -> bool:
 
     Used to glue space-separated figures like ``1 234 567`` back together
     before parsing. Requires at least one digit so stray punctuation is ignored.
+
+    Currency decoration is stripped before the test, using the same rule
+    :func:`parse_number` applies, so the two cannot disagree about what is a
+    figure. That matters: a token this rejects is invisible to the whole tool,
+    and ``ru4,185`` — a rupee sign the converter turned into letters — was
+    being dropped while ``₹4,185`` was read.
+
+    Letters that are *not* currency stay rejected, so a membership number like
+    ``A21918`` remains what it is rather than becoming the figure 21,918.
     """
     token = token.strip()
     if not token:
         return False
     if not any(ch.isdigit() for ch in token):
         return False
-    return bool(_NUMBERISH_RE.match(token))
+    return bool(_NUMBERISH_RE.match(_strip_decorations(token)))
 
 
 def format_number(value: float) -> str:
