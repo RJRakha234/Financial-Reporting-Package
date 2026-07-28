@@ -1,0 +1,1 @@
+pytest>=7.0      # only needed to run the tests
