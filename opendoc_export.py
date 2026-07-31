@@ -84,6 +84,10 @@ LOGIN_TIMEOUT = int(os.environ.get("SAP_TIMEOUT", "90"))
 FORMAT_SUFFIX = {"E": ".xls", "X": ".xlsx", "P": ".pdf", "C": ".csv", "H": ".html"}
 
 
+class NotAFile(Exception):
+    """The server answered with a web page where a document was expected."""
+
+
 def parse_prompts(raw: str) -> list:
     """"Name=value;Name2=v1,v2" -> [(name, [values]), ...]"""
     prompts = []
@@ -188,12 +192,25 @@ def cookies_via_browser() -> dict:
             )
 
         # Now the BusinessObjects host itself, so its session cookies exist.
+        # Single sign-on redirects through several hops here, and the session
+        # cookie only lands at the end — so wait for the cookie jar to stop
+        # growing rather than for the first cookie to appear.
         print(f"Establishing the BusinessObjects session at {BOE_BASE} ...")
         driver.get(f"{BOE_BASE}/BOE/BI")
         _fill_logon_form(driver)
-        WebDriverWait(driver, LOGIN_TIMEOUT).until(
-            lambda d: len(d.get_cookies()) > 0
-        )
+
+        import time as _time
+        previous, stable_for, deadline = -1, 0, _time.time() + LOGIN_TIMEOUT
+        while _time.time() < deadline:
+            count = len(driver.get_cookies())
+            if count and count == previous:
+                stable_for += 1
+                if stable_for >= 3:  # ~3s with no change: redirects finished
+                    break
+            else:
+                stable_for = 0
+            previous = count
+            _time.sleep(1)
 
         jar = {c["name"]: c["value"] for c in driver.get_cookies()}
         print(f"Session established ({len(jar)} cookies on the BOE host).")
@@ -288,12 +305,9 @@ def download(url: str, cookies: dict, output: str | None) -> Path:
     # unanswered prompt, or rights that do not cover this document. Reporting
     # it beats writing a corrupt "Excel" file.
     if "html" in content_type.lower() and FORMAT != "H":
-        preview = response.text[:400].replace("\n", " ")
-        sys.exit(
-            "The server returned an HTML page instead of a file. Usually a "
-            "prompt has no value, or the session lacks rights on this "
-            "document.\n"
-            f"Content-Type: {content_type}\nFirst bytes: {preview}"
+        raise NotAFile(
+            "the server answered with a web page, not a document "
+            f"(Content-Type: {content_type})"
         )
 
     size = 0
@@ -337,7 +351,16 @@ def main() -> None:
     cookies = (
         cookies_from_string(COOKIES_RAW) if COOKIES_RAW else cookies_via_browser()
     )
-    download(url, cookies, args.output)
+    try:
+        download(url, cookies, args.output)
+    except NotAFile as exc:
+        # Single sign-on did not hand a usable session to `requests` — common
+        # where the logon involves redirects the cookie jar alone cannot
+        # reproduce. Letting the browser fetch the document works because it
+        # carries the whole session, so fall back to it rather than failing.
+        print(f"Direct request did not return a document: {exc}")
+        print("Falling back to fetching it through the browser ...")
+        download_via_browser(url, args.output)
 
 
 if __name__ == "__main__":
