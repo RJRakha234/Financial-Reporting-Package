@@ -138,13 +138,40 @@ def cookies_from_string(raw: str) -> dict:
     return jar
 
 
+def _fill_logon_form(driver) -> None:
+    """Submit the portal/BOE logon form if one is displayed."""
+    from selenium.common.exceptions import NoSuchElementException
+    from selenium.webdriver.common.by import By
+
+    for ub, uv, pb, pv in [
+        (By.ID, "logonuidfield", By.ID, "logonpassfield"),
+        (By.NAME, "j_user", By.NAME, "j_password"),
+        (By.NAME, "j_username", By.NAME, "j_password"),
+    ]:
+        try:
+            user_field = driver.find_element(ub, uv)
+            pass_field = driver.find_element(pb, pv)
+        except NoSuchElementException:
+            continue
+        if not (SAP_USER and SAP_PASS):
+            sys.exit("A logon form is shown but SAP_USER / SAP_PASS are not set.")
+        user_field.send_keys(SAP_USER)
+        pass_field.send_keys(SAP_PASS)
+        pass_field.submit()
+        return
+
+
 def cookies_via_browser() -> dict:
-    """Open the portal once so SSO can establish a session, then take its
-    cookies. The browser is closed before the download starts."""
+    """Establish a session and return the BusinessObjects server's cookies.
+
+    Two hops matter here. Signing in at the portal authenticates the user, but
+    the document is served by the BOE server, which is usually a different
+    host — and cookies are per-host. So after the portal we also load the BOE
+    server, letting its SSO handoff run, and collect the cookies from there.
+    """
     try:
         from selenium import webdriver
-        from selenium.common.exceptions import NoSuchElementException
-        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
     except ImportError:
         sys.exit("selenium is required for the login step: pip install selenium")
 
@@ -152,36 +179,80 @@ def cookies_via_browser() -> dict:
     options.add_argument("--start-maximized")
     driver = webdriver.Edge(options=options)
     try:
-        print(f"Signing in via {PORTAL_BASE} ...")
-        driver.get(PORTAL_BASE)
+        if PORTAL_BASE and PORTAL_BASE != BOE_BASE:
+            print(f"Signing in via {PORTAL_BASE} ...")
+            driver.get(PORTAL_BASE)
+            _fill_logon_form(driver)
+            WebDriverWait(driver, LOGIN_TIMEOUT).until(
+                lambda d: len(d.get_cookies()) > 0
+            )
 
-        # Fill a logon form if one is shown; under SSO there will not be one.
-        for ub, uv, pb, pv in [
-            (By.ID, "logonuidfield", By.ID, "logonpassfield"),
-            (By.NAME, "j_user", By.NAME, "j_password"),
-            (By.NAME, "j_username", By.NAME, "j_password"),
-        ]:
-            try:
-                user_field = driver.find_element(ub, uv)
-                pass_field = driver.find_element(pb, pv)
-            except NoSuchElementException:
-                continue
-            if not (SAP_USER and SAP_PASS):
-                sys.exit("A logon form is shown but SAP_USER / SAP_PASS are "
-                         "not set.")
-            user_field.send_keys(SAP_USER)
-            pass_field.send_keys(SAP_PASS)
-            pass_field.submit()
-            break
-
-        # Give SSO redirects a moment to settle and set their cookies.
-        from selenium.webdriver.support.ui import WebDriverWait
+        # Now the BusinessObjects host itself, so its session cookies exist.
+        print(f"Establishing the BusinessObjects session at {BOE_BASE} ...")
+        driver.get(f"{BOE_BASE}/BOE/BI")
+        _fill_logon_form(driver)
         WebDriverWait(driver, LOGIN_TIMEOUT).until(
             lambda d: len(d.get_cookies()) > 0
         )
+
         jar = {c["name"]: c["value"] for c in driver.get_cookies()}
-        print(f"Session established ({len(jar)} cookies).")
+        print(f"Session established ({len(jar)} cookies on the BOE host).")
         return jar
+    finally:
+        driver.quit()
+
+
+def download_via_browser(url: str, output: str | None) -> Path:
+    """Fallback: let the browser fetch the document, exactly as a manual paste
+    of the URL would. Slower than the direct request, but it inherits whatever
+    authentication the browser already has."""
+    try:
+        from selenium import webdriver
+    except ImportError:
+        sys.exit("selenium is required for --browser: pip install selenium")
+    import time
+
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    options = webdriver.EdgeOptions()
+    options.add_argument("--start-maximized")
+    options.add_experimental_option("prefs", {
+        "download.default_directory": str(DOWNLOAD_DIR),
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+    })
+    driver = webdriver.Edge(options=options)
+    before = {p.name for p in DOWNLOAD_DIR.iterdir()}
+    try:
+        if PORTAL_BASE and PORTAL_BASE != BOE_BASE:
+            driver.get(PORTAL_BASE)
+            _fill_logon_form(driver)
+        # The first OpenDocument request of a session redirects through logon
+        # and drops the query parameters, so request it twice.
+        driver.get(url)
+        _fill_logon_form(driver)
+        driver.get(url)
+
+        deadline = time.time() + LOGIN_TIMEOUT * 4
+        while time.time() < deadline:
+            new = [
+                p for p in DOWNLOAD_DIR.iterdir()
+                if p.name not in before
+                and p.suffix.lower() not in (".crdownload", ".tmp", ".partial")
+            ]
+            if new:
+                newest = max(new, key=lambda p: p.stat().st_mtime)
+                size = newest.stat().st_size
+                time.sleep(2)
+                if newest.stat().st_size == size and size > 0:
+                    if output:
+                        target = Path(output).absolute()
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        newest.replace(target)
+                        newest = target
+                    print(f"Downloaded: {newest}")
+                    return newest
+            time.sleep(1)
+        sys.exit(f"No completed download appeared in {DOWNLOAD_DIR}.")
     finally:
         driver.quit()
 
@@ -195,19 +266,33 @@ def download(url: str, cookies: dict, output: str | None) -> Path:
     )
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    session = requests.Session()
+    session.cookies.update(cookies)
+
     print("Requesting the document ...")
-    response = requests.get(url, cookies=cookies, stream=True, timeout=600)
+    response = session.get(url, stream=True, timeout=600)
     response.raise_for_status()
 
+    # The first OpenDocument request of a session redirects through logon and
+    # drops the query parameters, so the reply is the viewer page rather than
+    # a file. The redirect leaves a usable session behind, so asking again
+    # normally succeeds — the same "paste it twice" behaviour seen manually.
+    if "html" in response.headers.get("Content-Type", "").lower() and FORMAT != "H":
+        print("Got the logon/viewer page; retrying now the session is warm ...")
+        response.close()
+        response = session.get(url, stream=True, timeout=600)
+        response.raise_for_status()
+
     content_type = response.headers.get("Content-Type", "")
-    # A logged-out or prompt-incomplete request comes back as an HTML page
-    # rather than a file — catching it here gives a clear message instead of
-    # a corrupt "Excel" file.
+    # Still HTML on the second attempt means something else is wrong — an
+    # unanswered prompt, or rights that do not cover this document. Reporting
+    # it beats writing a corrupt "Excel" file.
     if "html" in content_type.lower() and FORMAT != "H":
         preview = response.text[:400].replace("\n", " ")
         sys.exit(
-            "The server returned an HTML page instead of a file — usually a "
-            "login page, or a prompt that has no value.\n"
+            "The server returned an HTML page instead of a file. Usually a "
+            "prompt has no value, or the session lacks rights on this "
+            "document.\n"
             f"Content-Type: {content_type}\nFirst bytes: {preview}"
         )
 
@@ -232,11 +317,21 @@ def main() -> None:
         help="Print the OpenDocument URL and exit, without downloading. "
              "Paste it into a logged-in browser to verify it works.",
     )
+    parser.add_argument(
+        "--browser", action="store_true",
+        help="Let the browser fetch the document instead of requesting it "
+             "directly. Slower, but it inherits the browser's own "
+             "authentication — useful if the direct request is refused.",
+    )
     args = parser.parse_args()
 
     url = build_url()
     if args.print_url:
         print(url)
+        return
+
+    if args.browser:
+        download_via_browser(url, args.output)
         return
 
     cookies = (
