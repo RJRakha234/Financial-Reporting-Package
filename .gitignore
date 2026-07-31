@@ -1,0 +1,11 @@
+# Local configuration — contains hostnames and possibly credentials.
+run_export.bat
+run_watch.bat
+
+# Downloaded reports — real financial data, never commit.
+sap_downloads/
+*.xls
+*.xlsx
+
+__pycache__/
+*.py[cod]
