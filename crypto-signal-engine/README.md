@@ -11,10 +11,10 @@ An **alert-only** market-data and signal-generation engine for Binance spot pair
 
 ## ⚠️ Read this first: the data in this repository is SYNTHETIC
 
-The build environment for this project **has no network route to Binance**. Both
-`api.binance.com` and the `data-api.binance.vision` mirror are refused at the
-egress proxy with `403 Forbidden` on CONNECT — an organisation network-policy
-denial, not an outage:
+The build environment for this project **has no network route to any market-data
+provider**. `api.binance.com` and the `data-api.binance.vision` mirror are refused
+at the egress proxy with `403 Forbidden` on CONNECT — an organisation
+network-policy denial, not an outage:
 
 ```
 $ python -m cse.cli check-connectivity
@@ -22,6 +22,31 @@ BLOCKED BY NETWORK POLICY  https://api.binance.com
     Outbound access to https://api.binance.com is blocked by network policy
     (403 Forbidden). This is not a transient failure and will not be retried.
 ```
+
+This is a strict allowlist, not a Binance-specific block. Twelve candidate hosts
+were probed; every one was refused at CONNECT:
+
+```
+www.tradingview.com  scanner.tradingview.com  api.coingecko.com
+api.kraken.com       api.exchange.coinbase.com  api.bybit.com
+www.okx.com          min-api.cryptocompare.com  www.bitstamp.net
+api.gemini.com       api.binance.us             query1.finance.yahoo.com
+```
+
+**Why not TradingView?** Beyond being blocked here, it is the wrong foundation
+even with network access. TradingView is a *display* layer — for Binance pairs it
+is re-rendering Binance's own data, so Binance remains the authoritative source.
+It publishes no documented historical-OHLCV API; its charts are fed by a private,
+undocumented WebSocket protocol that changes without notice, and automated
+extraction is contrary to its Terms of Service. Decisively, the spec's order-flow
+requirements — `aggTrade` aggressor imbalance and top-20 order-book depth — do not
+exist in a chart feed at all, so the volume/flow feature group could not be built
+from it regardless.
+
+**The fix is a network-policy change, not a different provider:** allow
+`api.binance.com` and `stream.binance.com`, then set `data.mode: live`. See the
+[Claude Code on the web docs](https://code.claude.com/docs/en/claude-code-on-the-web)
+for how an environment's network policy is configured.
 
 Consequences you must understand before reading any number this project produces:
 
