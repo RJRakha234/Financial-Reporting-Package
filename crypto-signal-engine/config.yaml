@@ -100,6 +100,15 @@ data:
     # Deterministic offline generator. Fixed seed => byte-identical output,
     # which is what makes the pipeline tests reproducible.
     seed: 20240101
+    # ANCHOR, not a retention setting. The generated path always starts here, so
+    # the price at a given timestamp is a pure function of this config and a
+    # re-run only ever appends. Moving this value regenerates a completely
+    # different series.
+    #
+    # Cost: generation spans start -> now, while only the trailing `history_days`
+    # is stored. Setting it close to (now - history_days) makes runs faster;
+    # leaving it fixed keeps the series stable as wall-clock time advances. That
+    # is the trade, and stability is the more useful default.
     start: "2022-01-01T00:00:00Z"
     initial_price:
       BTCUSDT: 47000.0

@@ -7,6 +7,11 @@ and neither does the generator. See the module docstring in cse.data.synthetic.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -39,6 +44,59 @@ def test_generation_is_deterministic(config: Config) -> None:
 
     for symbol in SYMBOLS:
         pd.testing.assert_frame_equal(first[symbol], second[symbol])
+
+
+def test_generation_is_window_length_independent(config: Config) -> None:
+    """Bar *i* must depend only on *i*, never on how many bars were requested.
+
+    Regression: every random array was drawn from a shared per-symbol generator,
+    so a longer window shifted the RNG stream and changed the values of bars that
+    had already been generated. Extending the history silently rewrote it.
+    """
+    market = SyntheticMarket(config.data.synthetic, SYMBOLS)
+
+    short = market.generate_1m(START_MS, END_MS)
+    long = market.generate_1m(START_MS, END_MS + 5_000 * GENERATION_INTERVAL_MS)
+
+    for symbol in SYMBOLS:
+        overlap = len(short[symbol])
+        assert len(long[symbol]) > overlap
+        pd.testing.assert_frame_equal(short[symbol], long[symbol].iloc[:overlap])
+
+
+def test_generation_is_deterministic_across_processes(config: Config) -> None:
+    """A fresh interpreter must produce the identical series.
+
+    Regression: symbol streams were seeded from ``hash(symbol)``, and Python
+    randomises str hashing per process. The in-process determinism test could
+    not see this — every alt's path differed on every run.
+    """
+    script = textwrap.dedent(
+        f"""
+        import hashlib
+        from cse.config import load_config
+        from cse.data.synthetic import SyntheticMarket
+        config = load_config()
+        market = SyntheticMarket(config.data.synthetic, {SYMBOLS!r})
+        frames = market.generate_1m({START_MS}, {START_MS + 2000 * GENERATION_INTERVAL_MS})
+        digest = hashlib.sha256()
+        for symbol in sorted(frames):
+            digest.update(frames[symbol].to_numpy().tobytes())
+        print(digest.hexdigest())
+        """
+    )
+    runs = [
+        subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent.parent,
+        ).stdout.strip()
+        for _ in range(2)
+    ]
+
+    assert runs[0] == runs[1], "generated series differs between interpreter processes"
 
 
 def test_generated_candles_pass_the_integrity_layer(market: SyntheticMarket) -> None:

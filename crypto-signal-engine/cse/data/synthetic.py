@@ -24,6 +24,8 @@ makes the pipeline tests reproducible.
 
 from __future__ import annotations
 
+import zlib
+
 import numpy as np
 import pandas as pd
 
@@ -69,12 +71,30 @@ class SyntheticMarket:
         vol = self._config.annual_volatility / np.sqrt(bars_per_year)
         return drift, vol
 
-    def _regime_multipliers(self, n_bars: int, rng: np.random.Generator) -> np.ndarray:
+    def _stream(self, purpose: str, symbol: str = "") -> np.random.Generator:
+        """A generator dedicated to one purpose, seeded deterministically.
+
+        Every random array in this module must be drawn from its *own* stream.
+        Sharing one generator across purposes makes each array's contents depend
+        on how many values earlier draws consumed — and since those draws are
+        sized ``n_bars``, the whole path would silently change with the length of
+        the requested window. Element *i* must depend only on *i*.
+
+        ``zlib.crc32`` rather than ``hash()``: Python randomises str hashing per
+        process, so ``hash(symbol)`` would give a different series on every run.
+        """
+        key = f"{purpose}:{symbol}".encode()
+        return np.random.default_rng(self._config.seed + zlib.crc32(key))
+
+    def _regime_multipliers(self, n_bars: int) -> np.ndarray:
         """A piecewise-constant volatility multiplier path (Markov switching)."""
         multipliers = np.asarray(self._config.regime_vol_multipliers, dtype=np.float64)
-        switches = rng.random(n_bars) < self._config.regime_switch_probability
-        # Each switch picks a new regime index; between switches the regime holds.
-        draws = rng.integers(0, len(multipliers), size=n_bars)
+        # Separate streams: drawing `switches` and `draws` from one generator
+        # would make each array's contents depend on n_bars (see _stream).
+        switches = self._stream("regime_switch").random(n_bars) < (
+            self._config.regime_switch_probability
+        )
+        draws = self._stream("regime_draw").integers(0, len(multipliers), size=n_bars)
         regime_idx = np.empty(n_bars, dtype=np.int64)
         current = int(draws[0])
         for i in range(n_bars):
@@ -97,28 +117,27 @@ class SyntheticMarket:
         drift, vol = self._per_bar_params()
         factor_symbol = self._config.market_factor_symbol
 
-        # The market factor gets the base seed; each alt gets its own stream so
-        # adding or removing a symbol does not perturb the others' paths.
-        factor_rng = np.random.default_rng(self._config.seed)
-        regime = self._regime_multipliers(n_bars, factor_rng)
-        factor_shocks = factor_rng.standard_normal(n_bars) * vol * regime
+        regime = self._regime_multipliers(n_bars)
+        factor_shocks = self._stream("factor_shock").standard_normal(n_bars) * vol * regime
 
         frames: dict[str, pd.DataFrame] = {}
         for symbol in self._symbols:
-            symbol_seed = self._config.seed + (abs(hash(symbol)) % 1_000_003)
-            rng = np.random.default_rng(symbol_seed)
-
+            beta = float(self._config.beta.get(symbol, 1.0))
             if symbol == factor_symbol:
                 log_returns = drift + factor_shocks
+                beta = 1.0
             else:
-                beta = float(self._config.beta.get(symbol, 1.0))
                 idio_fraction = self._config.idiosyncratic_vol_fraction
                 # Split total variance between the factor component and the
                 # symbol's own noise, so beta is the systematic loading and the
                 # remainder is genuinely idiosyncratic.
                 systematic = beta * factor_shocks * np.sqrt(1.0 - idio_fraction)
                 idiosyncratic = (
-                    rng.standard_normal(n_bars) * vol * regime * beta * np.sqrt(idio_fraction)
+                    self._stream("idiosyncratic", symbol).standard_normal(n_bars)
+                    * vol
+                    * regime
+                    * beta
+                    * np.sqrt(idio_fraction)
                 )
                 log_returns = drift + systematic + idiosyncratic
 
@@ -127,7 +146,7 @@ class SyntheticMarket:
                 start_ms=start,
                 log_returns=log_returns,
                 regime=regime,
-                rng=rng,
+                effective_vol=vol * beta,
             )
         return {s: frames[s] for s in frames if s in self._symbols}
 
@@ -138,7 +157,7 @@ class SyntheticMarket:
         start_ms: int,
         log_returns: np.ndarray,
         regime: np.ndarray,
-        rng: np.random.Generator,
+        effective_vol: float,
     ) -> pd.DataFrame:
         """Turn a per-bar log-return path into OHLCV with realistic wicks."""
         n_bars = len(log_returns)
@@ -153,7 +172,7 @@ class SyntheticMarket:
         # `substeps` increments and take the realised extremes. This produces
         # wicks whose size scales with the bar's volatility, instead of the
         # uniform-noise wicks a naive generator emits.
-        bridge = rng.standard_normal((n_bars, substeps))
+        bridge = self._stream("bridge", symbol).standard_normal((n_bars, substeps))
         bridge -= bridge.mean(axis=1, keepdims=True)
         step_scale = (np.abs(log_returns) + regime * 1e-4)[:, None]
         cumulative = np.cumsum(bridge * step_scale, axis=1)
@@ -167,19 +186,27 @@ class SyntheticMarket:
         lows = np.minimum(np.minimum(opens, closes), prices.min(axis=1))
 
         # Volume rises with absolute return (a real and well-documented effect)
-        # plus lognormal noise.
+        # plus lognormal noise. The normaliser is the *theoretical* mean absolute
+        # return of a half-normal, E|X| = sigma*sqrt(2/pi), rather than the
+        # window's empirical mean — an empirical mean would make every bar's
+        # volume depend on the length of the window requested.
         abs_return = np.abs(log_returns)
+        expected_abs_return = effective_vol * regime * np.sqrt(2.0 / np.pi)
         scale = 1.0 + self._config.volume_volatility_elasticity * (
-            abs_return / (abs_return.mean() + 1e-12)
+            abs_return / (expected_abs_return + 1e-12)
         )
-        noise = np.exp(rng.standard_normal(n_bars) * self._config.volume_noise)
+        noise = np.exp(
+            self._stream("volume_noise", symbol).standard_normal(n_bars) * self._config.volume_noise
+        )
         volume = self._config.base_volume * scale * noise
 
         # Aggressor imbalance leans with the bar's direction.
         direction = np.sign(log_returns)
         ratio = np.clip(
             self._config.taker_buy_ratio_mean
-            + direction * np.abs(rng.standard_normal(n_bars)) * self._config.taker_buy_ratio_std,
+            + direction
+            * np.abs(self._stream("taker_ratio", symbol).standard_normal(n_bars))
+            * self._config.taker_buy_ratio_std,
             0.01,
             0.99,
         )

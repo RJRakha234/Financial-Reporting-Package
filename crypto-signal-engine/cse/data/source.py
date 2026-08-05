@@ -180,17 +180,41 @@ class SyntheticSource(MarketDataSource):
         self._now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
         self._cache_1m: dict[str, pd.DataFrame] = {}
 
-    def _window(self) -> tuple[int, int]:
-        """History window, clamped to the generator's configured start."""
-        end = last_closed_open_time(self._now_ms, GENERATION_INTERVAL_MS)
-        start = floor_to_interval(
+    def _generation_window(self) -> tuple[int, int]:
+        """Bars to generate: ALWAYS anchored to the fixed configured start.
+
+        This anchor is the whole correctness argument for the synthetic source,
+        and getting it wrong is subtle.
+
+        The generated path is a cumulative random walk indexed from the first
+        bar of the window. Anchoring the window to a rolling ``now -
+        history_days`` therefore makes bar *index* 0 land on a different
+        *timestamp* on every run — so the same timestamp carries a different
+        price each time. Re-running the backfill then silently rewrites stored
+        history and splices two different realisations together at the seam,
+        and no integrity check catches it (the result is still gapless, still
+        valid OHLC — real markets gap between bars, so continuity cannot be
+        asserted globally).
+
+        Anchoring to the fixed ``synthetic.start`` makes the price at a given
+        timestamp a pure function of config, so re-running only ever appends.
+        The cost is that generation spans start-to-now rather than just the
+        retained window; retention is applied separately in
+        :meth:`_storage_window`.
+        """
+        return self._market.start_ms, last_closed_open_time(self._now_ms, GENERATION_INTERVAL_MS)
+
+    def _storage_window(self) -> tuple[int, int]:
+        """Bars to persist: the trailing ``history_days`` of the generated path."""
+        generation_start, end = self._generation_window()
+        retention_start = floor_to_interval(
             self._now_ms - self._config.history_days * 86_400_000, GENERATION_INTERVAL_MS
         )
-        return max(start, self._market.start_ms), end
+        return max(generation_start, retention_start), end
 
     def _base_1m(self, symbol: str) -> pd.DataFrame:
         if symbol not in self._cache_1m:
-            start, end = self._window()
+            start, end = self._generation_window()
             _log.info("synthetic.generating", symbol=symbol, start_ms=start, end_ms=end)
             self._cache_1m.update(self._market.generate_1m(start, end))
         return self._cache_1m[symbol]
@@ -207,8 +231,11 @@ class SyntheticSource(MarketDataSource):
         frame = (
             base if interval_ms == GENERATION_INTERVAL_MS else aggregate_candles(base, interval_ms)
         )
+        retention_start, _ = self._storage_window()
         # Same rule as the live path: only closed bars reach the store.
-        frame = frame.loc[frame["open_time"] <= expected_last]
+        frame = frame.loc[
+            (frame["open_time"] >= retention_start) & (frame["open_time"] <= expected_last)
+        ]
         self._store.write(symbol, timeframe, frame)
         return self._store.verify(symbol, timeframe, interval_ms)
 

@@ -8,6 +8,8 @@ the exchange. The wiring under test is identical; only the bytes differ.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -31,11 +33,16 @@ TIMEFRAMES = ["1m", "5m", "15m", "1h"]
 
 @pytest.fixture
 def pipeline_config(config: Config) -> Config:
+    # Generation is anchored to synthetic.start, so pin it near NOW_MS to keep
+    # these tests generating days of bars rather than years.
+    anchor = pd.Timestamp(NOW_MS - 6 * 86_400_000, unit="ms", tz="UTC").isoformat()
+    synthetic = config.data.synthetic.model_copy(update={"start": anchor})
     return config.model_copy(
         update={
             "history_days": HISTORY_DAYS,
             "timeframes": TIMEFRAMES,
             "symbols": ["BTCUSDT", "ETHUSDT"],
+            "data": config.data.model_copy(update={"synthetic": synthetic}),
         }
     )
 
@@ -133,6 +140,66 @@ async def test_rerunning_the_pipeline_is_idempotent(
 
     for key, frame in before.items():
         pd.testing.assert_frame_equal(store.read(*key), frame)
+
+
+async def test_price_at_a_timestamp_does_not_depend_on_when_you_ran(
+    pipeline_config: Config, store: CandleStore, tmp_path: Path
+) -> None:
+    """Regression: a later run must not rewrite the price history of earlier bars.
+
+    The generated path is a cumulative walk indexed from the first bar of the
+    window. When that window was anchored to a rolling ``now - history_days``,
+    bar index 0 landed on a different timestamp every run, so the same timestamp
+    carried a different price — and re-running the backfill silently spliced two
+    different realisations together. The seam passed every integrity check
+    (gapless, valid OHLC), which is exactly what made it dangerous.
+
+    Generation is now anchored to the fixed ``synthetic.start``, so re-running
+    only ever appends.
+    """
+    later_store = CandleStore(
+        pipeline_config.data.storage.model_copy(update={"root": tmp_path / "later"}),
+        ohlc_tolerance=pipeline_config.data.integrity.ohlc_tolerance,
+    )
+
+    early = SyntheticSource(pipeline_config, store, now_ms=NOW_MS)
+    await early.ensure_history("BTCUSDT", "15m")
+
+    # Same config, run "6 hours later".
+    late = SyntheticSource(pipeline_config, later_store, now_ms=NOW_MS + 6 * 3_600_000)
+    await late.ensure_history("BTCUSDT", "15m")
+
+    first = store.read("BTCUSDT", "15m").set_index("open_time")
+    second = later_store.read("BTCUSDT", "15m").set_index("open_time")
+    shared = first.index.intersection(second.index)
+
+    assert len(shared) > 100, "runs must overlap substantially"
+    pd.testing.assert_frame_equal(first.loc[shared], second.loc[shared])
+
+
+async def test_appending_new_bars_leaves_no_price_discontinuity(
+    pipeline_config: Config, store: CandleStore
+) -> None:
+    """After a top-up, each bar's open still equals the previous bar's close.
+
+    Synthetic bars chain exactly by construction. A break in that chain means
+    two different generated realisations were spliced together — the failure
+    mode this anchoring fixes. (Real market data legitimately gaps between bars,
+    so this invariant is asserted only for the synthetic source.)
+    """
+    first = SyntheticSource(pipeline_config, store, now_ms=NOW_MS - 3_600_000)
+    await first.ensure_history("BTCUSDT", "1m")
+
+    second = SyntheticSource(pipeline_config, store, now_ms=NOW_MS)
+    await second.ensure_history("BTCUSDT", "1m")
+
+    frame = store.read("BTCUSDT", "1m")
+    opens = frame["open"].to_numpy()[1:]
+    previous_closes = frame["close"].to_numpy()[:-1]
+    breaks = np.flatnonzero(np.abs(opens - previous_closes) / previous_closes > 1e-9)
+
+    assert len(frame) > 60, "the second run must actually have appended bars"
+    assert breaks.size == 0, f"chain broken at row(s) {breaks[:5]}"
 
 
 async def test_resume_after_partial_history(pipeline_config: Config, store: CandleStore) -> None:
