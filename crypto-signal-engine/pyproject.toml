@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-signal-engine"
+version = "0.1.0"
+description = "Alert-only real-time crypto signal engine (Binance market data)"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "pyarrow>=15.0",
+    "duckdb>=1.0",
+    "httpx>=0.27",
+    "websockets>=12.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "structlog>=24.1",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Phase 4 (ML) and Phase 6 (dashboard) pull these in; kept out of the core
+# install so the data/feature layers stay lightweight.
+ml = ["scikit-learn>=1.5", "lightgbm>=4.3", "scipy>=1.13", "statsmodels>=0.14", "shap>=0.45"]
+dashboard = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "jinja2>=3.1"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "respx>=0.21", "ruff>=0.5", "mypy>=1.10", "pandas-stubs", "types-PyYAML"]
+
+[project.scripts]
+cse = "cse.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cse*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "ARG", "PTH", "RUF"]
+ignore = [
+    "E501",    # line length is enforced by the formatter
+    "N803",    # Binance/TA conventions use short uppercase names (K, D, ATR)
+    "N806",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ARG001", "ARG002"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_reexport = true
+plugins = []
+
+[[tool.mypy.overrides]]
+# Third-party packages without complete stubs.
+module = ["duckdb.*", "lightgbm.*", "shap.*", "statsmodels.*", "sklearn.*", "websockets.*", "pyarrow.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error::RuntimeWarning"]

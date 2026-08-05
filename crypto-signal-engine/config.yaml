@@ -1,0 +1,142 @@
+# =============================================================================
+# Real-Time Crypto Signal Engine — single source of truth for all parameters.
+#
+# RULE: no magic numbers in code. Every threshold, window, and weight lives
+# here and is loaded through cse.config (pydantic-validated).
+#
+# This tool is ALERT-ONLY. Nothing in this file enables order placement, and
+# no code path exists to do so. See README "Alert-only guarantee".
+# =============================================================================
+
+# --- User CONFIG block from the spec ----------------------------------------
+symbols: [BTCUSDT, ETHUSDT, SOLUSDT]
+timeframes: [1m, 5m, 15m, 1h, 4h]
+base_timeframe: 15m
+history_days: 1095                 # 3 years
+alert_channels: [desktop, console]
+capital_model_usdt: 10000.0
+risk_per_trade_pct: 0.01           # 1%
+run_mode: local                    # local | docker
+
+# --- Data source -------------------------------------------------------------
+# mode: live    -> Binance public REST + WebSocket (requires egress to Binance)
+#       replay  -> read candles already in the local store, emit in bar order
+#       synthetic -> deterministic generated candles (offline dev/tests ONLY;
+#                    results carry NO evidential value about the strategy)
+data:
+  mode: synthetic
+  intrabar: false                  # true => allow signals from unclosed candles
+
+  rest:
+    base_url: https://api.binance.com
+    # data-api.binance.vision serves the same public market data, no account.
+    fallback_base_url: https://data-api.binance.vision
+    timeout_seconds: 20.0
+    max_retries: 5
+    backoff_initial_seconds: 1.0
+    backoff_multiplier: 2.0
+    backoff_max_seconds: 60.0
+    backoff_jitter: 0.25           # +/- fraction applied to each sleep
+
+  rate_limit:
+    # Binance /api/* weight budget per rolling minute. Verified against
+    # exchangeInfo.rateLimits at startup; this is the conservative default.
+    weight_limit_per_minute: 6000
+    # Start throttling once used weight crosses this fraction of the budget.
+    soft_threshold_pct: 0.75
+    # Never exceed this fraction; sleep to the top of the minute if crossed.
+    hard_threshold_pct: 0.95
+    # Endpoint weights (Binance spot API, documented values).
+    endpoint_weights:
+      klines: 2
+      exchange_info: 20
+      ticker_24hr: 2
+      depth_100: 5                 # depth with limit <= 100
+    retry_after_default_seconds: 60.0   # used if 429 omits Retry-After
+    ip_ban_backoff_seconds: 300.0       # HTTP 418
+
+  backfill:
+    klines_limit: 1000             # Binance max rows per klines call
+    # Overlap re-requested on resume so a partially-written final bar is
+    # corrected rather than trusted.
+    resume_overlap_bars: 2
+
+  websocket:
+    base_url: wss://stream.binance.com:9443/stream
+    ping_interval_seconds: 20.0
+    ping_timeout_seconds: 10.0
+    # If the socket stays down longer than this, start REST polling.
+    rest_fallback_after_seconds: 30.0
+    rest_fallback_poll_seconds: 5.0
+    reconnect_initial_seconds: 1.0
+    reconnect_multiplier: 2.0
+    reconnect_max_seconds: 60.0
+    reconnect_jitter: 0.25
+    depth_levels: 20
+    depth_update_ms: 100
+    # Binance closes a raw connection after 24h; reconnect proactively.
+    max_connection_seconds: 82800.0   # 23h
+
+  storage:
+    root: ./data_store
+    format: parquet                # parquet | duckdb
+    compression: zstd
+    # Hive partitioning: symbol=<S>/timeframe=<TF>/date=<YYYY-MM-DD>
+    partition_by: [symbol, timeframe, date]
+
+  integrity:
+    # A candle is malformed if high < max(open,close) or low > min(open,close).
+    ohlc_tolerance: 1.0e-9
+    # Relative price difference above which a WS/REST candle reconciliation is
+    # logged as a mismatch.
+    reconcile_price_tolerance: 1.0e-6
+    reconcile_volume_tolerance: 1.0e-4
+    # Gaps longer than this many bars are reported as an outage, not backfilled
+    # silently, because they usually mean an exchange halt.
+    outage_gap_bars: 20
+    max_gap_repair_requests: 50
+
+  synthetic:
+    # Deterministic offline generator. Fixed seed => byte-identical output,
+    # which is what makes the pipeline tests reproducible.
+    seed: 20240101
+    start: "2022-01-01T00:00:00Z"
+    initial_price:
+      BTCUSDT: 47000.0
+      ETHUSDT: 3700.0
+      SOLUSDT: 170.0
+    # Annualized drift/vol used by the GBM-with-regimes generator.
+    annual_drift: 0.10
+    annual_volatility: 0.65
+    # Regime switching makes the series non-stationary on purpose, so the
+    # regime-detection code has something to detect.
+    regime_switch_probability: 0.002
+    regime_vol_multipliers: [0.5, 1.0, 2.5]
+    bars_per_year: 525600           # 1m bars: 60*24*365 (generation resolution)
+    base_volume: 1000.0
+    volume_noise: 0.4
+    taker_buy_ratio_mean: 0.5
+    taker_buy_ratio_std: 0.08
+    # Alts are generated as beta * (market factor) + idiosyncratic noise, so the
+    # BTC-correlation-break feature in Phase 2 has real structure to detect
+    # rather than pure noise.
+    market_factor_symbol: BTCUSDT
+    beta:
+      BTCUSDT: 1.0
+      ETHUSDT: 1.15
+      SOLUSDT: 1.45
+    idiosyncratic_vol_fraction: 0.45   # share of an alt's variance that is its own
+    # Volume rises with absolute return; this is the elasticity.
+    volume_volatility_elasticity: 2.0
+    # Sub-steps simulated inside each 1m bar to produce a realistic high/low.
+    intrabar_substeps: 8
+
+# --- Logging -----------------------------------------------------------------
+logging:
+  level: INFO
+  directory: ./logs
+  filename: engine.log
+  max_bytes: 10485760              # 10 MiB
+  backup_count: 5
+  json_to_file: true               # structlog JSON to file, pretty to console
+  console: true

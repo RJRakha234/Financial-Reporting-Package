@@ -1,0 +1,23 @@
+# Secrets — never commit
+.env
+
+# Market data archive: regenerable, and large (a 3-year 1m history runs to GBs)
+data_store/
+
+# Logs
+logs/
+*.log
+
+# Models and reports are build artifacts, reproducible from config + data
+models/artifacts/
+reports/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
