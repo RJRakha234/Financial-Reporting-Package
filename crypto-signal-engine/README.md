@@ -186,7 +186,7 @@ is exactly where you would not notice. Three independent defences:
 ## Testing
 
 ```bash
-python -m pytest -q          # 139 tests
+python -m pytest -q          # 143 tests
 python -m ruff check .       # clean
 python -m ruff format --check .
 python -m mypy cse tests     # strict, clean
@@ -196,6 +196,24 @@ No test touches the network: HTTP is mocked with `respx`, and the WebSocket
 manager takes an injected `connect_fn` so the reconnect state machine is exercised
 without a socket. The rate limiter takes an injected clock, so tests that cover
 60-second windows run in microseconds.
+
+### On reproducibility of the synthetic source
+
+The generated series is a pure function of `config.yaml`: the price at a given
+timestamp depends only on `synthetic.seed` and `synthetic.start`, never on when
+or over what window you ran. Three separate bugs violated this and were caught
+only by re-running the backfill at full scale — each one silently rewrote
+existing history, and the result still passed every integrity check because it
+was gapless with valid OHLC.
+
+If you change the generator, keep these invariants (each has a test):
+
+- **window-length independence** — bar *i* depends only on *i*; extending the
+  window must not alter earlier bars,
+- **cross-process determinism** — two fresh interpreters must produce identical
+  bytes (`hash()` on `str` is randomised per process and will break this),
+- **chain continuity after a top-up** — every `open` still equals the previous
+  `close`, which is how a spliced realisation reveals itself.
 
 ## Limitations and what would break this
 
