@@ -115,7 +115,7 @@ This is enforced structurally, not by convention:
 No API key is required at all. If you supply one to raise your rate-limit tier,
 it must be **read-only**.
 
-## Architecture (Phase 1)
+## Architecture (Phases 1-2)
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -153,8 +153,58 @@ it must be **read-only**.
                     └─────────────────────────────────────────┘
 ```
 
-Phases 2–7 (features, ML, backtest, decision engine, dashboard, alerts) are not
-yet built. See the delivery plan at the bottom of this file.
+The feature layer sits on top of the store:
+
+```
+   store.read(symbol, timeframe)
+              │
+   ┌──────────▼──────────────────────────────────────────────┐
+   │  cse/features/                                          │
+   │    trend.py       EMA stack · MACD · RSI + divergence   │
+   │                   ADX · Ichimoku · Supertrend           │
+   │    volatility.py  Bollinger · ATR + percentile          │
+   │                   Keltner · realized vol · regime       │
+   │    volume.py      volume z · OBV · VWAP (ATR units)     │
+   │                   taker imbalance · volume profile      │
+   │    statistical.py z-score · Hurst · OU half-life        │
+   │                   rolling ADF · BTC-beta break          │
+   │    multiframe.py  higher-TF context, joined on CLOSE    │
+   └──────────┬──────────────────────────────────────────────┘
+              │
+        FeatureSet(frame, warmup_bars)   -> .usable drops the warmup head
+```
+
+Phases 3–7 (backtest, ML, decision engine, dashboard, alerts) are not yet
+built. See the delivery plan at the bottom of this file.
+
+## No look-ahead bias: how it is enforced
+
+A feature at bar *t* may use bars `<= t` and nothing else. Three independent
+mechanisms hold that line:
+
+1. **Truncation test** (`tests/test_lookahead.py`) — compute every feature on
+   the full history, truncate at bar *t*, recompute, and require the prefix to
+   be identical. One test catches the whole family: `shift(-n)`, `center=True`,
+   global statistics, `bfill`, unconfirmed pivots, mis-joined timeframes.
+2. **Static guard** — the feature modules are scanned for those constructs on
+   sight. It parses tokens so it inspects code and not documentation, and it has
+   its own test proving it detects a planted leak.
+3. **Design choices that remove the trap entirely**, documented where they live:
+   - Ichimoku's **Chikou span is not exposed**. It is close shifted *backward*,
+     so reading it at bar *t* returns the close from *t+26*. Any library that
+     hands you a `chikou` column is handing you the future.
+   - Higher timeframes are joined on **close**, not open. The 4h bar opening at
+     12:00 is not knowable until 16:00; a 15m bar at 13:15 sees the 4h bar that
+     closed at 12:00.
+   - Volatility regimes use **rolling** quantiles. A global quantile tells every
+     bar in 2023 how volatile 2025 turned out.
+   - RSI divergence uses **confirmed** pivots only — a pivot is reported
+     `pivot_window` bars after it occurred, because that is when it becomes
+     knowable.
+
+`FeatureSet.warmup_bars` reports how much of the head is undefined, and
+`.usable` drops it. Training or backtesting across that head is a quiet way to
+get nonsense out of an otherwise correct pipeline.
 
 ## Data integrity guarantees
 
@@ -186,7 +236,7 @@ is exactly where you would not notice. Three independent defences:
 ## Testing
 
 ```bash
-python -m pytest -q          # 143 tests
+python -m pytest -q          # 215 tests
 python -m ruff check .       # clean
 python -m ruff format --check .
 python -m mypy cse tests     # strict, clean
@@ -255,7 +305,7 @@ backtester lands in Phase 3. None are yet in effect.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Data layer, storage, integrity tests | **Complete** |
-| 2 | Feature/indicator layer + reference tests | Not started |
+| 2 | Feature/indicator layer + reference tests | **Complete** |
 | 3 | Backtest engine + baseline TA strategy | Not started |
 | 4 | Statistical + ML layer + walk-forward validation | Not started |
 | 5 | Decision engine + fusion logic | Not started |
