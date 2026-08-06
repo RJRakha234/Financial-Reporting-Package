@@ -145,6 +145,77 @@ data:
     # Sub-steps simulated inside each 1m bar to produce a realistic high/low.
     intrabar_substeps: 8
 
+# --- Features (Phase 2) -------------------------------------------------------
+# Every window and threshold used by the indicator layer. A feature at time t
+# may only use data available at t; see cse/features/ and the look-ahead test.
+features:
+  trend:
+    ema_periods: [9, 21, 50, 200]
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    rsi_period: 14
+    # Divergence: compare the last two confirmed pivots inside this lookback.
+    # A pivot is confirmed only after `rsi_pivot_window` bars have passed, which
+    # is what keeps divergence detection free of look-ahead.
+    rsi_divergence_lookback: 60
+    rsi_pivot_window: 5
+    adx_period: 14
+    adx_trend_threshold: 25.0
+    ichimoku_conversion: 9
+    ichimoku_base: 26
+    ichimoku_span_b: 52
+    ichimoku_displacement: 26
+    supertrend_period: 10
+    supertrend_multiplier: 3.0
+
+  volatility:
+    bollinger_period: 20
+    bollinger_std: 2.0
+    atr_period: 14
+    atr_percentile_window: 500
+    keltner_period: 20
+    keltner_atr_period: 10
+    keltner_multiplier: 2.0
+    realized_vol_window: 96
+    # Regime thresholds are ROLLING quantiles, never global ones: a global
+    # quantile over the whole series is look-ahead bias.
+    regime_window: 500
+    regime_low_quantile: 0.33
+    regime_high_quantile: 0.67
+
+  volume:
+    zscore_window: 96              # 24h of 15m bars
+    obv_slope_window: 20
+    vwap_window: 96
+    profile_window: 96
+    profile_bins: 50
+    value_area_fraction: 0.70
+    depth_levels: 20
+
+  statistical:
+    zscore_window: 96
+    hurst_window: 256
+    hurst_min_lag: 2
+    hurst_max_lag: 32
+    hurst_mean_reverting_below: 0.5
+    half_life_window: 256
+    half_life_max_bars: 500.0      # cap so a near-unit-root fit stays finite
+    adf_window: 256
+    # ADF is O(n) per bar and slow; recompute every N bars and forward-fill.
+    # Forward-filling a past value is safe; interpolating would not be.
+    adf_stride: 8
+    beta_window: 288
+    beta_break_zscore: 2.0
+    beta_reference_symbol: BTCUSDT
+
+  multiframe:
+    # Higher timeframes a base-timeframe signal is judged against.
+    context_timeframes: [1h, 4h]
+    # A conflicting higher-timeframe trend downgrades confidence by this factor
+    # rather than suppressing the signal (spec: record the conflict explicitly).
+    conflict_downgrade: 0.5
+
 # --- Logging -----------------------------------------------------------------
 logging:
   level: INFO

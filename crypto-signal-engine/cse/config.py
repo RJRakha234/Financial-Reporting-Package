@@ -135,6 +135,112 @@ class DataConfig(_Base):
     synthetic: SyntheticConfig
 
 
+class TrendFeatureConfig(_Base):
+    ema_periods: list[int]
+    macd_fast: int = Field(gt=0)
+    macd_slow: int = Field(gt=0)
+    macd_signal: int = Field(gt=0)
+    rsi_period: int = Field(gt=1)
+    rsi_divergence_lookback: int = Field(gt=0)
+    rsi_pivot_window: int = Field(gt=0)
+    adx_period: int = Field(gt=1)
+    adx_trend_threshold: float = Field(gt=0.0)
+    ichimoku_conversion: int = Field(gt=0)
+    ichimoku_base: int = Field(gt=0)
+    ichimoku_span_b: int = Field(gt=0)
+    ichimoku_displacement: int = Field(gt=0)
+    supertrend_period: int = Field(gt=0)
+    supertrend_multiplier: Positive
+
+    @field_validator("ema_periods")
+    @classmethod
+    def _ema_periods_valid(cls, value: list[int]) -> list[int]:
+        if not value or any(p <= 0 for p in value):
+            raise ValueError(f"ema_periods must all be positive: {value}")
+        if len(set(value)) != len(value):
+            raise ValueError(f"duplicate ema_periods: {value}")
+        return sorted(value)
+
+    @model_validator(mode="after")
+    def _macd_ordering(self) -> TrendFeatureConfig:
+        if self.macd_fast >= self.macd_slow:
+            raise ValueError("macd_fast must be shorter than macd_slow")
+        return self
+
+
+class VolatilityFeatureConfig(_Base):
+    bollinger_period: int = Field(gt=1)
+    bollinger_std: Positive
+    atr_period: int = Field(gt=1)
+    atr_percentile_window: int = Field(gt=1)
+    keltner_period: int = Field(gt=1)
+    keltner_atr_period: int = Field(gt=1)
+    keltner_multiplier: Positive
+    realized_vol_window: int = Field(gt=1)
+    regime_window: int = Field(gt=1)
+    regime_low_quantile: Fraction
+    regime_high_quantile: Fraction
+
+    @model_validator(mode="after")
+    def _quantile_ordering(self) -> VolatilityFeatureConfig:
+        if self.regime_low_quantile >= self.regime_high_quantile:
+            raise ValueError("regime_low_quantile must be below regime_high_quantile")
+        return self
+
+
+class VolumeFeatureConfig(_Base):
+    zscore_window: int = Field(gt=1)
+    obv_slope_window: int = Field(gt=1)
+    vwap_window: int = Field(gt=0)
+    profile_window: int = Field(gt=1)
+    profile_bins: int = Field(gt=1)
+    value_area_fraction: Fraction
+    depth_levels: int = Field(gt=0)
+
+
+class StatisticalFeatureConfig(_Base):
+    zscore_window: int = Field(gt=1)
+    hurst_window: int = Field(gt=1)
+    hurst_min_lag: int = Field(gt=0)
+    hurst_max_lag: int = Field(gt=1)
+    hurst_mean_reverting_below: Positive
+    half_life_window: int = Field(gt=1)
+    half_life_max_bars: Positive
+    adf_window: int = Field(gt=1)
+    adf_stride: int = Field(gt=0)
+    beta_window: int = Field(gt=1)
+    beta_break_zscore: Positive
+    beta_reference_symbol: str
+
+    @model_validator(mode="after")
+    def _lag_ordering(self) -> StatisticalFeatureConfig:
+        if self.hurst_min_lag >= self.hurst_max_lag:
+            raise ValueError("hurst_min_lag must be below hurst_max_lag")
+        if self.hurst_max_lag >= self.hurst_window:
+            raise ValueError("hurst_max_lag must be below hurst_window")
+        return self
+
+
+class MultiframeFeatureConfig(_Base):
+    context_timeframes: list[str]
+    conflict_downgrade: Fraction
+
+    @field_validator("context_timeframes")
+    @classmethod
+    def _timeframes_valid(cls, value: list[str]) -> list[str]:
+        for timeframe in value:
+            interval_to_ms(timeframe)
+        return sorted(value, key=interval_to_ms)
+
+
+class FeaturesConfig(_Base):
+    trend: TrendFeatureConfig
+    volatility: VolatilityFeatureConfig
+    volume: VolumeFeatureConfig
+    statistical: StatisticalFeatureConfig
+    multiframe: MultiframeFeatureConfig
+
+
 class LoggingConfig(_Base):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
     directory: Path
@@ -155,6 +261,7 @@ class Config(_Base):
     risk_per_trade_pct: Fraction
     run_mode: Literal["local", "docker"]
     data: DataConfig
+    features: FeaturesConfig
     logging: LoggingConfig
 
     @field_validator("symbols")
