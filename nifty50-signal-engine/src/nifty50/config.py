@@ -48,6 +48,7 @@ class UniverseConfig(_Base):
     index: str
     constituents_file: Path
     require_point_in_time: bool
+    expected_size: int
     index_instruments: tuple[IndexInstrumentConfig, ...]
 
 

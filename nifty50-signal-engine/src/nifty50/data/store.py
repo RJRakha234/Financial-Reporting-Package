@@ -74,8 +74,8 @@ class BarStore:
     def partition_dir(self, exchange: Exchange, symbol: str, timeframe: Timeframe) -> Path:
         return (
             self._root
-            / f"exchange={_safe(exchange.value)}"
-            / f"symbol={_safe(symbol)}"
+            / f"exchange={safe_symbol(exchange.value)}"
+            / f"symbol={safe_symbol(symbol)}"
             / f"timeframe={timeframe.value}"
         )
 
@@ -179,13 +179,15 @@ class BarStore:
         return self.coverage(exchange, symbol, timeframe).last_ts
 
     def symbols(self, exchange: Exchange) -> list[str]:
-        base = self._root / f"exchange={_safe(exchange.value)}"
+        base = self._root / f"exchange={safe_symbol(exchange.value)}"
         if not base.exists():
             return []
         return sorted(p.name.split("=", 1)[1] for p in base.glob("symbol=*") if p.is_dir())
 
     def timeframes(self, exchange: Exchange, symbol: str) -> list[Timeframe]:
-        base = self._root / f"exchange={_safe(exchange.value)}" / f"symbol={_safe(symbol)}"
+        base = (
+            self._root / f"exchange={safe_symbol(exchange.value)}" / f"symbol={safe_symbol(symbol)}"
+        )
         if not base.exists():
             return []
         found = []
@@ -198,7 +200,7 @@ class BarStore:
         return sorted(found, key=lambda tf: tf.value)
 
 
-def _safe(value: str) -> str:
+def safe_symbol(value: str) -> str:
     """Make a symbol safe for a path segment.
 
     NSE symbols contain ``&`` (M&M) and ``-`` (``-BE`` series suffixes); a raw

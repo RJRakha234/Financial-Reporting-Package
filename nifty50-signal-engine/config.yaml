@@ -21,6 +21,9 @@ universe:
   constituents_file: data/reference/nifty50_constituents.csv
   # Fail loudly rather than silently trading today's list over history.
   require_point_in_time: true
+  # Invariant checked by verify_universe: the index holds exactly this many
+  # names on every trading day.
+  expected_size: 50
   # Names carried in the stream in addition to the equity constituents.
   index_instruments:
     - {symbol: "NIFTY 50", exchange: NSE, kind: index}

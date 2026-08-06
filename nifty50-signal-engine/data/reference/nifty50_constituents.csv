@@ -1,0 +1,57 @@
+# Point-in-time NIFTY 50 membership. THIS FILE IS DELIBERATELY EMPTY.
+#
+# ============================ READ THIS FIRST ============================
+# It ships with no data rows on purpose. The engine fails closed: with this
+# file empty, `assert_backtest_ready()` raises and no backtest can start.
+#
+# The alternative — shipping today's fifty names with open-ended start dates —
+# would look helpful and would silently reintroduce survivorship bias into
+# every result the project ever produces. A basket selected *because* it
+# survived hands the strategy foreknowledge of which companies did not blow
+# up. That is the single most common reason a retail Indian equity backtest
+# looks good and is worthless, and it is the exact failure this file exists to
+# prevent. So: no plausible-looking placeholder data. Populate it or don't
+# backtest.
+# =========================================================================
+#
+# WHERE THE DATA COMES FROM
+#   No broker API serves historical index membership — not Kite, not Fyers,
+#   not any of the free tiers. Sources, best first:
+#     1. NSE Indices reconstitution press releases (the citable source).
+#        https://www.niftyindices.com  ->  Media / Press Releases.
+#        Published ~4 weeks before each semi-annual change takes effect.
+#        Changes are effective from the LAST TRADING DAY of March and
+#        September (the new list trades from the next session).
+#     2. NSE Indices factsheets / index methodology archives.
+#     3. A paid vendor point-in-time constituents feed.
+#   Roughly 4-8 changes per year over 2019-2026, so this is a couple of hours
+#   of careful transcription, not a research project.
+#
+# COLUMNS
+#   symbol       NSE trading symbol, exactly as it appears in the instrument
+#                master (e.g. HDFCBANK, M&M, BAJAJ-AUTO).
+#   start_date   First SESSION on which the symbol is a constituent (inclusive).
+#   end_date     Last session as a constituent (inclusive). Leave BLANK if the
+#                symbol is still in the index.
+#   provenance   nse_circular | vendor | seed
+#                  nse_circular / vendor  -> trusted; backtests may run
+#                  seed                   -> recalled/unverified; BLOCKS backtests
+#   note         Free text: the press release date, the name it replaced, etc.
+#
+# RE-ENTRY IS SUPPORTED. A symbol that leaves and later rejoins gets two rows
+# with disjoint date ranges. OVERLAPPING ranges for one symbol are rejected at
+# load as a data-entry error.
+#
+# INVARIANT: exactly 50 constituents on every trading day. `verify_universe`
+# checks this and tells you which dates are short or over.
+#
+# VALIDATE AFTER EDITING:
+#   python -m nifty50.scripts.verify_universe --start 2019-01-01 --end 2026-12-31
+#
+# EXAMPLE ROWS (illustrative shape only — the dates below are NOT researched,
+# do not uncomment them, transcribe real ones from the press releases):
+#   HDFCBANK,2019-01-01,,nse_circular,continuous member across the window
+#   SOMENAME,2019-01-01,2021-09-30,nse_circular,replaced by OTHERNAME
+#   OTHERNAME,2021-10-01,,nse_circular,replaced SOMENAME per PR dated 2021-08-27
+#
+symbol,start_date,end_date,provenance,note

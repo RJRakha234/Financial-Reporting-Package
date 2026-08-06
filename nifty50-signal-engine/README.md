@@ -15,13 +15,13 @@ not, and will not, place orders.
 
 ## Build status
 
-The build follows the phased delivery protocol in the specification. **Phase 1 is
-complete; phases 2–8 are not started.**
+The build follows the phased delivery protocol in the specification. **Phases 1–2
+are complete; phases 3–8 are not started.**
 
 | # | Phase | Status |
 |---|---|---|
 | 1 | Broker adapter, data layer, corporate actions, trading calendar, integrity tests | **Complete** |
-| 2 | Point-in-time universe + survivorship-bias test | Not started |
+| 2 | Point-in-time universe + survivorship-bias test | **Complete** (machinery; membership data must be supplied — see below) |
 | 3 | Feature/indicator layer + reference-value unit tests | Not started |
 | 4 | Backtest engine with the full Indian cost stack | Not started |
 | 5 | Statistical + India-flow features, ML layer, walk-forward validation | Not started |
@@ -44,6 +44,7 @@ src/nifty50/
 ├── logging_setup.py       structlog: JSON lines to a rotating file, readable console
 ├── trading_calendar/      NSE sessions, holidays, muhurat, the intraday bar grid
 ├── corporate_actions/     action table + back-adjustment of price AND volume
+├── universe/              point-in-time index membership; fails closed if unverified
 ├── data/
 │   ├── brokers/           BrokerAdapter ABC, Kite adapter, offline replay adapter
 │   ├── store.py           parquet bar store, partitioned exchange/symbol/timeframe/month
@@ -55,7 +56,7 @@ src/nifty50/
 └── scripts/               backfill and calendar-verification entry points
 ```
 
-195 tests, `ruff` clean, `mypy --strict` clean.
+224 tests, `ruff` clean, `mypy --strict` clean.
 
 ---
 
@@ -101,6 +102,10 @@ python -m nifty50.scripts.backfill --symbols RELIANCE,HDFCBANK,INFY --timeframes
 
 # Check the seeded holiday calendar against the bars you actually have
 python -m nifty50.scripts.verify_calendar --start 2019-01-01 --end 2026-12-31
+
+# Validate point-in-time index membership (add --check-store to find members
+# whose price history was never downloaded)
+python -m nifty50.scripts.verify_universe --start 2019-01-01 --end 2026-12-31
 ```
 
 ---
@@ -219,6 +224,38 @@ sitting in the index itself.
 
 ---
 
+### The point-in-time universe fails closed
+
+`data/reference/nifty50_constituents.csv` **ships with no data rows, on purpose.**
+
+The alternative — shipping today's fifty names with open-ended start dates —
+looks helpful and silently reintroduces survivorship bias into every result the
+project will ever produce. A basket selected *because* it survived hands the
+strategy foreknowledge of which companies did not blow up.
+
+So there is no placeholder to forget to delete. With the file empty,
+`PointInTimeUniverse.assert_backtest_ready()` raises and the Phase 4 backtest
+cannot start. The same happens if any row is marked `provenance=seed`, or if the
+index is ever short of `universe.expected_size` names on a trading day.
+
+Membership history is not available from any broker API. Transcribe it from NSE
+Indices reconstitution press releases (<https://www.niftyindices.com> → Media /
+Press Releases), which publish roughly four weeks before each semi-annual change
+takes effect. That is 4–8 changes a year over 2019–2026 — a couple of hours of
+careful transcription. Mark those rows `provenance=nse_circular`, then run
+`verify_universe`.
+
+Two API details worth knowing:
+
+* `symbols_ever()` returns every name that was *ever* a member, including ones
+  that have since left. That is the set to backfill price data for — a
+  point-in-time universe is useless if you only downloaded the survivors.
+* A symbol may leave and later rejoin: that is two rows with disjoint date
+  ranges. *Overlapping* ranges for one symbol are rejected at load as a
+  data-entry error.
+
+---
+
 ## Data provenance — read this before trusting a backtest
 
 Three reference files ship as **seed data compiled from recall, not scraped from
@@ -230,6 +267,7 @@ them from evidence rather than to trust them.
 | `data/reference/nse_holidays.csv` | Seeded 2019–2025. **2026 is deliberately incomplete** — only fixed-date national holidays. Load the official 2026 circular before running anything on 2026 data. |
 | `data/reference/nse_special_sessions.csv` | Muhurat sessions 2019–2025, seeded. Times in particular should be verified. |
 | `data/reference/corporate_actions.csv` | Five actions only, as a starting fixture. **This is nowhere near a complete Nifty 50 action history.** |
+| `data/reference/nifty50_constituents.csv` | **Empty by design.** Not seeded at all — see "The point-in-time universe fails closed" above. Backtests are blocked until you populate it. |
 
 Two automated defences exist because of this:
 
@@ -288,8 +326,9 @@ requirements.
 
 * **No signals yet.** Phases 3–6 are not built. Nothing here produces a BUY,
   SELL or HOLD.
-* **No point-in-time universe yet** (Phase 2). Until it exists, any backtest over
-  today's constituent list carries full survivorship bias.
+* **Point-in-time universe has no data.** The machinery, queries and tests are
+  done and the engine refuses to backtest without real membership rows — but
+  those rows still have to be transcribed from NSE press releases by hand.
 * **Only Kite and replay adapters.** Upstox, Angel One, Dhan and Fyers are
   config-shaped but unwritten.
 * **Reference data is seeded, not authoritative** — see above.
