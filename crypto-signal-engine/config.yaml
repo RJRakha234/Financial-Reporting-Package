@@ -198,7 +198,31 @@ features:
     hurst_window: 256
     hurst_min_lag: 2
     hurst_max_lag: 32
-    hurst_mean_reverting_below: 0.5
+    # The Hurst estimator is downward-biased in small samples. Measured on a
+    # KNOWN random walk (true H = 0.5), this estimator gives:
+    #     window  128 -> median 0.403, sd 0.139, P(H < 0.5) = 0.76
+    #     window  256 -> median 0.461, sd 0.086, P(H < 0.5) = 0.65
+    #     window 1024 -> median 0.490, sd 0.041, P(H < 0.5) = 0.60
+    # So testing "H < 0.5" labels a pure random walk mean-reverting about two
+    # thirds of the time, and the sd means the label flips on noise. Regime
+    # gating built on that would fire essentially at random.
+    #
+    # Instead the null centre and spread are MEASURED by simulation for whatever
+    # window is configured, and a bar is classified only when H sits this many
+    # standard deviations away from that null. Everything else is "random walk",
+    # where neither trend nor mean-reversion signals are allowed to fire.
+    # Width of that band, in null standard deviations. Measured tradeoff
+    # (random walk correctly left unclassified / deterministic trend correctly
+    # classified):
+    #     0.50 -> 33% / 100%      1.50 -> 81% / 100%
+    #     1.00 -> 60% / 100%      2.00 -> 92% / 100%
+    # A strong trend survives every width, so widening costs almost nothing in
+    # sensitivity while sharply cutting false regime calls. 1.5 is chosen rather
+    # than 2.0 because the trend leg of that table is a deterministic ramp — the
+    # easiest possible case — and should not be over-trusted.
+    hurst_deadband_sds: 1.5
+    hurst_null_samples: 300
+    hurst_null_seed: 12345
     half_life_window: 256
     half_life_max_bars: 500.0      # cap so a near-unit-root fit stays finite
     adf_window: 256

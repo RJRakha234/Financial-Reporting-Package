@@ -203,7 +203,9 @@ class StatisticalFeatureConfig(_Base):
     hurst_window: int = Field(gt=1)
     hurst_min_lag: int = Field(gt=0)
     hurst_max_lag: int = Field(gt=1)
-    hurst_mean_reverting_below: Positive
+    hurst_deadband_sds: NonNegative
+    hurst_null_samples: int = Field(gt=1)
+    hurst_null_seed: int
     half_life_window: int = Field(gt=1)
     half_life_max_bars: Positive
     adf_window: int = Field(gt=1)

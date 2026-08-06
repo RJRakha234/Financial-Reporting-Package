@@ -28,7 +28,13 @@ from cse.features.base import (
     true_range,
     wilder_smooth,
 )
-from cse.features.statistical import hurst_exponent, ou_half_life
+from cse.features.statistical import (
+    classify_hurst_regime,
+    hurst_exponent,
+    hurst_null_distribution,
+    ou_half_life,
+    rolling_hurst,
+)
 from cse.features.trend import adx, ichimoku, macd, rsi, supertrend
 from cse.features.volatility import bollinger, realized_volatility, volatility_regime
 from cse.features.volume import on_balance_volume, order_book_imbalance, volume_profile
@@ -433,6 +439,85 @@ def test_hurst_separates_trending_from_mean_reverting() -> None:
 
     assert hurst_exponent(trending, 2, 32) > 0.5
     assert hurst_exponent(reverting, 2, 32) < 0.5
+
+
+def test_hurst_estimator_is_downward_biased_on_short_windows() -> None:
+    """The bias that makes a naive H < 0.5 test almost useless.
+
+    On data that is a random walk BY CONSTRUCTION (true H = 0.5), a 256-bar
+    window lands near 0.46, not 0.50. This test documents the bias so that if a
+    future change removes it, the calibration is revisited rather than silently
+    left over-conservative.
+    """
+    rng = np.random.default_rng(0)
+    estimates = []
+    for _ in range(150):
+        walk = np.log(100.0 + np.cumsum(rng.standard_normal(256)) * 0.01)
+        estimates.append(hurst_exponent(walk, 2, 32))
+    values = np.asarray(estimates)
+
+    assert np.median(values) < 0.5, "the small-sample bias is the whole reason for calibration"
+    assert np.mean(values < 0.5) > 0.55, "a naive H < 0.5 test mislabels most random walks"
+
+
+def test_hurst_null_calibration_matches_the_estimator(config: Config) -> None:
+    statistical_config = config.features.statistical
+
+    centre, spread = hurst_null_distribution(
+        statistical_config.hurst_window,
+        statistical_config.hurst_min_lag,
+        statistical_config.hurst_max_lag,
+        statistical_config.hurst_null_samples,
+        statistical_config.hurst_null_seed,
+    )
+
+    # Calibrated to the estimator's own behaviour, not the textbook 0.5.
+    assert 0.40 < centre < 0.50
+    assert 0.0 < spread < 0.2
+
+
+def test_random_walk_is_mostly_classified_as_random_walk(config: Config) -> None:
+    """Regression: the naive threshold called a pure random walk mean-reverting
+    about two thirds of the time.
+
+    Phase 5 gates mean-reversion signals on this label, so a biased classifier
+    would have let them fire on data with no mean reversion in it at all.
+    """
+    rng = np.random.default_rng(99)
+    statistical_config = config.features.statistical
+    walk = pd.Series(np.log(100.0 + np.cumsum(rng.standard_normal(6000)) * 0.01), dtype="float64")
+    hurst = rolling_hurst(
+        walk,
+        statistical_config.hurst_window,
+        statistical_config.hurst_min_lag,
+        statistical_config.hurst_max_lag,
+    )
+
+    regime = classify_hurst_regime(hurst, statistical_config)
+    defined = regime.loc[hurst.notna()]
+    random_walk_share = float((defined == 0).mean())
+
+    assert random_walk_share > 0.75, (
+        f"only {random_walk_share:.0%} of a known random walk was left unclassified; "
+        f"the deadband is not absorbing estimator noise"
+    )
+
+
+def test_a_genuinely_trending_series_still_gets_classified(config: Config) -> None:
+    """The deadband must not be so wide that nothing is ever classified."""
+    statistical_config = config.features.statistical
+    trending = pd.Series(np.log(np.cumsum(np.full(3000, 1.0)) + 100.0), dtype="float64")
+    hurst = rolling_hurst(
+        trending,
+        statistical_config.hurst_window,
+        statistical_config.hurst_min_lag,
+        statistical_config.hurst_max_lag,
+    )
+
+    regime = classify_hurst_regime(hurst, statistical_config)
+    defined = regime.loc[hurst.notna()]
+
+    assert float((defined == 1).mean()) > 0.9
 
 
 def test_hurst_of_a_zero_variation_window_is_nan_not_a_number() -> None:
