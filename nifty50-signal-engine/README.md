@@ -15,14 +15,14 @@ not, and will not, place orders.
 
 ## Build status
 
-The build follows the phased delivery protocol in the specification. **Phases 1–2
-are complete; phases 3–8 are not started.**
+The build follows the phased delivery protocol in the specification. **Phases 1–3
+are complete; phases 4–8 are not started.**
 
 | # | Phase | Status |
 |---|---|---|
 | 1 | Broker adapter, data layer, corporate actions, trading calendar, integrity tests | **Complete** |
 | 2 | Point-in-time universe + survivorship-bias test | **Complete** (machinery; membership data must be supplied — see below) |
-| 3 | Feature/indicator layer + reference-value unit tests | Not started |
+| 3 | Feature/indicator layer + reference-value unit tests | **Complete** |
 | 4 | Backtest engine with the full Indian cost stack | Not started |
 | 5 | Statistical + India-flow features, ML layer, walk-forward validation | Not started |
 | 6 | Decision engine and fusion logic | Not started |
@@ -45,6 +45,7 @@ src/nifty50/
 ├── trading_calendar/      NSE sessions, holidays, muhurat, the intraday bar grid
 ├── corporate_actions/     action table + back-adjustment of price AND volume
 ├── universe/              point-in-time index membership; fails closed if unverified
+├── features/              trend, volatility, volume/flow, multi-timeframe context
 ├── data/
 │   ├── brokers/           BrokerAdapter ABC, Kite adapter, offline replay adapter
 │   ├── store.py           parquet bar store, partitioned exchange/symbol/timeframe/month
@@ -56,7 +57,7 @@ src/nifty50/
 └── scripts/               backfill and calendar-verification entry points
 ```
 
-224 tests, `ruff` clean, `mypy --strict` clean.
+296 tests, `ruff` clean, `mypy --strict` clean.
 
 ---
 
@@ -224,6 +225,30 @@ sitting in the index itself.
 
 ---
 
+### Multi-timeframe context aligns on bar *close*, not bar start
+
+A 1-hour bar stamped 10:15 covers 10:15–11:15 and is only complete at 11:15.
+Joining higher-timeframe features onto 15-minute bars by bar *start* — the
+obvious `reindex(...).ffill()` — hands the 10:30 bar an hourly bar containing 45
+minutes of prices it could not have known. The strategy then appears to predict
+the next three quarters of an hour, because it was shown them.
+
+`align_higher_timeframe` merges as-of each higher bar's **close** time instead,
+clamped to the session close so the ragged 15:15–15:30 stub is available from
+15:30 rather than a fictional 16:15. `tests/test_lookahead.py` asserts both the
+correct behaviour and that the naive join would in fact have leaked.
+
+### Two indicators are deliberately restricted
+
+**Ichimoku's Chikou span is not emitted.** Chikou is the close displaced 26
+periods *backwards*, so reading it at its plotted position is reading a price
+that has not happened yet. The Senkou spans are displaced *forwards*, carry data
+26 bars old, and are emitted.
+
+**Divergence is stamped at confirmation, not at the pivot.** A swing high is only
+a swing high once N further bars have failed to exceed it, so `rsi_divergence`
+fires N bars after the pivot — when it actually became knowable.
+
 ### The point-in-time universe fails closed
 
 `data/reference/nifty50_constituents.csv` **ships with no data rows, on purpose.**
@@ -332,6 +357,9 @@ requirements.
 * **Only Kite and replay adapters.** Upstox, Angel One, Dhan and Fyers are
   config-shaped but unwritten.
 * **Reference data is seeded, not authoritative** — see above.
+* **Order-book imbalance is NaN in any backtest.** Depth is a live-only field
+  and is absent from every historical bar feed, so the column exists for the
+  live path and is empty on history — by construction, not by omission.
 * **Delivery %, FII/DII flows and bhavcopy ingestion are not implemented.** The
   config records the T+1 availability lag that will govern them; the loader is
   Phase 5.

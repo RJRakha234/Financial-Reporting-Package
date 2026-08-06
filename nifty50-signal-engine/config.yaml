@@ -166,7 +166,54 @@ costs:
   impact_cost_file: data/reference/nse_impact_cost.csv
   settlement_cycle_days: 1        # T+1
 
-features: {}
+features:
+  # --- trend / momentum ---
+  ema_periods: [9, 21, 50, 200]
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+  rsi_period: 14
+  adx_period: 14
+  supertrend_multiplier: 3.0
+  ichimoku_tenkan: 9
+  ichimoku_kijun: 26
+  ichimoku_senkou_b: 52
+  ichimoku_displacement: 26
+  roc_period: 20
+  # Swing-pivot confirmation. A pivot is only knowable `pivot_right` bars after
+  # it forms, so divergence is stamped at confirmation, never at the pivot.
+  pivot_left: 5
+  pivot_right: 5
+
+  # --- volatility ---
+  atr_period: 14
+  bollinger_window: 20
+  bollinger_std: 2.0
+  keltner_ema_period: 20
+  keltner_atr_period: 10
+  keltner_multiplier: 1.5
+  realized_vol_window: 20
+  # Trailing window for percentile / regime classification. Roughly one year of
+  # sessions, so "high volatility" means high for this instrument recently.
+  percentile_window: 250
+  regime_low_quantile: 0.25
+  regime_high_quantile: 0.75
+  vix_panic_level: 25.0
+
+  # --- volume / flow ---
+  # Sessions of history for the session-matched volume baseline. NSE intraday
+  # volume is U-shaped, so 10:30 is scored against prior 10:30s, not a flat mean.
+  volume_lookback_sessions: 20
+  obv_slope_window: 20
+  opening_range_minutes: 60
+
+  # --- annualisation ---
+  trading_days_per_year: 250
+
+  # --- multi-timeframe ---
+  # Columns lifted from the higher timeframe onto the base bars. Alignment is on
+  # the higher bar's CLOSE time, so an unfinished higher bar is never visible.
+  higher_timeframe_columns: [trend_state, adx, rsi_14, atr_14, ema_stack_score]
 ml: {}
 decision: {}
 backtest: {}
