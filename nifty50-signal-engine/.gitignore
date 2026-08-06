@@ -1,0 +1,23 @@
+# Secrets — never commit.
+.env
+
+# Ingested market data. Large, reproducible from the broker, and in most cases
+# redistribution is prohibited by the vendor's terms.
+data/store/
+data/replay/
+data/bhavcopy/
+
+logs/
+*.log
+
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/

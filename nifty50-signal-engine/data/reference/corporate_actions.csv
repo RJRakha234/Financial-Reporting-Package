@@ -1,0 +1,31 @@
+# Corporate actions for back-adjustment of price AND volume history.
+#
+# An unadjusted 1:2 split reads as a 50% single-day crash. It will poison every
+# indicator, every triple-barrier label and every backtest fill that touches it.
+# This table is not optional and it is not "nice to have".
+#
+# Columns
+#   ex_date                 First session on which the stock trades adjusted.
+#                           Bars with session_date <  ex_date are adjusted.
+#                           Bars with session_date >= ex_date are left alone.
+#   ratio_new / ratio_old   Shares AFTER / shares BEFORE.
+#                             1:2 split (FV 2 -> 1)  -> 2 / 1
+#                             1:1 bonus              -> 2 / 1   (1 new + 1 held per 1 held)
+#                             1:3 bonus              -> 4 / 3
+#                           For RIGHTS: rights shares offered / shares held.
+#   value_per_share_inr     DIVIDEND: dividend per share.
+#                           DEMERGER: the value stripped out of the parent, which
+#                           NSE discovers in a special pre-open and publishes.
+#   rights_issue_price_inr  RIGHTS subscription price.
+#   price_factor_override   Escape hatch for exotic actions. When set it wins.
+#
+# Provenance: source=seed rows are recalled, not scraped from an NSE circular.
+# `nifty50.data.integrity.find_suspected_unadjusted_actions` will flag any large
+# gap that is NOT covered by a row here — run it after every backfill and treat
+# each hit as a missing row until proven otherwise.
+symbol,ex_date,action_type,ratio_new,ratio_old,value_per_share_inr,rights_issue_price_inr,price_factor_override,note,source
+HDFCBANK,2019-09-19,SPLIT,2,1,,,,FV Rs 2 -> Re 1; each share becomes two,seed
+INFY,2018-09-11,BONUS,2,1,,,,1:1 bonus,seed
+TCS,2018-06-01,BONUS,2,1,,,,1:1 bonus,seed
+WIPRO,2019-03-06,BONUS,4,3,,,,1:3 bonus,seed
+RELIANCE,2023-07-20,DEMERGER,,,261.85,,,Jio Financial Services demerger; value discovered in NSE special pre-open,seed

@@ -1,0 +1,124 @@
+# NSE Capital Market segment trading holidays (weekdays only; weekends are implicit).
+#
+# !! READ THIS BEFORE TRUSTING A BACKTEST !!
+# `source=seed` rows were compiled from recall, NOT scraped from an NSE circular.
+# They are a starting point, not an authority. Run:
+#     python -m nifty50.scripts.verify_calendar
+# after ingesting daily bars: it cross-checks every row against actual bar
+# presence and reports both phantom holidays (bars exist on a "holiday") and
+# missing holidays (no bars on a supposed trading day). Replace `source=seed`
+# with `source=nse_circular` once you have confirmed a row against
+# https://www.nseindia.com/resources/exchange-communication-holidays
+#
+# confidence: high   = fixed-date national holiday, date is not in doubt
+#             medium = movable/lunar festival recalled from memory, verify it
+#
+# 2026 IS DELIBERATELY INCOMPLETE. Only high-confidence fixed-date holidays are
+# listed. Load the official 2026 circular before running anything on 2026 data.
+date,name,confidence,source
+2019-03-04,Mahashivratri,medium,seed
+2019-03-21,Holi,medium,seed
+2019-04-17,Mahavir Jayanti,medium,seed
+2019-04-19,Good Friday,medium,seed
+2019-04-29,Parliamentary Elections (Mumbai),medium,seed
+2019-05-01,Maharashtra Day,high,seed
+2019-06-05,Id-ul-Fitr,medium,seed
+2019-08-12,Bakri Id,medium,seed
+2019-08-15,Independence Day,high,seed
+2019-09-02,Ganesh Chaturthi,medium,seed
+2019-09-10,Moharram,medium,seed
+2019-10-02,Gandhi Jayanti,high,seed
+2019-10-08,Dussehra,medium,seed
+2019-10-28,Diwali Balipratipada,medium,seed
+2019-11-12,Guru Nanak Jayanti,medium,seed
+2019-12-25,Christmas,high,seed
+2020-02-21,Mahashivratri,medium,seed
+2020-03-10,Holi,medium,seed
+2020-04-02,Ram Navami,medium,seed
+2020-04-06,Mahavir Jayanti,medium,seed
+2020-04-10,Good Friday,medium,seed
+2020-04-14,Dr Baba Saheb Ambedkar Jayanti,medium,seed
+2020-05-01,Maharashtra Day,high,seed
+2020-05-25,Id-ul-Fitr,medium,seed
+2020-10-02,Gandhi Jayanti,high,seed
+2020-11-16,Diwali Balipratipada,medium,seed
+2020-11-30,Guru Nanak Jayanti,medium,seed
+2020-12-25,Christmas,high,seed
+2021-01-26,Republic Day,high,seed
+2021-03-11,Mahashivratri,medium,seed
+2021-03-29,Holi,medium,seed
+2021-04-02,Good Friday,medium,seed
+2021-04-14,Dr Baba Saheb Ambedkar Jayanti,medium,seed
+2021-04-21,Ram Navami,medium,seed
+2021-05-13,Id-ul-Fitr,medium,seed
+2021-07-21,Bakri Id,medium,seed
+2021-08-19,Moharram,medium,seed
+2021-09-10,Ganesh Chaturthi,medium,seed
+2021-10-15,Dussehra,medium,seed
+2021-11-04,Diwali Laxmi Pujan,medium,seed
+2021-11-05,Diwali Balipratipada,medium,seed
+2021-11-19,Guru Nanak Jayanti,medium,seed
+2022-01-26,Republic Day,high,seed
+2022-03-01,Mahashivratri,medium,seed
+2022-03-18,Holi,medium,seed
+2022-04-14,Dr Baba Saheb Ambedkar Jayanti / Mahavir Jayanti,medium,seed
+2022-04-15,Good Friday,medium,seed
+2022-05-03,Id-ul-Fitr,medium,seed
+2022-08-09,Moharram,medium,seed
+2022-08-15,Independence Day,high,seed
+2022-08-31,Ganesh Chaturthi,medium,seed
+2022-10-05,Dussehra,medium,seed
+2022-10-24,Diwali Laxmi Pujan,medium,seed
+2022-10-26,Diwali Balipratipada,medium,seed
+2022-11-08,Guru Nanak Jayanti,medium,seed
+2023-01-26,Republic Day,high,seed
+2023-03-07,Holi,medium,seed
+2023-03-30,Ram Navami,medium,seed
+2023-04-04,Mahavir Jayanti,medium,seed
+2023-04-07,Good Friday,medium,seed
+2023-04-14,Dr Baba Saheb Ambedkar Jayanti,medium,seed
+2023-05-01,Maharashtra Day,high,seed
+2023-06-29,Bakri Id,medium,seed
+2023-08-15,Independence Day,high,seed
+2023-09-19,Ganesh Chaturthi,medium,seed
+2023-10-02,Gandhi Jayanti,high,seed
+2023-10-24,Dussehra,medium,seed
+2023-11-14,Diwali Balipratipada,medium,seed
+2023-11-27,Guru Nanak Jayanti,medium,seed
+2023-12-25,Christmas,high,seed
+2024-01-22,Special holiday (Ayodhya Pran Pratishtha),medium,seed
+2024-01-26,Republic Day,high,seed
+2024-03-08,Mahashivratri,medium,seed
+2024-03-25,Holi,medium,seed
+2024-03-29,Good Friday,medium,seed
+2024-04-11,Id-ul-Fitr,medium,seed
+2024-04-17,Ram Navami,medium,seed
+2024-05-01,Maharashtra Day,high,seed
+2024-05-20,Lok Sabha Elections (Mumbai),medium,seed
+2024-06-17,Bakri Id,medium,seed
+2024-07-17,Moharram,medium,seed
+2024-08-15,Independence Day,high,seed
+2024-10-02,Gandhi Jayanti,high,seed
+2024-11-01,Diwali Laxmi Pujan,medium,seed
+2024-11-15,Guru Nanak Jayanti,medium,seed
+2024-11-20,Maharashtra Assembly Elections,medium,seed
+2024-12-25,Christmas,high,seed
+2025-02-26,Mahashivratri,medium,seed
+2025-03-14,Holi,medium,seed
+2025-03-31,Id-ul-Fitr,medium,seed
+2025-04-10,Shri Mahavir Jayanti,medium,seed
+2025-04-14,Dr Baba Saheb Ambedkar Jayanti,medium,seed
+2025-04-18,Good Friday,medium,seed
+2025-05-01,Maharashtra Day,high,seed
+2025-08-15,Independence Day,high,seed
+2025-08-27,Ganesh Chaturthi,medium,seed
+2025-10-02,Gandhi Jayanti / Dussehra,high,seed
+2025-10-21,Diwali Laxmi Pujan,medium,seed
+2025-10-22,Diwali Balipratipada,medium,seed
+2025-11-05,Guru Nanak Jayanti,medium,seed
+2025-12-25,Christmas,high,seed
+2026-01-26,Republic Day,high,seed
+2026-04-03,Good Friday,medium,seed
+2026-05-01,Maharashtra Day,high,seed
+2026-10-02,Gandhi Jayanti,high,seed
+2026-12-25,Christmas,high,seed
