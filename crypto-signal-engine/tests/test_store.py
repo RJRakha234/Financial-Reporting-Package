@@ -142,6 +142,34 @@ def test_verify_reports_gaps(store: CandleStore) -> None:
     assert report.gaps[0].missing_bars == 2
 
 
+def test_suffix_verify_only_reads_the_requested_tail(store: CandleStore) -> None:
+    """Resume must not re-read years of partitions to check what did not change."""
+    frame = make_candles(300, start_ms=START_MS)
+    frame.loc[5, "high"] = 0.5  # malformed, but far in the past
+    store.write(SYMBOL, TIMEFRAME, frame)
+
+    tail_start = int(frame["open_time"].iloc[200])
+    suffix = store.verify(SYMBOL, TIMEFRAME, FIFTEEN_MIN_MS, start_time=tail_start)
+    full = store.verify(SYMBOL, TIMEFRAME, FIFTEEN_MIN_MS)
+
+    assert suffix.rows_in == 100
+    assert suffix.ok, "the old malformed bar is outside the requested window"
+    assert full.rows_in == 300
+    assert full.malformed_ohlc == 1
+
+
+def test_suffix_verify_still_catches_a_seam_gap(store: CandleStore) -> None:
+    """Starting one bar early is what makes a gap at the join detectable."""
+    frame = make_candles(300, start_ms=START_MS).drop(index=[200]).reset_index(drop=True)
+    store.write(SYMBOL, TIMEFRAME, frame)
+
+    seam = START_MS + 199 * FIFTEEN_MIN_MS
+    report = store.verify(SYMBOL, TIMEFRAME, FIFTEEN_MIN_MS, start_time=seam)
+
+    assert len(report.gaps) == 1
+    assert report.gaps[0].missing_bars == 1
+
+
 def test_rewrite_clean_removes_malformed_rows(store: CandleStore) -> None:
     frame = make_candles(50, start_ms=START_MS)
     frame.loc[10, "high"] = 0.5  # below the body: impossible bar

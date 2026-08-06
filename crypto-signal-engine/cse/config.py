@@ -100,6 +100,7 @@ class IntegrityConfig(_Base):
     reconcile_volume_tolerance: NonNegative
     outage_gap_bars: int = Field(gt=0)
     max_gap_repair_requests: int = Field(ge=0)
+    resume_verify_bars: int = Field(gt=0)
 
 
 class SyntheticConfig(_Base):

@@ -212,11 +212,34 @@ class CandleStore:
 
     # ---- maintenance --------------------------------------------------------
 
-    def verify(self, symbol: str, timeframe: str, interval_ms: int) -> IntegrityReport:
-        """Run the full integrity check over everything stored for a series."""
-        frame = self.read(symbol, timeframe)
+    def verify(
+        self,
+        symbol: str,
+        timeframe: str,
+        interval_ms: int,
+        *,
+        start_time: int | None = None,
+    ) -> IntegrityReport:
+        """Integrity-check a stored series.
+
+        Defaults to the whole series. Pass ``start_time`` to check only a
+        suffix, which is what the resume path wants: re-reading a three-year 1m
+        archive (1,095 Parquet files per series) on every startup makes restart
+        cost scale with history, even though the only bars that can have changed
+        are the ones just written.
+
+        Callers checking a suffix should start one bar *before* the first new
+        bar, so a gap at the seam is still detected.
+        """
+        frame = self.read(symbol, timeframe, start_time=start_time)
         _, report = normalize(frame, interval_ms, ohlc_tolerance=self._ohlc_tolerance)
-        _log.info("store.verify", symbol=symbol, timeframe=timeframe, **report.as_dict())
+        _log.info(
+            "store.verify",
+            symbol=symbol,
+            timeframe=timeframe,
+            scope="suffix" if start_time is not None else "full",
+            **report.as_dict(),
+        )
         return report
 
     def rewrite_clean(self, symbol: str, timeframe: str, interval_ms: int) -> IntegrityReport:

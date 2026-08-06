@@ -143,10 +143,13 @@ class LiveBinanceSource(MarketDataSource):
 
     async def ensure_history(self, symbol: str, timeframe: str) -> IntegrityReport:
         interval_ms = interval_to_ms(timeframe)
-        await self._backfiller.backfill(
+        result = await self._backfiller.backfill(
             symbol, timeframe, interval_ms, history_days=self._config.history_days
         )
-        return self._store.verify(symbol, timeframe, interval_ms)
+        # Check only what this run could have changed. A fresh archive
+        # (resumed_from is None) still gets a full pass, once.
+        verify_from = None if result.resumed_from is None else result.resumed_from - interval_ms
+        return self._store.verify(symbol, timeframe, interval_ms, start_time=verify_from)
 
     def load(
         self,
@@ -225,7 +228,12 @@ class SyntheticSource(MarketDataSource):
         expected_last = last_closed_open_time(self._now_ms, interval_ms)
         if existing is not None and existing >= expected_last:
             _log.info("synthetic.up_to_date", symbol=symbol, timeframe=timeframe)
-            return self._store.verify(symbol, timeframe, interval_ms)
+            # Nothing was written, so only spot-check the recent tail rather than
+            # re-reading years of partitions on every startup.
+            window = self._config.data.integrity.resume_verify_bars * interval_ms
+            return self._store.verify(
+                symbol, timeframe, interval_ms, start_time=expected_last - window
+            )
 
         base = self._base_1m(symbol)
         frame = (

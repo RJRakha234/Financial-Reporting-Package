@@ -95,6 +95,11 @@ data:
     # silently, because they usually mean an exchange halt.
     outage_gap_bars: 20
     max_gap_repair_requests: 50
+    # On restart, an up-to-date series is checked over this many trailing bars
+    # instead of its whole history. A full pass re-reads one Parquet file per
+    # stored day (1,095 per series at 3 years), which made startup cost scale
+    # with history even though nothing had changed. Use `verify` for a full pass.
+    resume_verify_bars: 1000
 
   synthetic:
     # Deterministic offline generator. Fixed seed => byte-identical output,
