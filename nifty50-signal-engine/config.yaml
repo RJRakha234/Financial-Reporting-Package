@@ -1,0 +1,187 @@
+# =============================================================================
+# Nifty 50 Signal Engine — single source of truth for every tunable parameter.
+#
+# RULE: no magic numbers in code. If a number influences behaviour, it lives
+# here with a comment explaining what it is and where it came from.
+#
+# ALERT-ONLY / READ-ONLY. There is deliberately no `execution:` section and no
+# order-related setting anywhere in this file. See PART 8 of the spec and the
+# "Regulatory posture" section of the README.
+# =============================================================================
+
+runtime:
+  timezone: Asia/Kolkata          # Every timestamp in the system is tz-aware in IST.
+  mode: paper                     # paper | backtest.  There is no `live_trading` mode.
+  intrabar_signals: false         # If false, never signal off an unclosed candle.
+
+universe:
+  index: NIFTY50
+  # Point-in-time membership. Backtests query this as-of each bar date so that a
+  # name that joined the index in 2023 is not tradeable in 2020.
+  constituents_file: data/reference/nifty50_constituents.csv
+  # Fail loudly rather than silently trading today's list over history.
+  require_point_in_time: true
+  # Names carried in the stream in addition to the equity constituents.
+  index_instruments:
+    - {symbol: "NIFTY 50", exchange: NSE, kind: index}
+    - {symbol: "INDIA VIX", exchange: NSE, kind: index}
+    - {symbol: "NIFTY BANK", exchange: NSE, kind: index}
+    - {symbol: "NIFTY IT", exchange: NSE, kind: index}
+    - {symbol: "NIFTY AUTO", exchange: NSE, kind: index}
+    - {symbol: "NIFTY FMCG", exchange: NSE, kind: index}
+    - {symbol: "NIFTY PHARMA", exchange: NSE, kind: index}
+    - {symbol: "NIFTY METAL", exchange: NSE, kind: index}
+    - {symbol: "NIFTY ENERGY", exchange: NSE, kind: index}
+    - {symbol: "NIFTY FIN SERVICE", exchange: NSE, kind: index}
+
+broker:
+  name: kite                      # kite | replay   (upstox|angelone|dhan|fyers: adapters not yet written)
+  # Kite Connect quirks, from the vendor docs. Change these only if the vendor does.
+  kite:
+    api_key_env: KITE_API_KEY
+    api_secret_env: KITE_API_SECRET
+    access_token_env: KITE_ACCESS_TOKEN
+    request_token_env: KITE_REQUEST_TOKEN
+    # Kite access tokens die at ~06:00 IST daily; the engine must re-auth each morning.
+    token_expiry_local_time: "06:00"
+    max_ws_instruments: 3000      # Vendor cap on instruments per websocket connection.
+    max_ws_connections: 3         # Vendor cap on concurrent websocket connections per api_key.
+    # Vendor cap on the span of one historical-data request, per timeframe (days).
+    historical_chunk_days:
+      1m: 60
+      5m: 100
+      15m: 200
+      1h: 400
+      1d: 2000
+    rest_rate_limit_per_second:
+      quote: 1
+      historical: 3
+  replay:
+    # Offline adapter used by tests, CI and for developing without broker credentials.
+    root: data/replay
+
+data:
+  timeframes: [1m, 5m, 15m, 1h, 1d]
+  base_timeframe: 15m
+  history_years: 7
+  store:
+    root: data/store
+    format: parquet
+    # Partitioning: symbol/timeframe/year-month. Deliberately NOT per-date — see README
+    # ("Storage layout") for why 440k single-day files is the wrong shape for this data.
+    partition_granularity: month
+    compression: zstd
+  bhavcopy:
+    root: data/bhavcopy
+    # Delivery% is only published in the end-of-day security-wise bhavcopy. It is
+    # therefore a T+1 feature: usable from the NEXT session's open, never same-day.
+    availability_lag_sessions: 1
+  integrity:
+    # A close-to-close move larger than this with no corporate action on file is
+    # treated as a suspected unadjusted corporate action, not as a real price move.
+    suspect_unadjusted_abs_log_return: 0.20
+    # Live-built candle vs. broker REST candle reconciliation tolerances.
+    reconcile_price_rel_tolerance: 0.0005      # 5 bps
+    reconcile_volume_rel_tolerance: 0.02       # 2%
+    max_missing_bars_pct_before_quarantine: 0.02
+
+stream:
+  heartbeat_timeout_seconds: 10       # No tick or ping within this => connection considered stale.
+  reconnect_backoff_initial_seconds: 1
+  reconnect_backoff_max_seconds: 60
+  reconnect_backoff_multiplier: 2
+  reconnect_jitter_fraction: 0.25
+  max_consecutive_reconnects_before_halt: 20
+  rest_fallback_after_seconds: 30     # Socket down this long => poll REST quotes instead.
+  rest_fallback_poll_seconds: 5
+  # When the market is shut the supervisor idles instead of alarming.
+  idle_poll_seconds_when_closed: 60
+
+calendar:
+  holidays_file: data/reference/nse_holidays.csv
+  special_sessions_file: data/reference/nse_special_sessions.csv
+  sessions:
+    pre_open:
+      start: "09:00"
+      end: "09:15"
+    continuous:
+      start: "09:15"
+      end: "15:30"
+    post_close:
+      start: "15:40"
+      end: "16:00"
+  # Intraday bars are anchored to the continuous-session open, not to the wall clock.
+  # 375 minutes does not divide by 60, so the last hourly bar of the day is a
+  # 15-minute stub. It is emitted and flagged `partial`, never silently merged.
+  anchor_intraday_bars_to_session_open: true
+
+corporate_actions:
+  actions_file: data/reference/corporate_actions.csv
+  # Adjustment factors are applied on read, never baked into stored bars, so that
+  # a newly-discovered action re-adjusts history without rewriting the store.
+  adjust_on_read: true
+  adjust_dividends: true
+  # Features and ML labels use the adjusted series; circuit bands, price-band
+  # proximity and cost calculations use the raw traded series.
+  feature_series: adjusted
+  cost_and_band_series: raw
+
+# --- Sections below are consumed by later phases; listed here so the file stays
+# --- the single source of truth. Phase 1 does not read them.
+
+capital:
+  starting_capital_inr: 500000
+  risk_per_trade_fraction: 0.01
+  trade_style: intraday           # intraday | swing | positional
+
+costs:
+  # Indian cost stack. Rates verified against public broker/exchange schedules;
+  # `effective_from` is recorded because these change by circular and a backtest
+  # run over 7 years should not apply 2026 rates to 2019 fills.
+  # VERIFY THESE AGAINST YOUR OWN BROKER'S CONTRACT NOTE BEFORE TRUSTING A BACKTEST.
+  effective_from: "2024-10-01"
+  brokerage:
+    delivery_pct: 0.0
+    delivery_flat_inr: 0.0
+    intraday_pct: 0.0003          # 0.03%
+    intraday_cap_inr: 20.0        # min(20, 0.03% * turnover) per executed order
+  stt:
+    delivery_buy_pct: 0.001       # 0.1% on buy
+    delivery_sell_pct: 0.001      # 0.1% on sell  (charged BOTH legs for delivery)
+    intraday_sell_pct: 0.00025    # 0.025% on sell only
+  exchange_txn_charge_pct: 0.0000297   # NSE equity, 0.00297% of turnover
+  sebi_turnover_fee_pct: 0.000001      # Rs 10 per crore
+  ipft_pct: 0.0000010                  # NSE Investor Protection Fund Trust levy
+  stamp_duty:
+    delivery_buy_pct: 0.00015     # 0.015% buy side only
+    intraday_buy_pct: 0.00003     # 0.003% buy side only
+  gst_pct: 0.18                   # on (brokerage + exchange charges + SEBI fee + DP)
+  dp_charge_per_scrip_per_sell_inr: 15.93   # delivery sells only
+  slippage:
+    model: spread_and_impact      # not a flat guess
+    fallback_bps: 5.0             # only used when depth/impact data is unavailable
+  impact_cost_file: data/reference/nse_impact_cost.csv
+  settlement_cycle_days: 1        # T+1
+
+features: {}
+ml: {}
+decision: {}
+backtest: {}
+
+dashboard:
+  host: 127.0.0.1
+  port: 8000
+
+alerts:
+  channels: [desktop, console]
+  min_confidence: 0.65
+  rate_limit_per_symbol_minutes: 30
+  rate_limit_global_per_hour: 40
+
+logging:
+  level: INFO
+  dir: logs
+  file: engine.log
+  max_bytes: 20000000
+  backup_count: 10
+  json_lines: true   # JSON lines to the rotating file; console stays human-readable
