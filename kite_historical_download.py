@@ -22,9 +22,9 @@ Apply corporate actions downstream rather than assuming these are split-adjusted
 
 Usage
 -----
-    export KITE_API_KEY=...  KITE_API_SECRET=...
-
-    # once per day - prints a URL, you paste back the request_token
+    # once per day - prompts for credentials, prints a URL, you paste back
+    # the request_token. The api_key and token are then cached for the day,
+    # so `download` needs no environment variables at all.
     python kite_historical_download.py login
 
     python kite_historical_download.py download \\
@@ -45,6 +45,7 @@ import os
 import sys
 import time
 from dataclasses import asdict, dataclass
+from getpass import getpass
 from pathlib import Path
 from typing import Any, Final
 
@@ -111,45 +112,68 @@ def parse_lookback(spec: str, end: dt.date) -> dt.date:
 # --------------------------------------------------------------------------
 
 
-def _require_env(name: str) -> str:
+def _credential(name: str, *, interactive: bool, secret: bool = False) -> str:
+    """Read a credential from the environment, else prompt for it.
+
+    Setting environment variables is the one step that reliably trips people up
+    across shells (``export`` in bash, ``set`` in cmd, ``$env:`` in PowerShell),
+    so an interactive run asks rather than lecturing about syntax. Secrets are
+    read through getpass so they never land in the terminal scrollback.
+    """
     value = os.environ.get(name, "").strip()
-    if not value:
+    if value:
+        return value
+    if not interactive:
         raise DownloadError(
-            f"{name} is not set. Create an app at https://developers.kite.trade/apps "
-            f"then: export {name}=..."
+            f"{name} is not set. Run `login` first, or set it in your shell.\n"
+            f"  cmd:        set {name}=...\n"
+            f"  PowerShell: $env:{name}=\"...\"\n"
+            f"  bash/zsh:   export {name}=..."
         )
-    return value
+    prompt = f"  {name}: "
+    entered = (getpass(prompt) if secret else input(prompt)).strip()
+    if not entered:
+        raise DownloadError(f"{name} is required")
+    return entered
 
 
-def _load_cached_token() -> str | None:
-    """Return today's cached access token, if it is still plausibly valid.
+def _load_session() -> dict[str, str]:
+    """Return today's cached session, if it is still plausibly valid.
 
     Kite tokens die at ~06:00 IST. Rather than track that precisely, we cache
     the date the token was minted and discard it on any later date — a wasted
     re-login is cheaper than a confusing 403 mid-backfill.
     """
-    env_token = os.environ.get("KITE_ACCESS_TOKEN", "").strip()
-    if env_token:
-        return env_token
     if not SESSION_FILE.exists():
-        return None
+        return {}
     try:
         cached = json.loads(SESSION_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return None
+        return {}
     if cached.get("date") != _ist_today().isoformat():
-        return None
-    token = cached.get("access_token")
-    return str(token) if token else None
+        return {}
+    return {str(k): str(v) for k, v in cached.items() if v}
 
 
-def _cache_token(access_token: str) -> None:
+def _cache_session(api_key: str, access_token: str) -> None:
+    """Persist the token *and* the key, so `download` needs no environment."""
     SESSION_FILE.write_text(
-        json.dumps({"access_token": access_token, "date": _ist_today().isoformat()}, indent=2),
+        json.dumps(
+            {
+                "api_key": api_key,
+                "access_token": access_token,
+                "date": _ist_today().isoformat(),
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
-    # The token is a live credential for a trading account.
-    os.chmod(SESSION_FILE, 0o600)
+    try:
+        # The token is a live credential for a trading account.
+        os.chmod(SESSION_FILE, 0o600)
+    except OSError:
+        # Windows ignores POSIX modes; not worth failing a good login over.
+        pass
 
 
 def _ist_today() -> dt.date:
@@ -167,10 +191,15 @@ def make_client(*, interactive: bool) -> Any:
     except ImportError as exc:  # pragma: no cover - depends on the user's env
         raise DownloadError("kiteconnect is not installed. Run: pip install kiteconnect") from exc
 
-    api_key = _require_env("KITE_API_KEY")
+    session = _load_session()
+    api_key = (
+        os.environ.get("KITE_API_KEY", "").strip()
+        or session.get("api_key", "")
+        or _credential("KITE_API_KEY", interactive=interactive)
+    )
     kite = KiteConnect(api_key=api_key)
 
-    token = _load_cached_token()
+    token = os.environ.get("KITE_ACCESS_TOKEN", "").strip() or session.get("access_token")
     if token:
         kite.set_access_token(token)
         try:
@@ -192,7 +221,7 @@ def make_client(*, interactive: bool) -> Any:
             "unattended.\n  Run: python kite_historical_download.py login"
         )
 
-    api_secret = _require_env("KITE_API_SECRET")
+    api_secret = _credential("KITE_API_SECRET", interactive=True, secret=True)
     print("\n  1. Open this URL and log in:\n")
     print(f"     {kite.login_url()}\n")
     print("  2. You land on your app's redirect URL. Copy the `request_token=...`")
@@ -204,7 +233,7 @@ def make_client(*, interactive: bool) -> Any:
     data = kite.generate_session(request_token, api_secret=api_secret)
     access_token = str(data["access_token"])
     kite.set_access_token(access_token)
-    _cache_token(access_token)
+    _cache_session(api_key, access_token)
     print(f"\nLogged in as {data.get('user_name')} ({data.get('user_id')}).")
     print(f"Access token cached in {SESSION_FILE} (valid until ~06:00 IST tomorrow).")
     return kite
@@ -432,6 +461,10 @@ def write_candles(
 
 
 def cmd_login(_args: argparse.Namespace) -> int:
+    print(
+        "Kite login. Credentials come from the environment if set, otherwise you\n"
+        "will be prompted. Find them at https://developers.kite.trade/apps\n"
+    )
     make_client(interactive=True)
     return 0
 
