@@ -207,6 +207,29 @@ features:
   obv_slope_window: 20
   opening_range_minutes: 60
 
+  # --- statistical structure ---
+  # Long-memory estimators need a long window to say anything at all. 250 bars
+  # of 15m is ten sessions, which is short for a Hurst exponent and is the
+  # trade-off intraday forces: a window long enough to estimate well spans
+  # several regimes, one short enough to be current is mostly noise.
+  memory_window: 250
+  # Horizon for the variance-ratio test, in base bars. 5 bars = 75 minutes.
+  variance_ratio_lag: 5
+  # Shorter window for the mean-reversion signals, which are about where price
+  # is now rather than what kind of process generated it.
+  reversion_window: 50
+
+  # --- India-specific flow ---
+  # Sessions of history for delivery-% and FII/DII z-scores. These inputs are
+  # daily, so this is sessions, not bars.
+  flow_window_sessions: 20
+  # Sessions before an index reconstitution effective date that count as "near".
+  index_event_lead_sessions: 5
+  # Nifty 50 constituents are all in F&O and therefore carry a 10% dynamic
+  # band rather than a fixed circuit. A single scalar across 50 names is a
+  # simplification; see the docstring in features/flow.py.
+  circuit_band_pct: 0.10
+
   # --- annualisation ---
   trading_days_per_year: 250
 
@@ -214,7 +237,45 @@ features:
   # Columns lifted from the higher timeframe onto the base bars. Alignment is on
   # the higher bar's CLOSE time, so an unfinished higher bar is never visible.
   higher_timeframe_columns: [trend_state, adx, rsi_14, atr_14, ema_stack_score]
-ml: {}
+ml:
+  # --- triple-barrier labelling ---
+  # Bars ahead the vertical barrier sits. 16 bars of 15m is one full session,
+  # which for an intraday style is the longest a position can be held anyway.
+  label_horizon_bars: 16
+  # Barriers as multiples of trailing ATR/price. Asymmetric on purpose: the
+  # stop is tighter than the target, which is the risk-reward the position
+  # sizer assumes and the labels must therefore match.
+  label_upper_atr_multiple: 2.0
+  label_lower_atr_multiple: 1.0
+  # Floor on barrier width. Below the round-trip cost, a "win" in the label is
+  # a loss in reality, so labels narrower than this are noise being learned.
+  label_min_barrier_pct: 0.002
+  # Cap the vertical barrier at the entry's own session. An intraday strategy
+  # never holds through the gap, so a label that resolves against it is
+  # describing a position that would not have existed.
+  label_within_session: true
+
+  # --- purged walk-forward validation ---
+  cv_folds: 5
+  # As a fraction of the total sample. 1% of seven years of 15m bars is about
+  # two and a half weeks — deliberately generous.
+  cv_embargo_fraction: 0.01
+  cv_min_train_size: 2000
+  # Null: expanding training window, matching how the model would be retrained
+  # in production. Set an integer for a rolling window instead.
+  cv_max_train_size: null
+
+  # --- final holdout ---
+  # Touched once, at the end. Every score from the CV folds above has been
+  # selected on and is therefore optimistic; this one has not.
+  holdout_start: "2024-01-01"
+
+  # --- model ---
+  calibration_fraction: 0.2
+  permutation_test_iterations: 500
+  # Number of distinct configurations tried, carried into the deflated Sharpe
+  # calculation. Keep this honest — it is the whole point of the deflation.
+  trials_attempted: 1
 decision: {}
 backtest: {}
 

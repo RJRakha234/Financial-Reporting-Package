@@ -62,14 +62,54 @@ def hourly(real_config: Config) -> pd.DataFrame:
     return generate_session_bars(calendar, START, END, Timeframe.H1, start_price=1400.0, seed=31)
 
 
+@pytest.fixture(scope="module")
+def daily_flows(bars: pd.DataFrame) -> pd.DataFrame:
+    """Synthetic delivery and participant-flow series, one row per session.
+
+    Deliberately correlated with each session's own return. If the publication
+    lag in :mod:`nifty50.features.flow` were ever dropped to zero, these
+    columns would carry the session's own outcome and the truncation test
+    below would catch it — which is the point of building them this way rather
+    than as independent noise.
+    """
+    dates = pd.Index(sorted({ts.date() for ts in bars.index}), name="date")
+    session_close = bars["close"].groupby([ts.date() for ts in bars.index]).last()
+    session_return = session_close.pct_change().fillna(0.0).to_numpy()
+    return pd.DataFrame(
+        {
+            "delivery_pct": 45.0 + 500.0 * session_return,
+            "fii_net_crore": 2000.0 * session_return,
+            "dii_net_crore": -1500.0 * session_return,
+        },
+        index=dates,
+    )
+
+
+@pytest.fixture(scope="module")
+def scheduled_dates(bars: pd.DataFrame) -> tuple[frozenset[dt.date], frozenset[dt.date]]:
+    """F&O ban dates and index-event dates, fixed across the whole test.
+
+    Both are genuinely published ahead of the sessions they apply to, so the
+    *same* set goes into the full and truncated runs. Deriving them from
+    whichever bars were passed in would make truncation shrink the set, and
+    the resulting mismatch would look like a look-ahead leak when it is only
+    the test changing its own inputs.
+    """
+    sessions = sorted({ts.date() for ts in bars.index})
+    return frozenset(sessions[::17]), frozenset(sessions[::40])
+
+
 def features_for(
     bars: pd.DataFrame,
     index_close: pd.Series,
     vix_close: pd.Series,
     hourly: pd.DataFrame,
+    daily_flows: pd.DataFrame,
+    scheduled_dates: tuple[frozenset[dt.date], frozenset[dt.date]],
     calendar: TradingCalendar,
     config: Config,
 ) -> pd.DataFrame:
+    ban_dates, event_dates = scheduled_dates
     return compute_features(
         FeatureInputs(
             bars=bars,
@@ -77,6 +117,11 @@ def features_for(
             index_close=index_close,
             vix_close=vix_close,
             higher_timeframe_bars={Timeframe.H1: hourly},
+            delivery_pct=daily_flows["delivery_pct"],
+            fii_net_crore=daily_flows["fii_net_crore"],
+            dii_net_crore=daily_flows["dii_net_crore"],
+            fno_ban_dates=ban_dates,
+            index_event_dates=event_dates,
         ),
         calendar,
         config,
@@ -122,10 +167,15 @@ class TestNoLookAhead:
         index_close: pd.Series,
         vix_close: pd.Series,
         hourly: pd.DataFrame,
+        daily_flows: pd.DataFrame,
+        scheduled_dates: tuple[frozenset[dt.date], frozenset[dt.date]],
         real_config: Config,
     ) -> None:
         calendar = TradingCalendar.from_config(real_config)
-        full = features_for(bars, index_close, vix_close, hourly, calendar, real_config)
+        full = features_for(
+            bars, index_close, vix_close, hourly, daily_flows, scheduled_dates,
+            calendar, real_config,
+        )
 
         cutoff = bars.index[cut]
         truncated = features_for(
@@ -133,6 +183,11 @@ class TestNoLookAhead:
             index_close[index_close.index < cutoff],
             vix_close[vix_close.index < cutoff],
             hourly[hourly.index < cutoff],
+            # Daily data for sessions strictly before the current one. The
+            # current session's own delivery figure does not exist yet at any
+            # point during it, which is exactly the constraint under test.
+            daily_flows[daily_flows.index < cutoff.date()],
+            scheduled_dates,
             calendar,
             real_config,
         )
@@ -146,16 +201,25 @@ class TestNoLookAhead:
         index_close: pd.Series,
         vix_close: pd.Series,
         hourly: pd.DataFrame,
+        daily_flows: pd.DataFrame,
+        scheduled_dates: tuple[frozenset[dt.date], frozenset[dt.date]],
         real_config: Config,
     ) -> None:
         # A guard on the guard: if compute_features silently returned two
         # columns, the parametrised test above would pass and prove nothing.
         calendar = TradingCalendar.from_config(real_config)
-        features = features_for(bars, index_close, vix_close, hourly, calendar, real_config)
-        assert len(features.columns) > 40
+        features = features_for(
+            bars, index_close, vix_close, hourly, daily_flows, scheduled_dates,
+            calendar, real_config,
+        )
+        assert len(features.columns) > 70
         # And the values must actually be populated by the end of the history.
         tail = features.iloc[-1]
-        assert tail.notna().sum() > 30
+        assert tail.notna().sum() > 55
+        # The statistical and flow layers must both be represented, or the
+        # truncation test is only proving Phase 3 clean.
+        assert {"hurst", "half_life_bars", "beta", "residual_zscore"} <= set(features.columns)
+        assert {"delivery_pct_zscore", "fii_dii_opposed", "band_position"} <= set(features.columns)
 
     def test_the_harness_actually_detects_a_leak(self) -> None:
         """A guard that cannot fail is not a guard.

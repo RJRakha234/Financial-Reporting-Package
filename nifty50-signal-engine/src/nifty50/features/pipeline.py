@@ -6,14 +6,16 @@ column is backward-looking, and warm-up is NaN rather than zero.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import datetime as dt
+from dataclasses import dataclass, field
 
 import pandas as pd
 
 from nifty50.config import Config
 from nifty50.domain import Timeframe
+from nifty50.features import flow as flow_features
 from nifty50.features import session as session_features
-from nifty50.features import trend, volatility, volume
+from nifty50.features import statistical, trend, volatility, volume
 from nifty50.features.core import crossover_events
 from nifty50.features.multiframe import align_higher_timeframe, conflict_score
 from nifty50.frames import bar_index
@@ -24,9 +26,16 @@ from nifty50.trading_calendar.calendar import TradingCalendar
 class FeatureInputs:
     """Everything the feature layer can consume for one symbol.
 
-    ``index_close`` and ``vix_close`` are optional: without them the
-    index-relative and market-risk-gate columns are simply absent, which is
-    honest, rather than silently substituting the symbol's own series.
+    Every field past ``timeframe`` is optional, and absence means the
+    corresponding columns are simply missing from the output. That is the
+    honest behaviour: a delivery-percentage column filled with zeros because
+    the bhavcopy was not loaded looks exactly like a real column of low
+    delivery, and would be trained on as if it were.
+
+    The daily inputs — ``delivery_pct``, ``fii_net_crore``, ``dii_net_crore``
+    — are indexed by *date* and are published after the close of the session
+    they describe. :mod:`nifty50.features.flow` applies the publication lag;
+    nothing here should pre-shift them.
     """
 
     bars: pd.DataFrame
@@ -35,11 +44,30 @@ class FeatureInputs:
     vix_close: pd.Series | None = None
     higher_timeframe_bars: dict[Timeframe, pd.DataFrame] | None = None
 
+    # --- India-specific daily inputs (see nifty50.features.flow) ------------
+    delivery_pct: pd.Series | None = None
+    fii_net_crore: pd.Series | None = None
+    dii_net_crore: pd.Series | None = None
+    fno_ban_dates: frozenset[dt.date] = field(default_factory=frozenset)
+    index_event_dates: frozenset[dt.date] = field(default_factory=frozenset)
+
 
 def compute_features(
-    inputs: FeatureInputs, calendar: TradingCalendar, config: Config
+    inputs: FeatureInputs,
+    calendar: TradingCalendar,
+    config: Config,
+    *,
+    include_statistical: bool = True,
 ) -> pd.DataFrame:
-    """Compute the Phase 3 feature set for one symbol."""
+    """Compute the feature set for one symbol.
+
+    ``include_statistical`` exists for the higher-timeframe recursion. The
+    long-memory estimators use rolling regressions and are an order of
+    magnitude more expensive than the rest of the layer; computing them on a
+    higher timeframe whose columns are then discarded is pure waste. The
+    recursion turns them on only when a statistical column is actually
+    requested.
+    """
     settings = config.features
     bars = inputs.bars
     if bars.empty:
@@ -156,9 +184,40 @@ def compute_features(
         volume.breakout_state(close, first_high, first_low),
     ]
 
+    # --- statistical structure -------------------------------------------
+    # Answers "is direction the right question here" before the trend columns
+    # answer "which direction". Windows are long by necessity; on the base 15m
+    # timeframe these warm up over several sessions.
+    memory_window = int(settings["memory_window"])
+    returns = statistical.log_returns(close)
+    if include_statistical:
+        columns += [
+            returns,
+            statistical.hurst_exponent(close, memory_window),
+            statistical.variance_ratio(close, memory_window, lag=settings["variance_ratio_lag"]),
+            statistical.variance_ratio_zstat(
+                close, memory_window, lag=settings["variance_ratio_lag"]
+            ),
+            statistical.autocorrelation(returns, memory_window, lag=1),
+            statistical.mean_reversion_half_life(close, memory_window),
+            statistical.distance_from_mean_in_sigma(close, settings["reversion_window"]),
+            statistical.distribution_shape(returns, memory_window),
+        ]
+
     # --- index-relative and market risk ----------------------------------
     if inputs.index_close is not None:
         columns.append(trend.relative_strength(close, inputs.index_close, settings["roc_period"]))
+        if include_statistical:
+            index_returns = statistical.log_returns(inputs.index_close.reindex(bars.index))
+            regression = statistical.rolling_beta(returns, index_returns, memory_window)
+            residuals = statistical.residual_return(
+                returns, index_returns, regression["beta"], regression["alpha"]
+            )
+            columns += [
+                regression,
+                residuals,
+                statistical.residual_zscore(residuals, settings["reversion_window"]),
+            ]
     if inputs.vix_close is not None:
         columns.append(
             volatility.vix_gate(
@@ -166,16 +225,22 @@ def compute_features(
             )
         )
 
+    # --- India-specific flow ---------------------------------------------
+    columns += _flow_columns(inputs, bars, calendar, settings)
+
     features = pd.concat(columns, axis=1)
 
     # --- higher-timeframe context ----------------------------------------
+    requested = list(settings["higher_timeframe_columns"])
+    higher_needs_statistical = any(name in _STATISTICAL_COLUMNS for name in requested)
     for higher_tf, higher_bars in (inputs.higher_timeframe_bars or {}).items():
         higher = compute_features(
             FeatureInputs(bars=higher_bars, timeframe=higher_tf),
             calendar,
             config,
+            include_statistical=higher_needs_statistical,
         )
-        keep = [c for c in settings["higher_timeframe_columns"] if c in higher.columns]
+        keep = [c for c in requested if c in higher.columns]
         if not keep:
             continue
         aligned = align_higher_timeframe(bar_index(bars), higher[keep], calendar, higher_tf)
@@ -187,6 +252,100 @@ def compute_features(
             )
 
     return features
+
+
+# Columns produced by the statistical block, so the higher-timeframe recursion
+# can tell whether it is worth paying for them.
+_STATISTICAL_COLUMNS: frozenset[str] = frozenset(
+    {
+        "log_return",
+        "hurst",
+        "autocorr_1",
+        "half_life_bars",
+        "distance_from_mean_sigma",
+        "return_skew",
+        "return_excess_kurtosis",
+        "vol_of_vol",
+        "beta",
+        "alpha",
+        "r_squared",
+        "index_correlation",
+        "beta_instability",
+        "residual_return",
+        "residual_zscore",
+    }
+)
+
+
+def _flow_columns(
+    inputs: FeatureInputs,
+    bars: pd.DataFrame,
+    calendar: TradingCalendar,
+    settings: dict[str, object],
+) -> list[pd.Series | pd.DataFrame]:
+    """India-specific flow columns, each present only if its input was supplied.
+
+    The publication lags are applied inside :mod:`nifty50.features.flow` and
+    are not overridable from here. Making them a config knob would invite
+    someone to set them to zero to "improve" a backtest, which is precisely
+    the mistake this layer exists to make impossible.
+    """
+    columns: list[pd.Series | pd.DataFrame] = []
+    sessions = int(str(settings["flow_window_sessions"]))
+
+    if inputs.delivery_pct is not None:
+        columns.append(
+            flow_features.delivery_features(
+                inputs.delivery_pct, bars, calendar, window=sessions
+            )
+        )
+    if inputs.fii_net_crore is not None and inputs.dii_net_crore is not None:
+        columns.append(
+            flow_features.participant_flow_features(
+                inputs.fii_net_crore, inputs.dii_net_crore, bars, calendar, window=sessions
+            )
+        )
+    if inputs.fno_ban_dates:
+        columns.append(flow_features.fno_ban_flag(inputs.fno_ban_dates, bars))
+    if inputs.index_event_dates:
+        columns.append(
+            flow_features.index_event_proximity(
+                inputs.index_event_dates,
+                bars,
+                lead_sessions=int(str(settings["index_event_lead_sessions"])),
+            )
+        )
+
+    # Circuit bands need no external file — previous close is in the bars — so
+    # unlike the rest of this block they are always available.
+    columns.append(
+        flow_features.circuit_band_state(
+            bars["high"],
+            bars["low"],
+            bars["close"],
+            _previous_session_close(bars),
+            band_pct=float(str(settings["circuit_band_pct"])),
+        )
+    )
+    return columns
+
+
+def _previous_session_close(bars: pd.DataFrame) -> pd.Series:
+    """Prior session's closing price, broadcast across every bar of a session.
+
+    Grouped-and-shifted at the *session* level, not the bar level. A bar-level
+    shift would put a bar from earlier the same day here, and a
+    ``transform("last")`` would put the session's own close — the price the
+    band is supposed to be predicting — into every bar of that session.
+    """
+    dates = session_features.session_date(bars)
+    session_close = bars["close"].groupby(dates).last()
+    previous = session_close.shift(1)
+    return pd.Series(
+        dates.map(previous).to_numpy(dtype="float64"),
+        index=bars.index,
+        name="previous_session_close",
+    )
 
 
 def _bars_per_year(
