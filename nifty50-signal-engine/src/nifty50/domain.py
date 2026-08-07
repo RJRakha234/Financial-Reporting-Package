@@ -53,6 +53,7 @@ class Timeframe(StrEnum):
     M1 = "1m"
     M5 = "5m"
     M15 = "15m"
+    M30 = "30m"
     H1 = "1h"
     D1 = "1d"
 
@@ -78,6 +79,7 @@ class Timeframe(StrEnum):
 _INTRADAY_DURATIONS: Final[dict[Timeframe, dt.timedelta]] = {
     Timeframe.M1: dt.timedelta(minutes=1),
     Timeframe.M5: dt.timedelta(minutes=5),
+    Timeframe.M30: dt.timedelta(minutes=30),
     Timeframe.M15: dt.timedelta(minutes=15),
     Timeframe.H1: dt.timedelta(hours=1),
 }

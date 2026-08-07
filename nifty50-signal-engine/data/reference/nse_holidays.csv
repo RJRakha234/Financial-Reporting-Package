@@ -13,8 +13,14 @@
 # confidence: high   = fixed-date national holiday, date is not in doubt
 #             medium = movable/lunar festival recalled from memory, verify it
 #
-# 2026 IS DELIBERATELY INCOMPLETE. Only high-confidence fixed-date holidays are
-# listed. Load the official 2026 circular before running anything on 2026 data.
+# 2026 was deliberately incomplete. Six rows below carry
+# `source=observed_bars`: they were not recalled, they were derived from
+# real RELIANCE bars, which have no data on those dates while the calendar
+# said the market was open. Absence of bars in one large-cap is strong
+# evidence of a market-wide closure but is not the same as a circular --
+# a symbol-level suspension would look identical. The `name` on each is a
+# guess from the date; only the DATE is evidence-backed, and only the date
+# is what the engine uses. Confirm against the official 2026 circular.
 date,name,confidence,source
 2019-03-04,Mahashivratri,medium,seed
 2019-03-21,Holi,medium,seed
@@ -118,7 +124,13 @@ date,name,confidence,source
 2025-11-05,Guru Nanak Jayanti,medium,seed
 2025-12-25,Christmas,high,seed
 2026-01-26,Republic Day,high,seed
+2026-03-03,Holi,medium,observed_bars
+2026-03-26,Ram Navami,medium,observed_bars
+2026-03-31,Mahavir Jayanti,medium,observed_bars
 2026-04-03,Good Friday,medium,seed
+2026-04-14,Dr Baba Saheb Ambedkar Jayanti,medium,observed_bars
 2026-05-01,Maharashtra Day,high,seed
+2026-05-28,Bakri Id,medium,observed_bars
+2026-06-26,Muharram,medium,observed_bars
 2026-10-02,Gandhi Jayanti,high,seed
 2026-12-25,Christmas,high,seed

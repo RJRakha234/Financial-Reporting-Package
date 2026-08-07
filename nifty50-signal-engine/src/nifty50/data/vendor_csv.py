@@ -86,6 +86,7 @@ _TIMEFRAME_BY_MINUTES: dict[int, Timeframe] = {
     1: Timeframe.M1,
     5: Timeframe.M5,
     15: Timeframe.M15,
+    30: Timeframe.M30,
     60: Timeframe.H1,
 }
 

@@ -317,3 +317,27 @@ class TestDirectoryScan:
         (tmp_path / "notes.pdf").write_bytes(b"%PDF-1.4")
         scan = scan_directory(tmp_path)
         assert [path.name for path in scan.skipped] == ["notes.pdf"]
+
+
+class TestThirtyMinuteBars:
+    """30-minute bars do not divide the NSE session evenly.
+
+    375 minutes / 30 = 12.5, so a session is twelve full bars plus a fifteen
+    minute stub at 15:15. Kite Connect serves exactly that layout. A timeframe
+    table that assumed clean division would either reject the stub or silently
+    drop the last half hour of every session.
+    """
+
+    def test_thirty_minute_spacing_is_recognised(self) -> None:
+        index = pd.date_range("2026-06-15 09:15", periods=13, freq="30min", tz="Asia/Kolkata")
+        assert infer_timeframe(index) is Timeframe.M30
+
+    def test_the_session_is_twelve_full_bars_plus_a_stub(self, calendar) -> None:
+        import datetime as dt
+
+        starts = calendar.bar_starts(dt.date(2026, 6, 15), Timeframe.M30)
+        assert len(starts) == 13
+        assert starts[0].time() == dt.time(9, 15)
+        assert starts[-1].time() == dt.time(15, 15)
+        assert calendar.is_partial_bar(starts[-1], Timeframe.M30)
+        assert not calendar.is_partial_bar(starts[-2], Timeframe.M30)
