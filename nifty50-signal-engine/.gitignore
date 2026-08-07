@@ -6,6 +6,7 @@
 data/store/
 data/replay/
 data/bhavcopy/
+data/yahoo/
 
 logs/
 *.log

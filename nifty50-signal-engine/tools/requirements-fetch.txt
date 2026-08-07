@@ -1,0 +1,8 @@
+# Dependencies for tools/fetch_nifty_data.py only.
+#
+# Deliberately separate from the engine's pyproject.toml: this is an ad-hoc
+# ingestion utility, and the engine itself must not grow a hard dependency on
+# Yahoo Finance. The engine's own data path is the broker adapter.
+yfinance>=0.2.60
+pandas>=2.2
+lxml>=5.0

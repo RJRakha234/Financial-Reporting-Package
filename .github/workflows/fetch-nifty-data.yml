@@ -1,0 +1,126 @@
+name: Fetch NIFTY Data
+
+# Run it from the Actions tab: select "Fetch NIFTY Data", click "Run workflow",
+# adjust the dates if you want, and download the artifact when the run finishes.
+#
+# Output is published as a workflow artifact, NOT committed to the repository.
+# That is deliberate: nifty50-signal-engine/.gitignore already excludes ingested
+# market data as "large, reproducible from the broker, and in most cases
+# redistribution is prohibited by the vendor's terms", and Yahoo's terms say the
+# same. Committing the CSVs would contradict that policy and permanently bloat
+# the repository with regenerable data.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD)"
+        required: true
+        default: "2015-01-01"
+      end_date:
+        description: "End date (YYYY-MM-DD). Leave blank for today (IST)."
+        required: false
+        default: ""
+      interval:
+        description: "Bar interval"
+        required: true
+        default: "1d"
+        type: choice
+        options:
+          - "1d"
+          - "1wk"
+          - "1mo"
+      constituents:
+        description: "Constituent source"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - "auto"
+          - "wikipedia"
+          - "bundled"
+      threads:
+        description: "Parallel downloads. Keep low; Yahoo throttles aggressively."
+        required: true
+        default: "4"
+      index_only:
+        description: "Fetch only the ^NSEI index, skipping the 50 constituents"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: nifty50-signal-engine
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: nifty50-signal-engine/tools/requirements-fetch.txt
+
+      - name: Install fetch dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/requirements-fetch.txt
+
+      - name: Fetch NIFTY index and constituents
+        run: |
+          python tools/fetch_nifty_data.py \
+            --start "${{ inputs.start_date }}" \
+            --end "${{ inputs.end_date }}" \
+            --interval "${{ inputs.interval }}" \
+            --constituents "${{ inputs.constituents }}" \
+            --threads "${{ inputs.threads }}" \
+            --out-dir data/yahoo \
+            ${{ inputs.index_only && '--index-only' || '' }}
+
+      - name: Summarise the run
+        if: always()
+        run: |
+          if [ ! -f data/yahoo/metadata.json ]; then
+            echo "No metadata written — the fetch failed before completing." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          meta = json.loads(pathlib.Path("data/yahoo/metadata.json").read_text())
+          failed = meta["companies_failed"]
+          print("## NIFTY data fetch\n")
+          print(f"- Range: `{meta['start']}` to `{meta['end']}` at `{meta['interval']}`")
+          print(f"- Generated: `{meta['generated_at']}`")
+          print(f"- Constituent source: **{meta['constituent_source']}**")
+          print(f"- Index rows: **{meta['index_rows']}**")
+          print(f"- Company files: **{meta['companies_ok']}**")
+          if meta["constituent_source"] == "bundled-snapshot":
+              print("\n> Wikipedia lookup failed, so the bundled snapshot was used."
+                    " It may be stale — verify membership before relying on this.")
+          if failed:
+              print(f"\n### Empty results ({len(failed)})\n")
+              print("Usually Yahoo throttling. Re-run with fewer threads.\n")
+              for ticker in failed:
+                  print(f"- `{ticker}`")
+          PY
+
+      - name: Upload data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nifty-data-${{ inputs.interval }}-${{ github.run_id }}
+          path: nifty50-signal-engine/data/yahoo/
+          retention-days: 30
+          if-no-files-found: error
