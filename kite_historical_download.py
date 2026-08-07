@@ -79,6 +79,33 @@ class DownloadError(RuntimeError):
     """Anything that should stop the run with a readable message."""
 
 
+def parse_lookback(spec: str, end: dt.date) -> dt.date:
+    """Turn a lookback like ``6m``, ``30d`` or ``2y`` into a start date.
+
+    Months are calendar months back from ``end`` (clamped for short months),
+    not a 30-day approximation, so "6m" on 15 Aug means 15 Feb.
+    """
+    text = spec.strip().lower()
+    if len(text) < 2 or not text[:-1].isdigit():
+        raise DownloadError(f"invalid --last {spec!r}; expected e.g. 30d, 6m, 2y")
+    amount, unit = int(text[:-1]), text[-1]
+    if amount <= 0:
+        raise DownloadError(f"invalid --last {spec!r}; the amount must be positive")
+
+    if unit == "d":
+        return end - dt.timedelta(days=amount)
+    if unit == "w":
+        return end - dt.timedelta(weeks=amount)
+    if unit in ("m", "y"):
+        months = amount * 12 if unit == "y" else amount
+        year, month = divmod((end.year * 12 + end.month - 1) - months, 12)
+        month += 1
+        # Clamp so "1m" from 31 Mar lands on 28/29 Feb rather than overflowing.
+        last_day = (dt.date(year + month // 12, month % 12 + 1, 1) - dt.timedelta(days=1)).day
+        return dt.date(year, month, min(end.day, last_day))
+    raise DownloadError(f"invalid --last {spec!r}; unit must be one of d, w, m, y")
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -432,7 +459,9 @@ def cmd_download(args: argparse.Namespace) -> int:
         )
 
     end = args.to_date or _ist_today()
-    start = args.from_date
+    if bool(args.from_date) == bool(args.last):
+        raise DownloadError("give exactly one of --from or --last (e.g. --last 6m)")
+    start = args.from_date or parse_lookback(args.last, end)
     if start > end:
         raise DownloadError(f"--from ({start}) is after --to ({end})")
 
@@ -518,8 +547,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--interval", default="day", help=f"one of: {', '.join(CHUNK_DAYS)} (default: day)"
     )
     download.add_argument(
-        "--from", dest="from_date", required=True, type=dt.date.fromisoformat,
+        "--from", dest="from_date", default=None, type=dt.date.fromisoformat,
         help="start date, YYYY-MM-DD",
+    )
+    download.add_argument(
+        "--last", default=None, metavar="SPEC",
+        help="lookback instead of --from: 30d, 6w, 6m, 2y",
     )
     download.add_argument(
         "--to", dest="to_date", default=None, type=dt.date.fromisoformat,
