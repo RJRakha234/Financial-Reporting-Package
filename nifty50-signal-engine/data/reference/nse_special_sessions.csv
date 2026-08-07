@@ -13,9 +13,15 @@
 # not scraped. Verify against the NSE circular before relying on them.
 date,label,continuous_start,continuous_end,pre_open_start,pre_open_end,post_close_start,post_close_end,tradeable,source
 2019-10-27,Muhurat Trading (Samvat 2076),18:15,19:15,18:00,18:08,,,false,seed
+2020-02-01,Union Budget special session,09:15,15:30,09:00,09:08,,,true,observed_bars
 2020-11-14,Muhurat Trading (Samvat 2077),18:15,19:15,18:00,18:08,,,false,seed
 2021-11-04,Muhurat Trading (Samvat 2078),18:15,19:15,18:00,18:08,,,false,seed
 2022-10-24,Muhurat Trading (Samvat 2079),18:15,19:15,18:00,18:08,,,false,seed
 2023-11-12,Muhurat Trading (Samvat 2080),18:15,19:15,18:00,18:08,,,false,seed
+2024-01-20,Special live session (DR site),09:15,15:30,09:00,09:08,,,true,observed_bars
+2024-03-02,DR drill half session,09:15,12:30,09:00,09:08,,,false,observed_bars
+2024-05-18,DR drill half session,09:15,12:30,09:00,09:08,,,false,observed_bars
 2024-11-01,Muhurat Trading (Samvat 2081),18:00,19:00,17:45,17:53,,,false,seed
+2025-02-01,Union Budget special session,09:15,15:30,09:00,09:08,,,true,observed_bars
 2025-10-21,Muhurat Trading (Samvat 2082),13:45,14:45,13:30,13:38,,,false,seed
+2026-02-01,Union Budget special session,09:15,15:30,09:00,09:08,,,true,observed_bars

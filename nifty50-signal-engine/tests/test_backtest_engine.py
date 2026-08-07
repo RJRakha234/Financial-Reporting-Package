@@ -354,3 +354,42 @@ class TestBenchmark:
         engine = build_engine(calendar, universe, real_config)
         result = engine.run(BuyAndHoldStrategy(), bars, features, start=START, end=END)
         assert result.beats_benchmark() is None
+
+
+class TestOpenPositionAccounting:
+    """A position still open at the end must count towards gross PnL.
+
+    Found by running buy-and-hold over seven years of real RELIANCE bars. The
+    stock rose 148.8% and the equity curve showed every rupee of it, while
+    ``gross_pnl`` -- summed from closed trades only -- reported zero. Two
+    numbers in the same report disagreed by 742,180.
+
+    Not a cosmetic inconsistency: ``beats_benchmark`` compares net PnL against
+    the benchmark's, so a buy-and-hold benchmark whose profit had been defined
+    out of existence is beaten by essentially any strategy, and the single most
+    important sanity check in the engine silently always passes.
+    """
+
+    def test_an_unclosed_position_is_marked_to_the_final_bar(
+        self, calendar: TradingCalendar, universe: PointInTimeUniverse,
+        real_config: Config, bars, features
+    ) -> None:
+        engine = build_engine(calendar, universe, real_config)
+        result = engine.run(
+            BuyAndHoldStrategy(), bars, features, start=START, end=END
+        )
+        assert result.trades == []  # buy-and-hold never closes anything
+        # The whole point: gross is not zero, and it agrees with the curve.
+        gain = float(result.equity_curve.iloc[-1]) - 500_000.0
+        assert result.report.net_pnl == pytest.approx(gain, rel=0.05)
+        assert any("still open at the end" in note for note in result.notes)
+
+    def test_the_note_names_the_uncharged_exit_costs(
+        self, calendar: TradingCalendar, universe: PointInTimeUniverse,
+        real_config: Config, bars, features
+    ) -> None:
+        engine = build_engine(calendar, universe, real_config)
+        result = engine.run(BuyAndHoldStrategy(), bars, features, start=START, end=END)
+        # Marking to market without charging the exit flatters the result, so
+        # the report has to say so rather than leave it to be discovered.
+        assert any("Exit costs" in note for note in result.notes)

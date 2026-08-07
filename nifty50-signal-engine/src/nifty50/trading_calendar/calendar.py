@@ -167,12 +167,22 @@ class TradingCalendar:
         return self._special.get(day)
 
     def is_trading_day(self, day: dt.date) -> bool:
-        """True when the standard continuous session runs on ``day``.
+        """True when a full, tradeable continuous session runs on ``day``.
 
         A muhurat evening on Diwali is *not* a trading day by this definition:
-        the regular market is shut. Use :meth:`has_any_session` when you care
+        the regular market is shut and the one-hour ceremonial session is
+        flagged ``tradeable=false``. Use :meth:`has_any_session` when you care
         about "were there any bars at all".
+
+        A *tradeable* special session overrides the weekday test. NSE runs a
+        normal 09:15-15:30 session on the Saturday or Sunday a Union Budget is
+        presented, and those are among the highest-volume days of the Indian
+        market year -- 2020-02-01 traded 23 million RELIANCE shares. Deciding
+        by weekday alone would silently drop them from every backtest.
         """
+        special = self._special.get(day)
+        if special is not None:
+            return special.tradeable
         return not self.is_weekend(day) and not self.is_holiday(day)
 
     def has_any_session(self, day: dt.date) -> bool:

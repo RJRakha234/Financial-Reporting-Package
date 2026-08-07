@@ -274,7 +274,30 @@ class BacktestEngine:
             [value for _, value in equity_points],
             index=pd.DatetimeIndex([ts for ts, _ in equity_points], name="ts"),
         )
-        gross = sum(t.gross_pnl for t in closed_trades)
+        # Positions still open at the end are marked to the final bar and
+        # counted. Summing closed trades alone makes any buy-and-hold benchmark
+        # report a gross PnL of zero however far the stock ran -- while the
+        # equity curve beside it, which does mark to market, shows the whole
+        # move. The two then disagree, and `beats_benchmark` reads off the
+        # wrong one: almost anything "beats" a benchmark whose profit has been
+        # defined out of existence.
+        unrealised = 0.0
+        open_notes: list[str] = []
+        if positions and timeline:
+            # `row` still holds the final bar processed by the loop above.
+            for symbol, quantity in positions.items():
+                trade = open_trades.get(symbol)
+                if trade is None or symbol not in row:
+                    continue
+                mark = float(row[symbol]["close"])
+                unrealised += (mark - trade.entry_price) * quantity
+            open_notes.append(
+                f"{len(positions)} position(s) still open at the end; marked to the "
+                f"final close for an unrealised {unrealised:+,.0f}. Exit costs on "
+                "those are NOT charged -- closing them would cost more."
+            )
+
+        gross = sum(t.gross_pnl for t in closed_trades) + unrealised
         report = summarise(
             equity_curve,
             [t.net_pnl for t in closed_trades],
@@ -290,6 +313,7 @@ class BacktestEngine:
             trades=closed_trades,
             rejections=rejections,
             report=report,
+            notes=open_notes,
         )
 
     # ---------------------------------------------------------- internals

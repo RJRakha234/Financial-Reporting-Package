@@ -35,6 +35,7 @@ date,name,confidence,source
 2019-09-10,Moharram,medium,seed
 2019-10-02,Gandhi Jayanti,high,seed
 2019-10-08,Dussehra,medium,seed
+2019-10-21,Maharashtra assembly election,medium,observed_bars
 2019-10-28,Diwali Balipratipada,medium,seed
 2019-11-12,Guru Nanak Jayanti,medium,seed
 2019-12-25,Christmas,high,seed
@@ -123,6 +124,7 @@ date,name,confidence,source
 2025-10-22,Diwali Balipratipada,medium,seed
 2025-11-05,Guru Nanak Jayanti,medium,seed
 2025-12-25,Christmas,high,seed
+2026-01-15,Unidentified closure,low,observed_bars
 2026-01-26,Republic Day,high,seed
 2026-03-03,Holi,medium,observed_bars
 2026-03-26,Ram Navami,medium,observed_bars

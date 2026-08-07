@@ -235,3 +235,39 @@ class TestReferenceData:
         for year in range(2019, 2026):
             found = calendar.holidays_in(dt.date(year, 1, 1), dt.date(year, 12, 31))
             assert len(found) >= 10, f"{year} has only {len(found)} holidays on file"
+
+
+class TestTradeableSpecialSessions:
+    """A weekend session that the exchange actually runs is a trading day.
+
+    NSE holds a full 09:15-15:30 session on the Saturday or Sunday a Union
+    Budget is presented. Those days carry enormous volume and enormous
+    information; classifying by weekday alone drops them from every backtest
+    without a word. Muhurat is the opposite case and must stay excluded --
+    hence the decision keys off the session's own `tradeable` flag rather than
+    off it merely being special.
+    """
+
+    def test_a_budget_saturday_is_a_trading_day(self, calendar) -> None:
+        import datetime as dt
+
+        budget = dt.date(2025, 2, 1)
+        assert budget.weekday() == 5  # Saturday
+        assert calendar.is_weekend(budget)
+        assert calendar.is_trading_day(budget)
+        assert calendar.bars_per_session(budget, Timeframe.M15) == 25
+
+    def test_muhurat_is_still_not_a_trading_day(self, calendar) -> None:
+        import datetime as dt
+
+        muhurat = dt.date(2024, 11, 1)
+        assert calendar.special_session(muhurat) is not None
+        assert not calendar.is_trading_day(muhurat)
+        assert calendar.has_any_session(muhurat)
+
+    def test_a_dr_drill_is_not_tradeable(self, calendar) -> None:
+        import datetime as dt
+
+        drill = dt.date(2024, 3, 2)
+        assert calendar.special_session(drill) is not None
+        assert not calendar.is_trading_day(drill)
