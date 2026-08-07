@@ -1,0 +1,10 @@
+# Kite Connect session artefacts — these hold a live trading credential.
+.kite_session.json
+.kite_instruments.json
+.env
+
+# Downloaded market data
+data/historical/
+
+__pycache__/
+*.py[cod]
