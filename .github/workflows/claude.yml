@@ -1,0 +1,71 @@
+name: Claude Code
+
+# Interactive mode: no `prompt` input, so Claude waits for an @claude mention
+# in an issue or pull request and responds to that request in a comment.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # One Claude run at a time per issue/PR, so two quick mentions don't race
+    # each other pushing to the same branch.
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write # Required for the action's GitHub App authentication
+      actions: read # Required for Claude to read CI results on PRs
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            fincheck/requirements.txt
+            nifty50-signal-engine/pyproject.toml
+
+      # Pre-installing both subprojects lets Claude actually run pytest, ruff
+      # and mypy rather than only reason about the code. A failure here is not
+      # fatal: Claude still runs and can report what it could not verify.
+      - name: Install both subprojects
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r fincheck/requirements.txt
+          pip install -e './nifty50-signal-engine[dev]'
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: |
+            --allowedTools "Bash(pytest:*),Bash(python -m pytest:*),Bash(ruff:*),Bash(mypy:*),Bash(python:*),Bash(pip install:*)"
+            --append-system-prompt "This repository holds two independent Python projects. fincheck/ is a PDF financial-statement footing checker (deps in fincheck/requirements.txt; run tests with `pytest` from the fincheck/ directory). nifty50-signal-engine/ is an alert-only NSE market-data and signal engine (Python 3.11+, `pip install -e '.[dev]'`; run `pytest -q`, `ruff check .` and `mypy` from that directory — both linters are expected to stay clean). Both are already installed on this runner. Never introduce order-placement or trade-execution capability into nifty50-signal-engine: it is alert-only by design. Keep all datetimes timezone-aware; naive datetimes are rejected on purpose and there are tests that prove it."
