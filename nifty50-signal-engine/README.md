@@ -15,15 +15,15 @@ not, and will not, place orders.
 
 ## Build status
 
-The build follows the phased delivery protocol in the specification. **Phases 1–3
-are complete; phases 4–8 are not started.**
+The build follows the phased delivery protocol in the specification. **Phases 1–4
+are complete; phases 5–8 are not started.**
 
 | # | Phase | Status |
 |---|---|---|
 | 1 | Broker adapter, data layer, corporate actions, trading calendar, integrity tests | **Complete** |
 | 2 | Point-in-time universe + survivorship-bias test | **Complete** (machinery; membership data must be supplied — see below) |
 | 3 | Feature/indicator layer + reference-value unit tests | **Complete** |
-| 4 | Backtest engine with the full Indian cost stack | Not started |
+| 4 | Backtest engine with the full Indian cost stack | **Complete** |
 | 5 | Statistical + India-flow features, ML layer, walk-forward validation | Not started |
 | 6 | Decision engine and fusion logic | Not started |
 | 7 | Dashboard and alerts | Not started |
@@ -46,6 +46,7 @@ src/nifty50/
 ├── corporate_actions/     action table + back-adjustment of price AND volume
 ├── universe/              point-in-time index membership; fails closed if unverified
 ├── features/              trend, volatility, volume/flow, multi-timeframe context
+├── backtest/              cost stack, fill simulation, event loop, metrics
 ├── data/
 │   ├── brokers/           BrokerAdapter ABC, Kite adapter, offline replay adapter
 │   ├── store.py           parquet bar store, partitioned exchange/symbol/timeframe/month
@@ -57,7 +58,7 @@ src/nifty50/
 └── scripts/               backfill and calendar-verification entry points
 ```
 
-296 tests, `ruff` clean, `mypy --strict` clean.
+355 tests, `ruff` clean, `mypy --strict` clean.
 
 ---
 
@@ -225,6 +226,33 @@ sitting in the index itself.
 
 ---
 
+### The cost stack is where a losing strategy becomes a fake winner
+
+Nine charges apply to an NSE equity round trip. They differ between intraday and
+delivery, several are one-sided, and GST compounds on a subset. On a ₹1,00,000
+round trip closed for a clean 1% gain:
+
+| | Intraday | Delivery |
+|---|---|---|
+| Brokerage | ₹40.00 | ₹0.00 |
+| STT | ₹25.25 | **₹201.00** |
+| Exchange txn | ₹5.97 | ₹5.97 |
+| SEBI + IPFT | ₹0.40 | ₹0.40 |
+| Stamp duty | ₹3.00 | ₹15.00 |
+| GST | ₹8.35 | ₹1.15 |
+| DP charges | — | ₹15.93 |
+| **Total** | **₹82.97** | **₹239.45** |
+| Share of a ₹1,000 gross win | 8.3% | **23.9%** |
+| Breakeven move | 0.083% | 0.238% |
+
+STT alone is 84% of the delivery cost, because it is charged on **both legs** at
+four times the intraday rate. Brokerage is capped at ₹20, so it is regressive —
+modelling it as a flat percentage is wrong in both directions depending on size.
+
+Fills are constrained too: nothing prints through a circuit limit, order size is
+capped at a configurable share of the bar's volume, slippage always moves against
+the trader, and delivery sale proceeds are locked until T+1.
+
 ### Multi-timeframe context aligns on bar *close*, not bar start
 
 A 1-hour bar stamped 10:15 covers 10:15–11:15 and is only complete at 11:15.
@@ -357,6 +385,14 @@ requirements.
 * **Only Kite and replay adapters.** Upstox, Angel One, Dhan and Fyers are
   config-shaped but unwritten.
 * **Reference data is seeded, not authoritative** — see above.
+* **No real backtest results exist yet**, because the point-in-time universe is
+  empty and the engine fails closed. The engine has only been exercised on
+  synthetic bars, which validate the plumbing and prove nothing about any
+  strategy — a geometric random walk has no edge to find by construction.
+* **Robustness analysis is partial.** Monte Carlo trade-order reshuffling and
+  the deflated Sharpe ratio are implemented. Per-regime, per-sector and
+  parameter-sensitivity breakdowns need real data and a sector map, and are not
+  written.
 * **Order-book imbalance is NaN in any backtest.** Depth is a live-only field
   and is absent from every historical bar feed, so the column exists for the
   live path and is empty on history — by construction, not by omission.
