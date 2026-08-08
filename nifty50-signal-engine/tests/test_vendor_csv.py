@@ -19,6 +19,7 @@ from nifty50.data.vendor_csv import (
     conform_daily_to_session_open,
     infer_timeframe,
     load_vendor_csv,
+    load_vendor_file,
     scan_directory,
     suspected_split_dates,
 )
@@ -341,3 +342,48 @@ class TestThirtyMinuteBars:
         assert starts[-1].time() == dt.time(15, 15)
         assert calendar.is_partial_bar(starts[-1], Timeframe.M30)
         assert not calendar.is_partial_bar(starts[-2], Timeframe.M30)
+
+
+class TestParquet:
+    """Parquet is the right container for a full index history.
+
+    Fifty symbols across five timeframes is tens of millions of rows. Parquet
+    stores that at roughly a tenth of CSV's size with dtypes preserved, and it
+    removes the whole class of text-parsing hazards this module guards against:
+    a Parquet timestamp carries its own type and timezone, so there is no
+    DD/MM ambiguity to resolve and no delimiter to sniff.
+    """
+
+    def test_a_timestamp_column_is_read(self, tmp_path: Path) -> None:
+        path = tmp_path / "TRENT_15minute.parquet"
+        pd.DataFrame(intraday_rows()).to_parquet(path, index=False)
+        result = load_vendor_file(path)
+        assert result.symbol_hint == "TRENT"
+        assert result.timeframe is Timeframe.M15
+        assert result.frame["close"].iloc[0] == pytest.approx(100.0)
+
+    def test_a_datetime_index_is_promoted_to_a_column(self, tmp_path: Path) -> None:
+        """Parquet writers routinely persist the bar timestamp as the index.
+
+        Left there, the column mapper sees only OHLCV and rejects the file for
+        having no timestamp -- so a whole vendor's export reads as unloadable
+        for a reason that has nothing to do with its contents.
+        """
+        frame = pd.DataFrame(intraday_rows())
+        frame["Datetime"] = pd.to_datetime(frame["Datetime"])
+        path = tmp_path / "WIPRO_minute.parquet"
+        frame.set_index("Datetime").to_parquet(path)
+        result = load_vendor_file(path)
+        assert result.rows == 40
+        assert result.symbol_hint == "WIPRO"
+        assert str(result.frame.index.tz) == "Asia/Kolkata"
+
+    def test_scan_directory_picks_up_parquet(self, tmp_path: Path) -> None:
+        pd.DataFrame(intraday_rows()).to_parquet(tmp_path / "A_15minute.parquet", index=False)
+        write_csv(tmp_path / "B_15minute.csv", intraday_rows())
+        scan = scan_directory(tmp_path)
+        assert sorted(r.symbol_hint or "" for r in scan.loaded) == ["A", "B"]
+
+    def test_the_csv_alias_still_works(self, tmp_path: Path) -> None:
+        path = write_csv(tmp_path / "C.csv", intraday_rows())
+        assert load_vendor_csv(path).rows == 40

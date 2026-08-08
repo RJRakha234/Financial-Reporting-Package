@@ -136,17 +136,21 @@ class LoadResult:
         return stem or None
 
 
-def load_vendor_csv(path: Path, *, assume_ist: bool = True) -> LoadResult:
-    """Read one delimited file into the project's OHLCV frame contract.
+def load_vendor_file(path: Path, *, assume_ist: bool = True) -> LoadResult:
+    """Read one OHLCV file -- delimited text or Parquet -- into the frame contract.
 
-    ``assume_ist`` controls what happens to naive timestamps. NSE data is IST
-    by definition, so localising is almost always right — but it is recorded as
-    an inference, because if the export was already converted to UTC this step
-    shifts every bar by 5h30m and produces a session that opens at 03:45 with
-    no error anywhere.
+    Parquet is the sensible format for a full index history: 50 symbols across
+    five timeframes is tens of millions of rows, and Parquet stores it at
+    roughly a tenth the size of CSV with the dtypes preserved. It also removes
+    the entire class of text-parsing hazards this module exists to guard
+    against -- a Parquet timestamp column carries its own type and timezone, so
+    there is no DD/MM ambiguity to resolve and nothing to sniff.
+
+    Everything downstream of the read is identical, because the checks that
+    matter -- adjustment status, calendar alignment, OHLC validity -- are
+    properties of the data, not of the container it arrived in.
     """
-    delimiter = _sniff_delimiter(path)
-    raw = pd.read_csv(path, sep=delimiter, engine="python")
+    raw = _read_any(path)
     if raw.empty:
         raise VendorCsvError(f"{path.name}: no rows")
 
@@ -265,6 +269,30 @@ def conform_daily_to_session_open(
         f"daily bars were date-only (midnight); restamped to the {session_open:%H:%M} "
         "session open to match the calendar's bar-start convention"
     )
+
+
+def load_vendor_csv(path: Path, *, assume_ist: bool = True) -> LoadResult:
+    """Backwards-compatible alias for :func:`load_vendor_file`."""
+    return load_vendor_file(path, assume_ist=assume_ist)
+
+
+def _read_any(path: Path) -> pd.DataFrame:
+    """Read CSV/TSV or Parquet into a flat frame with the timestamp as a column.
+
+    Parquet writers commonly persist the bar timestamp as the *index* rather
+    than a column. Left there, the column mapper sees only OHLCV and rejects
+    the file for having no timestamp -- so the index is promoted first, using
+    its own name when it has one.
+    """
+    suffix = path.suffix.lower()
+    if suffix in {".parquet", ".pq"}:
+        frame = pd.read_parquet(path)
+        if isinstance(frame.index, pd.DatetimeIndex):
+            frame = frame.reset_index()
+            if frame.columns[0] in (None, "index", ""):
+                frame = frame.rename(columns={frame.columns[0]: "timestamp"})
+        return frame
+    return pd.read_csv(path, sep=_sniff_delimiter(path), engine="python")
 
 
 def infer_timeframe(index: pd.DatetimeIndex) -> Timeframe | None:
@@ -448,7 +476,9 @@ class DirectoryScan:
         return [result for result in self.loaded if (result.symbol_hint or "") == wanted]
 
 
-def scan_directory(root: Path, *, patterns: tuple[str, ...] = ("*.csv", "*.txt")) -> DirectoryScan:
+def scan_directory(
+    root: Path, *, patterns: tuple[str, ...] = ("*.csv", "*.txt", "*.parquet", "*.pq")
+) -> DirectoryScan:
     """Load every delimited file under ``root``, recording what failed and why."""
     if not root.exists():
         raise FileNotFoundError(f"{root} does not exist")
@@ -465,7 +495,7 @@ def scan_directory(root: Path, *, patterns: tuple[str, ...] = ("*.csv", "*.txt")
         if not path.is_file():
             continue
         try:
-            loaded.append(load_vendor_csv(path))
+            loaded.append(load_vendor_file(path))
         except VendorCsvError as error:
             failed.append((path, str(error)))
         except Exception as error:  # a vendor file can fail in any way at all
