@@ -286,16 +286,24 @@ def resolve_future(
     contract, 2 the next, and so on.
     """
     wanted = underlying.strip().upper()
+    live = [
+        i
+        for i in instruments
+        if i.kind == "FUT" and (i.expiry_date is None or i.expiry_date >= on)
+    ]
     chain = sorted(
-        (
-            i
-            for i in instruments
-            if i.kind == "FUT"
-            and i.name.upper() == wanted
-            and (i.expiry_date is None or i.expiry_date >= on)
-        ),
+        (i for i in live if i.name.upper() == wanted),
         key=lambda i: i.expiry or "9999-12-31",
     )
+    if not chain:
+        # The master's `name` is normally the underlying symbol, but fall back to
+        # the contract symbol itself (RELIANCE26AUGFUT) so a name that does not
+        # match the equity ticker still resolves.
+        chain = sorted(
+            (i for i in live if i.symbol.upper().startswith(wanted) and
+             i.symbol.upper().endswith("FUT")),
+            key=lambda i: i.expiry or "9999-12-31",
+        )
     if not chain:
         available = sorted({i.name for i in instruments if i.kind == "FUT"})
         near = [n for n in available if wanted in n][:8]
