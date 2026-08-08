@@ -432,10 +432,9 @@ def write_candles(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if fmt == "parquet":
-        try:
-            import pandas as pd
-        except ImportError as exc:
-            raise DownloadError("parquet output needs pandas + pyarrow installed") from exc
+        require_parquet_support()
+        import pandas as pd
+
         frame = pd.DataFrame(rows)
         frame["date"] = pd.to_datetime(frame["date"], utc=True).dt.tz_convert("Asia/Kolkata")
         frame = frame.reindex(columns=columns).set_index("date")
@@ -559,6 +558,8 @@ def cmd_download(args: argparse.Namespace) -> int:
     )
     if not symbols:
         raise DownloadError("no symbols given")
+    if args.format == "parquet":
+        require_parquet_support()
 
     end = args.to_date or _ist_today()
     if bool(args.from_date) == bool(args.last):
@@ -616,13 +617,14 @@ def cmd_download(args: argparse.Namespace) -> int:
                     continuous=args.continuous,
                     oi=args.oi or instrument.is_derivative,
                 )
+                written = write_candles(candles, path, args.format)
             except DownloadError as exc:
-                # One dead interval should not abandon the rest of the run.
+                # One dead pair should not abandon the rest of the run — and a
+                # write failure must not discard what the other pairs fetched.
                 print(f"  failed: {exc}", file=sys.stderr)
                 failures.append(label)
                 continue
 
-            written = write_candles(candles, path, args.format)
             total_rows += written
             if written:
                 print(f"  wrote {written} candles -> {path}")
@@ -637,6 +639,49 @@ def cmd_download(args: argparse.Namespace) -> int:
         print(f"Failed ({len(failures)}): {', '.join(failures)}", file=sys.stderr)
         return 1
     return 0
+
+
+def require_parquet_support() -> None:
+    """Fail before any network work if parquet output is not installable here.
+
+    write_candles() runs *after* fetch_candles(), so without this check a
+    missing engine surfaces only once a symbol has already been downloaded —
+    quota spent to learn about a local dependency.
+    """
+    missing = []
+    try:
+        import pandas as pd
+    except ImportError:
+        missing.append("pandas")
+    try:
+        import pyarrow  # noqa: F401
+    except ImportError:
+        try:
+            import fastparquet  # noqa: F401
+        except ImportError:
+            missing.append("pyarrow")
+    if missing:
+        raise DownloadError(
+            f"--format parquet needs {' and '.join(missing)}.\n"
+            f"  pip install {' '.join(missing)}\n"
+            "Or drop --format parquet to write CSV instead (larger, but no extra deps)."
+        )
+
+    # Importing both is not proof they work together: mismatched pandas/pyarrow
+    # versions import cleanly and then fail inside to_parquet. Do a real
+    # round trip in memory so that surfaces here rather than mid-download.
+    from io import BytesIO
+
+    try:
+        pd.DataFrame({"probe": [1]}).to_parquet(BytesIO())
+    except Exception as exc:  # noqa: BLE001 - any engine failure disqualifies parquet
+        raise DownloadError(
+            f"pandas and the parquet engine are installed but incompatible:\n"
+            f"  {type(exc).__name__}: {exc}\n"
+            "Upgrading usually fixes it:\n"
+            "  pip install -U pandas pyarrow\n"
+            "Or drop --format parquet to write CSV instead (larger, but no extra deps)."
+        ) from exc
 
 
 def _scan_csv(path: Path) -> tuple[int, str, str]:
@@ -691,10 +736,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     for path in files:
         if path.suffix == ".parquet":
-            try:
-                import pandas as pd
-            except ImportError as exc:
-                raise DownloadError("reading parquet needs pandas + pyarrow") from exc
+            require_parquet_support()
+            import pandas as pd
+
             frame = pd.read_parquet(path)
             rows = len(frame)
             first = str(frame.index.min()) if rows else ""
