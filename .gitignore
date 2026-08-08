@@ -1,0 +1,50 @@
+# Repository-wide ignores.
+#
+# The per-project .gitignore files cover their own trees; this one exists
+# because secrets and scratch files land at the repository ROOT, where no
+# subdirectory .gitignore can see them.
+
+# --- Secrets. Never commit. -------------------------------------------------
+# .kite_session.json is written by the Kite login flow and contains a live
+# access_token. Committing it hands anyone with repo access the ability to
+# read the account -- and on a token minted with order scopes, to trade it.
+# Tokens expire daily, which makes this feel harmless and is exactly why it
+# gets committed.
+.kite_session.json
+*_session.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+access_token*.txt
+
+# --- Market data ------------------------------------------------------------
+# Large, reproducible from the broker, and redistribution is usually
+# prohibited by the vendor's terms. Track it deliberately with LFS if you
+# need it shared, not by accident through `git add .`.
+data/store/
+data/replay/
+data/bhavcopy/
+
+# --- Python -----------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Editors / OS -----------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+~$*
