@@ -68,6 +68,9 @@ _OPTIONAL_SYNONYMS: dict[str, tuple[str, ...]] = {
     ),
     "symbol": ("symbol", "ticker", "scrip", "name", "instrument"),
     "series": ("series",),
+    # Open interest: contracts outstanding. The one genuinely new signal source
+    # in a futures file -- cash OHLCV cannot see positioning at all.
+    "open_interest": ("oi", "openinterest", "opnintrst"),
 }
 
 _REQUIRED = ("timestamp", "open", "high", "low", "close")
