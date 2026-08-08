@@ -1,0 +1,64 @@
+# NIFTY 50 constituents as NSE trading symbols (the form Kite's instrument
+# master uses). Config references this file as universe.constituents_file.
+#
+# VERIFY BEFORE RELYING ON IT. Index membership is revised semi-annually
+# (effective end of March and end of September), so this list goes stale.
+# Refresh from the authoritative source:
+#     https://nsearchives.nseindia.com/content/indices/ind_nifty50list.csv
+# The downloader validates every symbol against the live Kite instrument
+# master, so a renamed or removed name fails loudly rather than silently.
+#
+# NOTE: this is the *current* membership only. universe.require_point_in_time
+# in config.yaml expects joined/left dates, which are not captured here — a
+# backtest reading this file would survivor-bias its universe.
+symbol,name
+ADANIENT,Adani Enterprises
+ADANIPORTS,Adani Ports and SEZ
+APOLLOHOSP,Apollo Hospitals Enterprise
+ASIANPAINT,Asian Paints
+AXISBANK,Axis Bank
+BAJAJ-AUTO,Bajaj Auto
+BAJAJFINSV,Bajaj Finserv
+BAJFINANCE,Bajaj Finance
+BEL,Bharat Electronics
+BHARTIARTL,Bharti Airtel
+CIPLA,Cipla
+COALINDIA,Coal India
+DRREDDY,Dr. Reddy's Laboratories
+EICHERMOT,Eicher Motors
+ETERNAL,Eternal (formerly Zomato)
+GRASIM,Grasim Industries
+HCLTECH,HCL Technologies
+HDFCBANK,HDFC Bank
+HDFCLIFE,HDFC Life Insurance
+HINDALCO,Hindalco Industries
+HINDUNILVR,Hindustan Unilever
+ICICIBANK,ICICI Bank
+INDIGO,InterGlobe Aviation
+INFY,Infosys
+ITC,ITC
+JIOFIN,Jio Financial Services
+JSWSTEEL,JSW Steel
+KOTAKBANK,Kotak Mahindra Bank
+LT,Larsen & Toubro
+M&M,Mahindra & Mahindra
+MARUTI,Maruti Suzuki India
+MAXHEALTH,Max Healthcare Institute
+NESTLEIND,Nestle India
+NTPC,NTPC
+ONGC,Oil & Natural Gas Corporation
+POWERGRID,Power Grid Corporation of India
+RELIANCE,Reliance Industries
+SBILIFE,SBI Life Insurance
+SBIN,State Bank of India
+SHRIRAMFIN,Shriram Finance
+SUNPHARMA,Sun Pharmaceutical Industries
+TATACONSUM,Tata Consumer Products
+TATAMOTORS,Tata Motors
+TATASTEEL,Tata Steel
+TCS,Tata Consultancy Services
+TECHM,Tech Mahindra
+TITAN,Titan Company
+TRENT,Trent
+ULTRACEMCO,UltraTech Cement
+WIPRO,Wipro

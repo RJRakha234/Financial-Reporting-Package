@@ -485,11 +485,57 @@ def cmd_symbols(args: argparse.Namespace) -> int:
     return 0
 
 
+def read_symbols_file(path: Path) -> list[str]:
+    """Read trading symbols from a text or CSV file.
+
+    Accepts one symbol per line, or a CSV with a ``symbol`` column. Blank lines
+    and ``#`` comments are ignored. A file beats ``--symbols`` for the Nifty 50
+    because ``M&M`` contains an ``&``, which cmd.exe treats as a command
+    separator and PowerShell rejects outright.
+    """
+    if not path.exists():
+        raise DownloadError(f"symbols file not found: {path}")
+    lines = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8-sig").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not lines:
+        raise DownloadError(f"{path} contains no symbols")
+
+    header = [column.strip().lower() for column in lines[0].split(",")]
+    if "symbol" in header:
+        index = header.index("symbol")
+        rows = [line.split(",") for line in lines[1:]]
+        symbols = [row[index].strip() for row in rows if len(row) > index and row[index].strip()]
+    else:
+        # Headerless: take the first field of each line.
+        symbols = [line.split(",")[0].strip() for line in lines]
+
+    seen: dict[str, None] = {}
+    for symbol in symbols:
+        seen.setdefault(symbol.upper(), None)
+    if not seen:
+        raise DownloadError(f"{path} contains no usable symbols")
+    return list(seen)
+
+
 def cmd_download(args: argparse.Namespace) -> int:
+    # Validate every argument before authenticating: a typo should not cost a
+    # login round trip, and a half-validated run is worse than no run.
     if args.interval not in CHUNK_DAYS:
         raise DownloadError(
             f"unknown interval {args.interval!r}. Valid: {', '.join(CHUNK_DAYS)}"
         )
+    if bool(args.symbols) == bool(args.symbols_file):
+        raise DownloadError("give exactly one of --symbols or --symbols-file")
+    symbols = (
+        read_symbols_file(Path(args.symbols_file))
+        if args.symbols_file
+        else [s.strip() for s in args.symbols.split(",") if s.strip()]
+    )
+    if not symbols:
+        raise DownloadError("no symbols given")
 
     end = args.to_date or _ist_today()
     if bool(args.from_date) == bool(args.last):
@@ -504,7 +550,6 @@ def cmd_download(args: argparse.Namespace) -> int:
     out_dir = Path(args.out)
     suffix = "parquet" if args.format == "parquet" else "csv"
 
-    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     failures: list[str] = []
     total_rows = 0
 
@@ -575,7 +620,11 @@ def build_parser() -> argparse.ArgumentParser:
     symbols.set_defaults(func=cmd_symbols)
 
     download = sub.add_parser("download", help="download historical candles")
-    download.add_argument("--symbols", required=True, help="comma-separated trading symbols")
+    download.add_argument("--symbols", default=None, help="comma-separated trading symbols")
+    download.add_argument(
+        "--symbols-file", dest="symbols_file", default=None, metavar="PATH",
+        help="file of symbols, one per line or a CSV with a `symbol` column",
+    )
     download.add_argument(
         "--interval", default="day", help=f"one of: {', '.join(CHUNK_DAYS)} (default: day)"
     )
