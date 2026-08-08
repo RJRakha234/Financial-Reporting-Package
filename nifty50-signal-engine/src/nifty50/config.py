@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import warnings
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -256,6 +257,36 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def load_env(root: Path | None = None) -> Path | None:
+    """Load ``.env`` into the process environment. Returns the file used.
+
+    Secrets live in ``.env`` and never in the YAML or in code, which only works
+    if something actually reads the file. Nothing did: the Kite adapter writes
+    its access token there with ``_persist_env`` and then looks for it in
+    ``os.environ``, so the documented "set it in .env and re-run" loop wrote to
+    a file no process ever opened.
+
+    Real environment variables win over the file. A value exported in the shell
+    or injected by CI is a deliberate act; a stale line in a working-copy
+    ``.env`` should not silently override it.
+    """
+    env_path = (root or project_root()) / ".env"
+    if not env_path.is_file():
+        return None
+    try:
+        from dotenv import load_dotenv
+    except ImportError:  # pragma: no cover - a declared dependency
+        warnings.warn(
+            f"{env_path} exists but python-dotenv is not installed, so the "
+            "credentials in it will not be read. Run: pip install -e .",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
+    load_dotenv(env_path, override=False)
+    return env_path
+
+
 def load_config(path: Path | None = None) -> Config:
     """Read, validate and return the configuration.
 
@@ -263,6 +294,7 @@ def load_config(path: Path | None = None) -> Config:
     :func:`get_config`.
     """
     config_path = path or _default_config_path()
+    load_env(config_path.resolve().parent)
     with config_path.open("r", encoding="utf-8") as handle:
         raw: dict[str, Any] = yaml.safe_load(handle)
     # Later-phase sections are declared as `{}` in the YAML; keep them permissive.

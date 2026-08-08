@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -101,3 +103,58 @@ class TestRegulatoryPosture:
         forbidden = {"execution", "orders", "order", "trading", "broker_orders"}
         assert forbidden.isdisjoint(raw.keys())
         assert raw["runtime"]["mode"] in {"paper", "backtest"}
+
+
+class TestDotenv:
+    """Secrets live in .env, which only works if something reads the file.
+
+    Nothing did. The Kite adapter writes its access token there and then looks
+    for it in os.environ, so the documented "set it in .env and re-run" loop
+    wrote to a file no process ever opened.
+    """
+
+    def test_dot_env_reaches_the_environment(self, tmp_path, monkeypatch) -> None:
+        from nifty50.config import load_env
+
+        monkeypatch.delenv("KITE_API_KEY", raising=False)
+        (tmp_path / ".env").write_text("KITE_API_KEY=abc123\n", encoding="utf-8")
+        assert load_env(tmp_path) == tmp_path / ".env"
+        assert os.environ["KITE_API_KEY"] == "abc123"
+
+    def test_a_real_environment_variable_wins(self, tmp_path, monkeypatch) -> None:
+        """An exported value or one injected by CI is a deliberate act; a stale
+        line in a working-copy .env must not silently override it."""
+        from nifty50.config import load_env
+
+        monkeypatch.setenv("KITE_API_KEY", "from-the-shell")
+        (tmp_path / ".env").write_text("KITE_API_KEY=from-the-file\n", encoding="utf-8")
+        load_env(tmp_path)
+        assert os.environ["KITE_API_KEY"] == "from-the-shell"
+
+    def test_no_dot_env_is_not_an_error(self, tmp_path) -> None:
+        from nifty50.config import load_env
+
+        assert load_env(tmp_path) is None
+
+    def test_loading_config_loads_the_env_beside_it(self, tmp_path, monkeypatch) -> None:
+        from nifty50.config import load_config, project_root
+
+        monkeypatch.delenv("KITE_API_KEY", raising=False)
+        (tmp_path / ".env").write_text("KITE_API_KEY=beside-the-config\n", encoding="utf-8")
+        shutil.copy(project_root() / "config.yaml", tmp_path / "config.yaml")
+        load_config(tmp_path / "config.yaml")
+        assert os.environ["KITE_API_KEY"] == "beside-the-config"
+
+
+def test_the_example_env_lists_every_variable_the_code_reads() -> None:
+    """A credential the code needs but the example omits is a setup step
+    nobody discovers until the traceback."""
+    from nifty50.config import project_root
+
+    example = (project_root() / ".env.example").read_text(encoding="utf-8")
+    settings = load_config().broker.kite
+    for name in (
+        settings.api_key_env, settings.api_secret_env,
+        settings.access_token_env, settings.request_token_env,
+    ):
+        assert f"{name}=" in example, f"{name} missing from .env.example"
