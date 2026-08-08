@@ -1,0 +1,251 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Nifty 50 Signal Engine</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#161b22; --line:#232a34; --ink:#e6edf3;
+    --dim:#8b949e; --up:#26a69a; --down:#ef5350; --warn:#d29922; --bad:#f85149;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.45 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:10px 16px;
+           background:var(--panel); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:.02em; }
+  select { background:var(--bg); color:var(--ink); border:1px solid var(--line);
+           border-radius:6px; padding:5px 8px; font-size:13px; }
+  .pill { padding:3px 9px; border-radius:999px; font-size:12px; font-weight:600;
+          border:1px solid var(--line); }
+  .live{color:var(--up);border-color:var(--up)} .stale{color:var(--warn);border-color:var(--warn)}
+  .halted{color:var(--bad);border-color:var(--bad)} .idle{color:var(--dim)}
+  main { display:grid; grid-template-columns:1fr 320px; gap:12px; padding:12px; }
+  @media (max-width:1000px){ main{grid-template-columns:1fr} }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+             color:var(--dim); margin:0 0 10px; font-weight:600; }
+  #chart { height:520px; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:5px 0;
+         border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  .row:last-child { border-bottom:0; }
+  .row span:first-child { color:var(--dim); }
+  .big { font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .good{color:var(--up)} .bad{color:var(--bad)} .warn{color:var(--warn)} .dim{color:var(--dim)}
+  .note { font-size:12px; color:var(--dim); margin-top:10px; line-height:1.5; }
+  footer { padding:10px 16px; color:var(--dim); font-size:12px;
+           border-top:1px solid var(--line); }
+</style>
+
+<header>
+  <h1>Nifty 50 Signal Engine</h1>
+  <select id="symbol"></select>
+  <select id="timeframe"></select>
+  <span class="pill" id="state">connecting</span>
+  <span class="pill" id="phase">—</span>
+  <span class="pill" id="token">token —</span>
+  <span class="pill" id="age">data —</span>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Price <span id="forming" class="dim"></span></h2>
+    <div id="chart"></div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Cost hurdle</h2>
+      <div class="big" id="clears">—</div>
+      <div class="row"><span>Round-trip cost</span><b id="be">—</b></div>
+      <div class="row"><span>This bar's range</span><b id="range">—</b></div>
+      <div class="note">
+        A move smaller than the round trip loses money however right the
+        direction was. This is the first question, not the last.
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h2>Position sizing</h2>
+      <div class="row"><span>Capital</span><b id="capital">—</b></div>
+      <div class="row"><span>Risk / trade</span><b id="riskpct">—</b></div>
+      <div class="row"><span>Stop (2 × ATR)</span><b id="stop">—</b></div>
+      <div class="row"><span>Shares</span><b id="qty">—</b></div>
+      <div class="row"><span>Notional</span><b id="notional">—</b></div>
+      <div class="row"><span>Exposure</span><b id="exposure">—</b></div>
+      <div class="note" id="levnote"></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h2>Regime</h2>
+      <div class="row"><span>Dispersion</span><b id="disp">—</b></div>
+      <div class="row"><span>Avg pairwise corr</span><b id="rho">—</b></div>
+      <div class="note">
+        Low dispersion means the names move together and there is no spread for
+        stock-picking to harvest — you pay full costs for nothing.
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h2>Engine</h2>
+      <div class="row"><span>Ticks</span><b id="ticks">—</b></div>
+      <div class="row"><span>Bars emitted</span><b id="bars">—</b></div>
+      <div class="row"><span>Subscribed</span><b id="subs">—</b></div>
+      <div class="row"><span>Reconnects</span><b id="recon">—</b></div>
+      <div class="row"><span>Errors</span><b id="errs">—</b></div>
+      <div class="note" id="lasterr"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  Alert-only and read-only: this tool cannot place, modify or cancel an order.
+  No signals are shown — five signal families were tested and none demonstrated
+  tradeable skill. Not investment advice.
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const inr = n => n == null ? "—" : "₹" + Math.round(n).toLocaleString("en-IN");
+const pct = (n, d = 3) => n == null ? "—" : (n * 100).toFixed(d) + "%";
+
+const chart = LightweightCharts.createChart($("chart"), {
+  layout: { background: { color: "#161b22" }, textColor: "#e6edf3" },
+  grid: { vertLines: { color: "#232a34" }, horzLines: { color: "#232a34" } },
+  rightPriceScale: { borderColor: "#232a34" },
+  timeScale: { borderColor: "#232a34", timeVisible: true, secondsVisible: false },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+});
+const candles = chart.addCandlestickSeries({
+  upColor: "#26a69a", downColor: "#ef5350",
+  borderUpColor: "#26a69a", borderDownColor: "#ef5350",
+  wickUpColor: "#26a69a", wickDownColor: "#ef5350",
+});
+// The forming bar is drawn in muted grey and never as a finished candle. A
+// 15-minute bar stamped 10:15 is not done until 10:30, and charting it as
+// closed is what makes a live chart disagree with a backtest.
+const forming = chart.addCandlestickSeries({
+  upColor: "#3f4c5a", downColor: "#3f4c5a",
+  borderUpColor: "#6b7785", borderDownColor: "#6b7785",
+  wickUpColor: "#6b7785", wickDownColor: "#6b7785",
+});
+new ResizeObserver(() => chart.applyOptions({ width: $("chart").clientWidth }))
+  .observe($("chart"));
+
+let symbol = null, timeframe = null, known = {};
+
+async function get(path) {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+async function loadSymbols() {
+  const { symbols } = await get("/api/symbols");
+  if (!symbols.length) { $("state").textContent = "waiting for data"; return false; }
+  const changed = JSON.stringify(symbols) !== JSON.stringify(known.symbols);
+  known = { symbols };
+  if (changed) {
+    $("symbol").innerHTML = symbols.map(s => `<option>${s.symbol}</option>`).join("");
+    symbol = symbol && symbols.some(s => s.symbol === symbol) ? symbol : symbols[0].symbol;
+    $("symbol").value = symbol;
+    syncTimeframes();
+  }
+  return true;
+}
+
+function syncTimeframes() {
+  const entry = known.symbols.find(s => s.symbol === symbol);
+  if (!entry) return;
+  $("timeframe").innerHTML = entry.timeframes.map(t => `<option>${t}</option>`).join("");
+  timeframe = entry.timeframes.includes(timeframe) ? timeframe : entry.timeframes[0];
+  $("timeframe").value = timeframe;
+}
+
+$("symbol").onchange = e => { symbol = e.target.value; syncTimeframes(); refresh(); };
+$("timeframe").onchange = e => { timeframe = e.target.value; refresh(); };
+
+async function refresh() {
+  if (!symbol || !timeframe) return;
+  try {
+    const data = await get(`/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`);
+    candles.setData(data.closed);
+    forming.setData(data.forming ? [data.forming] : []);
+    const f = data.forming;
+    $("forming").textContent = f
+      ? `— bar ${new Date(f.time * 1000).toLocaleTimeString("en-IN")} still forming`
+      : "";
+    const estimated = data.closed.some(c => c.volume_estimated);
+    if (estimated) $("forming").textContent += "  ⚠ some volume estimated";
+  } catch (error) { /* series not ready yet */ }
+
+  try {
+    const r = await get(`/api/risk?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`);
+    $("be").textContent = pct(r.breakeven_pct);
+    $("range").textContent = pct(r.bar_range_pct);
+    if (r.clears_costs === undefined) {
+      $("clears").textContent = "—"; $("clears").className = "big dim";
+    } else if (r.clears_costs) {
+      $("clears").textContent = "clears costs"; $("clears").className = "big good";
+    } else {
+      $("clears").textContent = "below costs"; $("clears").className = "big bad";
+    }
+    $("capital").textContent = inr(r.capital_inr);
+    $("riskpct").textContent = pct(r.risk_fraction, 1) + "  (" + inr(r.risk_inr) + ")";
+    const s = r.sizing;
+    if (s) {
+      $("stop").textContent = "₹" + s.stop_distance.toFixed(2);
+      $("qty").textContent = s.quantity.toLocaleString("en-IN");
+      $("notional").textContent = inr(s.notional);
+      $("exposure").textContent = pct(s.exposure_pct, 1);
+      const levered = s.exposure_pct > 1;
+      $("exposure").className = levered ? "bad" : "";
+      $("levnote").textContent = levered
+        ? "Exposure exceeds capital. A tighter stop is not less risk — it buys "
+          + "more shares for the same rupee risk, and that is leverage."
+        : "";
+    }
+  } catch (error) { /* no bars yet */ }
+}
+
+async function pollHealth() {
+  try {
+    const h = await get("/api/health");
+    const pill = $("state");
+    pill.textContent = h.state.replace(/_/g, " ");
+    pill.className = "pill " + (
+      h.state === "live" ? "live" :
+      h.state === "stale" || h.state === "rest_fallback" ? "stale" :
+      h.state === "halted" ? "halted" : "idle");
+    $("phase").textContent = h.session_phase.replace(/_/g, " ");
+    const left = h.token_seconds_remaining;
+    $("token").textContent = left == null ? "token —"
+      : "token " + Math.floor(left / 3600) + "h " + Math.floor((left % 3600) / 60) + "m";
+    $("token").className = "pill " + (h.token_expires_soon ? "halted" : "idle");
+    const age = h.data_age_seconds;
+    $("age").textContent = age == null ? "data —" : "data " + age.toFixed(0) + "s";
+    $("age").className = "pill " + (age != null && age > 30 ? "stale" : "idle");
+
+    $("ticks").textContent = (h.ticks_received || 0).toLocaleString("en-IN");
+    $("bars").textContent = (h.candles_emitted || 0).toLocaleString("en-IN");
+    $("subs").textContent = h.subscribed_instruments ?? "—";
+    $("recon").textContent = h.reconnect_count ?? "—";
+    $("errs").textContent = h.error_count ?? "—";
+    $("lasterr").textContent = h.last_error || "";
+
+    const g = h.regime || {};
+    $("disp").textContent = g.dispersion == null ? "—" : pct(g.dispersion);
+    $("rho").textContent = g.correlation == null ? "—" : g.correlation.toFixed(3);
+  } catch (error) {
+    $("state").textContent = "server unreachable";
+    $("state").className = "pill halted";
+  }
+}
+
+(async function main() {
+  await loadSymbols();
+  await refresh();
+  await pollHealth();
+  setInterval(pollHealth, 2000);
+  setInterval(async () => { if (await loadSymbols()) refresh(); }, 5000);
+})();
+</script>
