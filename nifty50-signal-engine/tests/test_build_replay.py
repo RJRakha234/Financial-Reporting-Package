@@ -138,6 +138,55 @@ class TestBuild:
         assert set(read_manifest(dest)) == {"TCS"}
 
 
+class TestFromStore:
+    """The route that needs no loose files: backfill, then export.
+
+    The store is Hive-partitioned and the replay adapter is not, which is the
+    only reason an export step exists at all.
+    """
+
+    def store_with(self, root: Path, symbol: str = "RELIANCE"):  # type: ignore[no-untyped-def]
+        from nifty50.data.store import BarStore
+        from nifty50.domain import Timeframe
+
+        store = BarStore(root)
+        start = dt.datetime(2026, 8, 7, 9, 15, tzinfo=IST)
+        index = pd.DatetimeIndex(
+            [start + dt.timedelta(minutes=5 * i) for i in range(75)], name="ts"
+        )
+        price = pd.Series([100.0 + i * 0.1 for i in range(75)], index=index)
+        frame = pd.DataFrame(
+            {
+                "open": price, "high": price + 0.5, "low": price - 0.5,
+                "close": price, "volume": [1000] * 75,
+            }
+        )
+        store.write(Exchange.NSE, symbol, Timeframe.M5, frame)
+        return store
+
+    def test_it_exports_the_store_into_the_replay_layout(self, tmp_path) -> None:
+        store, dest = tmp_path / "store", tmp_path / "replay"
+        self.store_with(store)
+        assert main(["--from-store", "--store", str(store), "--dest", str(dest)]) == 0
+        assert (dest / "NSE" / "RELIANCE" / "5m.parquet").is_file()
+        assert read_manifest(dest)["RELIANCE"]["exchange"] == "NSE"
+
+    def test_an_empty_store_points_at_backfill(self, tmp_path, capsys) -> None:
+        store, dest = tmp_path / "store", tmp_path / "replay"
+        store.mkdir()
+        assert main(["--from-store", "--store", str(store), "--dest", str(dest)]) == 1
+        assert "backfill" in capsys.readouterr().err
+
+    def test_source_and_from_store_are_mutually_exclusive(self, tmp_path) -> None:
+        """Two origins for the same destination is a question, not a default."""
+        with pytest.raises(SystemExit):
+            main(["--from-store", "--source", str(tmp_path)])
+
+    def test_one_origin_is_required(self) -> None:
+        with pytest.raises(SystemExit):
+            main([])
+
+
 @pytest.mark.parametrize("interval,expected", [("5minute", "5m"), ("60minute", "1h"), ("day", "1d")])
 def test_the_bar_size_is_inferred_from_the_bars_not_the_filename(
     tmp_path, interval: str, expected: str

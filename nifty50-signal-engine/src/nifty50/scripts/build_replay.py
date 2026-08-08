@@ -1,22 +1,28 @@
-"""Lay a directory of downloaded vendor files out as a replay root.
+"""Populate the replay root, from the bar store or from downloaded files.
 
+    python -m nifty50.scripts.build_replay --from-store
     python -m nifty50.scripts.build_replay --source ../data/historical
 
-The Kite downloader writes flat files named ``SYMBOL_INTERVAL.parquet``. The
-replay adapter reads a directory tree instead::
+The replay adapter reads a directory tree with a manifest::
 
     data/replay/instruments.csv
     data/replay/NSE/RELIANCE/15m.parquet
     data/replay/NFO/NIFTY26OCTFUT/15m.parquet
 
-Those are two different conventions for the same bars, and nothing in between
-them was written until now -- which is why ``--replay`` had no data to serve.
-This script is the bridge. It reads through the vendor loader, so the same
-timestamp parsing, column mapping and corporate-action checks that guard the
-backtest also guard what the dashboard replays; a file the loader will not read
-is reported here rather than silently producing an empty chart.
+Nothing wrote that layout until now, which is why ``--replay`` had no data to
+serve. There are two ways to fill it and they suit different situations.
 
-Files are copied, not moved. The download directory stays the source of truth.
+``--from-store`` exports what :mod:`nifty50.scripts.backfill` already pulled
+from the broker. Prefer it: those bars have been through the integrity suite,
+no loose files are involved, and the only thing standing between a broker
+login and a working dashboard is one backfill command.
+
+``--source`` reads a directory of vendor files named ``SYMBOL_INTERVAL.parquet``
+-- what an ad-hoc download script leaves behind. It goes through the vendor
+loader, so the same timestamp parsing and column mapping that guard the
+backtest also guard what the dashboard replays; a file the loader will not read
+is reported here rather than silently producing an empty chart. Files are
+copied, not moved.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from nifty50.config import load_config
+from nifty50.data.store import BarStore
 from nifty50.data.vendor_csv import LoadResult, scan_directory
 from nifty50.domain import OHLCV_COLUMNS, Exchange, InstrumentKind, Timeframe
 from nifty50.logging_setup import get_logger
@@ -63,13 +70,22 @@ def classify(symbol: str) -> tuple[Exchange, InstrumentKind]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--source", type=Path, required=True,
+    origin = parser.add_mutually_exclusive_group(required=True)
+    origin.add_argument(
+        "--source", type=Path, default=None,
         help="directory of downloaded vendor files (SYMBOL_INTERVAL.parquet)",
+    )
+    origin.add_argument(
+        "--from-store", action="store_true",
+        help="use the engine's own bar store, as written by nifty50.scripts.backfill",
     )
     parser.add_argument(
         "--dest", type=Path, default=None,
         help="replay root to write (default: broker.replay.root from config.yaml)",
+    )
+    parser.add_argument(
+        "--store", type=Path, default=None,
+        help="bar store to read with --from-store (default: data.store.root from config.yaml)",
     )
     parser.add_argument(
         "--symbols", default=None,
@@ -82,9 +98,26 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config()
-    source = args.source.expanduser().resolve()
     dest = (args.dest or config.path(config.broker.replay.root)).expanduser().resolve()
 
+    wanted = (
+        {s.strip().upper() for s in args.symbols.split(",") if s.strip()}
+        if args.symbols
+        else None
+    )
+
+    if args.from_store:
+        store_root = (
+            args.store.expanduser().resolve()
+            if args.store
+            else config.path(config.data.store.root)
+        )
+        print(f"source  {store_root}  (bar store)")
+        print(f"dest    {dest}\n")
+        store = BarStore(store_root, compression=config.data.store.compression)
+        return _from_store(store, dest, wanted=wanted, overwrite=args.overwrite)
+
+    source = args.source.expanduser().resolve()
     if not source.is_dir():
         print(f"source directory not found: {source}", file=sys.stderr)
         return 2
@@ -94,12 +127,6 @@ def main(argv: list[str] | None = None) -> int:
     except FileNotFoundError as error:
         print(str(error), file=sys.stderr)
         return 2
-
-    wanted = (
-        {s.strip().upper() for s in args.symbols.split(",") if s.strip()}
-        if args.symbols
-        else None
-    )
 
     print(f"source  {source}")
     print(f"dest    {dest}\n")
@@ -153,6 +180,62 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n{len(instruments)} instrument(s), {sum(len(v) for v in written.values())} series")
     if skipped:
         print(f"{skipped} file(s) skipped -- see the lines marked ? ! - above")
+    print(f"manifest -> {manifest}")
+    print("\nnow run:  python -m nifty50.scripts.dashboard --replay")
+    return 0
+
+
+def _from_store(
+    store: BarStore, dest: Path, *, wanted: set[str] | None, overwrite: bool
+) -> int:
+    """Export the engine's own bar store into the replay layout.
+
+    This is the path that needs no downloaded flat files at all: point
+    :mod:`nifty50.scripts.backfill` at the broker, then export what it stored.
+    The store is Hive-partitioned (``exchange=NSE/symbol=RELIANCE/...``) and
+    the replay adapter is not, which is the only reason this function exists.
+
+    Store bars have already been through the integrity suite, so nothing here
+    re-checks them -- unlike the vendor-file path, where the loader is the
+    first thing to look at the data.
+    """
+    written = 0
+    instruments: dict[str, tuple[Exchange, InstrumentKind]] = {}
+
+    for exchange in (Exchange.NSE, Exchange.NFO):
+        for symbol in store.symbols(exchange):
+            if wanted is not None and symbol.upper() not in wanted:
+                continue
+            for timeframe in store.timeframes(exchange, symbol):
+                frame = store.read(exchange, symbol, timeframe)
+                if frame.empty:
+                    continue
+                instruments[symbol] = classify(symbol)
+                target = dest / exchange.value / symbol / f"{timeframe.value}.parquet"
+                if target.exists() and not overwrite:
+                    print(f"  =  {symbol} {timeframe.value}: exists, skipped")
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                columns = [c for c in OHLCV_COLUMNS if c in frame.columns]
+                export = frame.loc[:, columns].copy()
+                export.index.name = "ts"
+                export.to_parquet(target)
+                written += 1
+                span = f"{frame.index[0].date()} .. {frame.index[-1].date()}"
+                print(
+                    f"  +  {symbol:<18} {timeframe.value:<4} {len(frame):>7,} bars   {span}"
+                )
+
+    if not instruments:
+        print(
+            "\nthe bar store is empty. Download some history first:\n"
+            "  python -m nifty50.scripts.backfill --symbols RELIANCE --timeframes 5m,15m,1h",
+            file=sys.stderr,
+        )
+        return 1
+
+    manifest = _write_manifest(dest, instruments)
+    print(f"\n{len(instruments)} instrument(s), {written} series written")
     print(f"manifest -> {manifest}")
     print("\nnow run:  python -m nifty50.scripts.dashboard --replay")
     return 0
