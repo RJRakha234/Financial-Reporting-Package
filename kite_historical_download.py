@@ -69,6 +69,11 @@ CHUNK_DAYS: Final[dict[str, int]] = {
 # Historical API quota. Exceeding it earns HTTP 429s, not a friendly warning.
 REQUESTS_PER_SECOND: Final[float] = 3.0
 
+# Continuous (expiry-stitched) data is daily only. Every other interval comes
+# back as "invalid interval for continuous data", one rejection per chunk, so
+# an unguarded intraday request burns its whole quota to produce nothing.
+CONTINUOUS_INTERVALS: Final[frozenset[str]] = frozenset({"day"})
+
 # Transient failures worth retrying, with exponential backoff.
 RETRY_DELAYS: Final[tuple[int, ...]] = (2, 4, 8, 16)
 
@@ -275,6 +280,49 @@ def _to_instrument(row: dict[str, Any], exchange: str) -> Instrument:
     )
 
 
+def parse_futures_months(spec: str) -> list[int] | None:
+    """Parse --futures-month: ``all``, a single rank, or a comma-separated list.
+
+    ``None`` means every listed contract — the only way to build intraday
+    futures history, since continuous data is daily-only.
+    """
+    text = str(spec).strip().lower()
+    if text == "all":
+        return None
+    try:
+        months = [int(part) for part in text.split(",") if part.strip()]
+    except ValueError:
+        raise DownloadError(
+            f"invalid --futures-month {spec!r}; expected `all`, a number, or e.g. 1,2,3"
+        ) from None
+    if not months or any(m < 1 for m in months):
+        raise DownloadError("--futures-month values must be 1 or greater")
+    return sorted(set(months))
+
+
+def futures_chain(
+    instruments: list[Instrument], underlying: str, *, on: dt.date
+) -> list[Instrument]:
+    """Every listed, unexpired contract for ``underlying``, nearest expiry first."""
+    wanted = underlying.strip().upper()
+    live = [
+        i
+        for i in instruments
+        if i.kind == "FUT" and (i.expiry_date is None or i.expiry_date >= on)
+    ]
+    chain = [i for i in live if i.name.upper() == wanted]
+    if not chain:
+        # The master's `name` is normally the underlying symbol, but fall back to
+        # the contract symbol itself (RELIANCE26AUGFUT) so a name that does not
+        # match the equity ticker still resolves.
+        chain = [
+            i
+            for i in live
+            if i.symbol.upper().startswith(wanted) and i.symbol.upper().endswith("FUT")
+        ]
+    return sorted(chain, key=lambda i: i.expiry or "9999-12-31")
+
+
 def resolve_future(
     instruments: list[Instrument], underlying: str, *, on: dt.date, month: int = 1
 ) -> Instrument:
@@ -285,25 +333,8 @@ def resolve_future(
     command working indefinitely. ``month=1`` is the front (nearest unexpired)
     contract, 2 the next, and so on.
     """
+    chain = futures_chain(instruments, underlying, on=on)
     wanted = underlying.strip().upper()
-    live = [
-        i
-        for i in instruments
-        if i.kind == "FUT" and (i.expiry_date is None or i.expiry_date >= on)
-    ]
-    chain = sorted(
-        (i for i in live if i.name.upper() == wanted),
-        key=lambda i: i.expiry or "9999-12-31",
-    )
-    if not chain:
-        # The master's `name` is normally the underlying symbol, but fall back to
-        # the contract symbol itself (RELIANCE26AUGFUT) so a name that does not
-        # match the equity ticker still resolves.
-        chain = sorted(
-            (i for i in live if i.symbol.upper().startswith(wanted) and
-             i.symbol.upper().endswith("FUT")),
-            key=lambda i: i.expiry or "9999-12-31",
-        )
     if not chain:
         available = sorted({i.name for i in instruments if i.kind == "FUT"})
         near = [n for n in available if wanted in n][:8]
@@ -613,9 +644,24 @@ def cmd_download(args: argparse.Namespace) -> int:
         raise DownloadError("no symbols given")
     if args.format == "parquet":
         require_parquet_support()
-    if args.futures_month < 1:
-        raise DownloadError("--futures-month must be 1 or greater")
+    months = parse_futures_months(args.futures_month)
     exchange = args.exchange or ("NFO" if args.futures else "NSE")
+
+    if args.continuous:
+        usable = [i for i in intervals if i in CONTINUOUS_INTERVALS]
+        dropped = [i for i in intervals if i not in CONTINUOUS_INTERVALS]
+        if dropped:
+            advice = (
+                "Kite serves continuous (expiry-stitched) data for "
+                f"{', '.join(sorted(CONTINUOUS_INTERVALS))} only; "
+                f"{', '.join(dropped)} would be rejected chunk by chunk.\n"
+                "For intraday futures drop --continuous and use --futures-month all, "
+                "which fetches each listed contract separately."
+            )
+            if not usable:
+                raise DownloadError(advice)
+            print(f"\nwarning: skipping {', '.join(dropped)} - {advice}", file=sys.stderr)
+            intervals = usable
 
     end = args.to_date or _ist_today()
     if bool(args.from_date) == bool(args.last):
@@ -631,7 +677,7 @@ def cmd_download(args: argparse.Namespace) -> int:
     suffix = "parquet" if args.format == "parquet" else "csv"
 
     failures: list[str] = []
-    total_rows = 0
+    counter: dict[str, int] = {"rows": 0}
     planned = sum(len(date_chunks(start, end, CHUNK_DAYS[i])) for i in intervals) * len(symbols)
     print(
         f"\n{len(symbols)} symbol(s) x {len(intervals)} interval(s) "
@@ -642,62 +688,21 @@ def cmd_download(args: argparse.Namespace) -> int:
 
     for symbol in symbols:
         try:
-            instrument = (
-                resolve_future(instruments, symbol, on=end, month=args.futures_month)
-                if args.futures
-                else resolve(instruments, symbol)
-            )
+            targets = _resolve_targets(instruments, symbol, args, end=end, months=months)
         except DownloadError as exc:
             print(f"{exc}", file=sys.stderr)
             failures.append(symbol)
             continue
 
-        if args.futures:
-            print(f"{symbol} -> {instrument.symbol} (expiry {instrument.expiry or 'n/a'})")
-        # A continuous series is named after the underlying, not the contract —
-        # the point of it is to outlive any one expiry. The -FUT suffix keeps it
-        # from colliding with the cash file of the same name: RELIANCE the stock
-        # and RELIANCE futures are different series and must not share a path.
-        stem = f"{symbol}-FUT" if args.futures and args.continuous else instrument.symbol
-        safe = stem.replace("/", "-").replace(" ", "_")
-
-        for interval in intervals:
-            label = f"{instrument.symbol} {interval}"
-            path = out_dir / f"{safe}_{interval}.{suffix}"
-            if path.exists() and not args.overwrite:
-                print(f"{label}: {path} exists, skipping (use --overwrite)")
-                continue
-
-            chunks = len(date_chunks(start, end, CHUNK_DAYS[interval]))
-            print(
-                f"\n{instrument.symbol} ({instrument.exchange}, token {instrument.token}) "
-                f"- {interval}, {start} .. {end}, {chunks} request(s)"
+        for instrument, stem in targets:
+            safe = stem.replace("/", "-").replace(" ", "_")
+            _download_one(
+                kite, instrument, safe, intervals, start, end,
+                args=args, limiter=limiter, out_dir=out_dir, suffix=suffix,
+                failures=failures, counter=counter,
             )
-            try:
-                candles = fetch_candles(
-                    kite,
-                    instrument,
-                    interval,
-                    start,
-                    end,
-                    limiter=limiter,
-                    continuous=args.continuous,
-                    oi=args.oi or instrument.is_derivative,
-                )
-                written = write_candles(candles, path, args.format)
-            except DownloadError as exc:
-                # One dead pair should not abandon the rest of the run — and a
-                # write failure must not discard what the other pairs fetched.
-                print(f"  failed: {exc}", file=sys.stderr)
-                failures.append(label)
-                continue
 
-            total_rows += written
-            if written:
-                print(f"  wrote {written} candles -> {path}")
-            else:
-                print(f"  no data returned for {label}", file=sys.stderr)
-
+    total_rows = counter["rows"]
     print(
         f"\nDone. {total_rows} candles, {len(symbols)} symbol(s) "
         f"x {len(intervals)} interval(s)."
@@ -706,6 +711,102 @@ def cmd_download(args: argparse.Namespace) -> int:
         print(f"Failed ({len(failures)}): {', '.join(failures)}", file=sys.stderr)
         return 1
     return 0
+
+
+def _resolve_targets(
+    instruments: list[Instrument],
+    symbol: str,
+    args: argparse.Namespace,
+    *,
+    end: dt.date,
+    months: list[int] | None,
+) -> list[tuple[Instrument, str]]:
+    """Map one requested symbol to the (instrument, filename stem) pairs to fetch."""
+    if not args.futures:
+        instrument = resolve(instruments, symbol)
+        return [(instrument, instrument.symbol)]
+
+    chain = futures_chain(instruments, symbol, on=end)
+    if not chain:
+        available = sorted({i.name for i in instruments if i.kind == "FUT"})
+        near = [n for n in available if symbol.strip().upper() in n][:8]
+        hint = f" Similar underlyings: {', '.join(near)}." if near else ""
+        raise DownloadError(f"no unexpired futures found for {symbol!r}.{hint}")
+
+    if months is None:
+        picked = chain
+    else:
+        if max(months) > len(chain):
+            raise DownloadError(
+                f"--futures-month {max(months)} requested but only {len(chain)} contract(s) "
+                f"listed for {symbol}: {', '.join(i.symbol for i in chain)}"
+            )
+        picked = [chain[m - 1] for m in months]
+
+    for instrument in picked:
+        print(f"{symbol} -> {instrument.symbol} (expiry {instrument.expiry or 'n/a'})")
+
+    # A continuous series is named after the underlying, not the contract — the
+    # point of it is to outlive any one expiry, and the -FUT suffix keeps it from
+    # colliding with the cash file of the same name. Per-contract downloads keep
+    # the contract symbol, which is already unique.
+    return [
+        (instrument, f"{symbol}-FUT" if args.continuous else instrument.symbol)
+        for instrument in picked
+    ]
+
+
+def _download_one(
+    kite: Any,
+    instrument: Instrument,
+    safe: str,
+    intervals: list[str],
+    start: dt.date,
+    end: dt.date,
+    *,
+    args: argparse.Namespace,
+    limiter: RateLimiter,
+    out_dir: Path,
+    suffix: str,
+    failures: list[str],
+    counter: dict[str, int],
+) -> None:
+    for interval in intervals:
+        label = f"{instrument.symbol} {interval}"
+        path = out_dir / f"{safe}_{interval}.{suffix}"
+        if path.exists() and not args.overwrite:
+            print(f"{label}: {path} exists, skipping (use --overwrite)")
+            continue
+
+        chunks = len(date_chunks(start, end, CHUNK_DAYS[interval]))
+        print(
+            f"\n{instrument.symbol} ({instrument.exchange}, token {instrument.token}) "
+            f"- {interval}, {start} .. {end}, {chunks} request(s)"
+        )
+        try:
+            candles = fetch_candles(
+                kite,
+                instrument,
+                interval,
+                start,
+                end,
+                limiter=limiter,
+                continuous=args.continuous,
+                oi=args.oi or instrument.is_derivative,
+            )
+            written = write_candles(candles, path, args.format)
+        except DownloadError as exc:
+            # One dead pair should not abandon the rest of the run — and a
+            # write failure must not discard what the other pairs fetched.
+            print(f"  failed: {exc}", file=sys.stderr)
+            failures.append(label)
+            continue
+
+        counter["rows"] += written
+        if written:
+            print(f"  wrote {written} candles -> {path}")
+        else:
+            print(f"  no data returned for {label}", file=sys.stderr)
 
 
 def require_parquet_support() -> None:
@@ -907,8 +1008,10 @@ def build_parser() -> argparse.ArgumentParser:
              "series that survives expiry rolls.",
     )
     download.add_argument(
-        "--futures-month", dest="futures_month", type=int, default=1, metavar="N",
-        help="which contract to take with --futures: 1 = front month (default), 2 = next",
+        "--futures-month", dest="futures_month", default="1", metavar="N",
+        help="which contract(s) with --futures: 1 = front month (default), 2 = next, "
+             "`1,2,3` for several, or `all` for every listed contract (needed for "
+             "intraday futures, since continuous data is daily-only)",
     )
     download.set_defaults(func=cmd_download)
 
