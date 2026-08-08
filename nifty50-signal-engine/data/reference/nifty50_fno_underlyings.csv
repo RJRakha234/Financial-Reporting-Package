@@ -1,0 +1,61 @@
+# F&O underlyings for the Nifty 50 plus the index itself, for use with
+# `download --futures`. These are UNDERLYING names as they appear in the NFO
+# instrument master, which is not always the equity ticker — the index trades
+# as NIFTY, not "NIFTY 50".
+#
+# Every Nifty 50 constituent has listed futures, so this is the constituents
+# list plus NIFTY. Refresh it whenever nifty50_constituents.csv changes.
+# Resolution is by nearest unexpired expiry at run time, so contract names
+# (RELIANCE26AUGFUT) never need to appear here and the file does not go stale.
+symbol,name
+NIFTY,NIFTY 50 index futures
+ADANIENT,Adani Enterprises
+ADANIPORTS,Adani Ports and SEZ
+APOLLOHOSP,Apollo Hospitals Enterprise
+ASIANPAINT,Asian Paints
+AXISBANK,Axis Bank
+BAJAJ-AUTO,Bajaj Auto
+BAJAJFINSV,Bajaj Finserv
+BAJFINANCE,Bajaj Finance
+BEL,Bharat Electronics
+BHARTIARTL,Bharti Airtel
+CIPLA,Cipla
+COALINDIA,Coal India
+DRREDDY,Dr. Reddy's Laboratories
+EICHERMOT,Eicher Motors
+ETERNAL,Eternal (formerly Zomato)
+GRASIM,Grasim Industries
+HCLTECH,HCL Technologies
+HDFCBANK,HDFC Bank
+HDFCLIFE,HDFC Life Insurance
+HINDALCO,Hindalco Industries
+HINDUNILVR,Hindustan Unilever
+ICICIBANK,ICICI Bank
+INDIGO,InterGlobe Aviation
+INFY,Infosys
+ITC,ITC
+JIOFIN,Jio Financial Services
+JSWSTEEL,JSW Steel
+KOTAKBANK,Kotak Mahindra Bank
+LT,Larsen & Toubro
+M&M,Mahindra & Mahindra
+MARUTI,Maruti Suzuki India
+MAXHEALTH,Max Healthcare Institute
+NESTLEIND,Nestle India
+NTPC,NTPC
+ONGC,Oil & Natural Gas Corporation
+POWERGRID,Power Grid Corporation of India
+RELIANCE,Reliance Industries
+SBILIFE,SBI Life Insurance
+SBIN,State Bank of India
+SHRIRAMFIN,Shriram Finance
+SUNPHARMA,Sun Pharmaceutical Industries
+TATACONSUM,Tata Consumer Products
+TATAMOTORS,Tata Motors
+TATASTEEL,Tata Steel
+TCS,Tata Consultancy Services
+TECHM,Tech Mahindra
+TITAN,Titan Company
+TRENT,Trent
+ULTRACEMCO,UltraTech Cement
+WIPRO,Wipro

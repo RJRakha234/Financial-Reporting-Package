@@ -1,0 +1,72 @@
+# NIFTY 50 membership as it stood on the day this file was written.
+#
+# THIS IS NOT MEMBERSHIP HISTORY, and it must never be used as though it
+# were. It is one snapshot: the 50 names in the index today, with no record
+# of when each joined or which names it replaced.
+#
+# Backtesting against today's list is the textbook survivorship bias, and in
+# this index it is not a rounding error. Measured on seven years of the real
+# constituents: a strategy tested on today's 50 names returned 309% against
+# 123% for the point-in-time universe, at identical volatility -- 10.26
+# percentage points a year of pure illusion, entirely from the names that
+# were dropped never appearing in the test.
+#
+# The engine therefore will not read this file. nifty50_constituents.csv is
+# the one it reads, it carries start_date/end_date/provenance per symbol,
+# and it ships empty so that a missing universe fails loudly rather than
+# quietly substituting the list below.
+#
+# Useful for: resolving instrument tokens, picking symbols to stream, and as
+# the starting point for building the real point-in-time file from the NSE
+# Indices press releases.
+symbol,name
+ADANIENT,Adani Enterprises
+ADANIPORTS,Adani Ports and SEZ
+APOLLOHOSP,Apollo Hospitals Enterprise
+ASIANPAINT,Asian Paints
+AXISBANK,Axis Bank
+BAJAJ-AUTO,Bajaj Auto
+BAJAJFINSV,Bajaj Finserv
+BAJFINANCE,Bajaj Finance
+BEL,Bharat Electronics
+BHARTIARTL,Bharti Airtel
+CIPLA,Cipla
+COALINDIA,Coal India
+DRREDDY,Dr. Reddy's Laboratories
+EICHERMOT,Eicher Motors
+ETERNAL,Eternal (formerly Zomato)
+GRASIM,Grasim Industries
+HCLTECH,HCL Technologies
+HDFCBANK,HDFC Bank
+HDFCLIFE,HDFC Life Insurance
+HINDALCO,Hindalco Industries
+HINDUNILVR,Hindustan Unilever
+ICICIBANK,ICICI Bank
+INDIGO,InterGlobe Aviation
+INFY,Infosys
+ITC,ITC
+JIOFIN,Jio Financial Services
+JSWSTEEL,JSW Steel
+KOTAKBANK,Kotak Mahindra Bank
+LT,Larsen & Toubro
+M&M,Mahindra & Mahindra
+MARUTI,Maruti Suzuki India
+MAXHEALTH,Max Healthcare Institute
+NESTLEIND,Nestle India
+NTPC,NTPC
+ONGC,Oil & Natural Gas Corporation
+POWERGRID,Power Grid Corporation of India
+RELIANCE,Reliance Industries
+SBILIFE,SBI Life Insurance
+SBIN,State Bank of India
+SHRIRAMFIN,Shriram Finance
+SUNPHARMA,Sun Pharmaceutical Industries
+TATACONSUM,Tata Consumer Products
+TATAMOTORS,Tata Motors
+TATASTEEL,Tata Steel
+TCS,Tata Consultancy Services
+TECHM,Tech Mahindra
+TITAN,Titan Company
+TRENT,Trent
+ULTRACEMCO,UltraTech Cement
+WIPRO,Wipro

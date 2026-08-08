@@ -48,3 +48,10 @@ htmlcov/
 .DS_Store
 Thumbs.db
 ~$*
+
+# --- From the Kite download workflow ---------------------------------------
+# .kite_instruments.json caches the full NSE/NFO instrument dump. Not secret,
+# but it is megabytes of vendor data that changes daily and belongs to no
+# commit.
+.kite_instruments.json
+data/historical/
