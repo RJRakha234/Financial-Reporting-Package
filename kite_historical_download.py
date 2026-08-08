@@ -520,13 +520,36 @@ def read_symbols_file(path: Path) -> list[str]:
     return list(seen)
 
 
+def parse_intervals(spec: str) -> list[str]:
+    """Expand a comma-separated interval list, or the ``intraday``/``all`` aliases.
+
+    Returned in the declared order of :data:`CHUNK_DAYS` (coarsest cost first)
+    rather than the order typed, so a large multi-interval run does its cheap
+    work before spending quota on minute bars.
+    """
+    text = spec.strip().lower()
+    if text == "all":
+        wanted = list(CHUNK_DAYS)
+    elif text == "intraday":
+        wanted = [name for name in CHUNK_DAYS if name != "day"]
+    else:
+        wanted = [part.strip().lower() for part in text.split(",") if part.strip()]
+
+    if not wanted:
+        raise DownloadError("no interval given")
+    unknown = [name for name in wanted if name not in CHUNK_DAYS]
+    if unknown:
+        raise DownloadError(
+            f"unknown interval(s) {', '.join(unknown)}. "
+            f"Valid: {', '.join(CHUNK_DAYS)}, or the aliases `intraday` / `all`"
+        )
+    return [name for name in CHUNK_DAYS if name in set(wanted)]
+
+
 def cmd_download(args: argparse.Namespace) -> int:
     # Validate every argument before authenticating: a typo should not cost a
     # login round trip, and a half-validated run is worse than no run.
-    if args.interval not in CHUNK_DAYS:
-        raise DownloadError(
-            f"unknown interval {args.interval!r}. Valid: {', '.join(CHUNK_DAYS)}"
-        )
+    intervals = parse_intervals(args.interval)
     if bool(args.symbols) == bool(args.symbols_file):
         raise DownloadError("give exactly one of --symbols or --symbols-file")
     symbols = (
@@ -552,6 +575,13 @@ def cmd_download(args: argparse.Namespace) -> int:
 
     failures: list[str] = []
     total_rows = 0
+    planned = sum(len(date_chunks(start, end, CHUNK_DAYS[i])) for i in intervals) * len(symbols)
+    print(
+        f"\n{len(symbols)} symbol(s) x {len(intervals)} interval(s) "
+        f"({', '.join(intervals)}), {start} .. {end}\n"
+        f"up to {planned} request(s), ~{planned / REQUESTS_PER_SECOND:.0f}s at "
+        f"{REQUESTS_PER_SECOND:g} req/s"
+    )
 
     for symbol in symbols:
         try:
@@ -562,42 +592,49 @@ def cmd_download(args: argparse.Namespace) -> int:
             continue
 
         safe = instrument.symbol.replace("/", "-").replace(" ", "_")
-        path = out_dir / f"{safe}_{args.interval}.{suffix}"
-        if path.exists() and not args.overwrite:
-            print(f"{instrument.symbol}: {path} exists, skipping (use --overwrite)")
-            continue
 
-        chunks = len(date_chunks(start, end, CHUNK_DAYS[args.interval]))
-        print(
-            f"\n{instrument.symbol} ({instrument.exchange}, token {instrument.token}) "
-            f"- {args.interval}, {start} .. {end}, {chunks} request(s)"
-        )
-        try:
-            candles = fetch_candles(
-                kite,
-                instrument,
-                args.interval,
-                start,
-                end,
-                limiter=limiter,
-                continuous=args.continuous,
-                oi=args.oi or instrument.is_derivative,
+        for interval in intervals:
+            label = f"{instrument.symbol} {interval}"
+            path = out_dir / f"{safe}_{interval}.{suffix}"
+            if path.exists() and not args.overwrite:
+                print(f"{label}: {path} exists, skipping (use --overwrite)")
+                continue
+
+            chunks = len(date_chunks(start, end, CHUNK_DAYS[interval]))
+            print(
+                f"\n{instrument.symbol} ({instrument.exchange}, token {instrument.token}) "
+                f"- {interval}, {start} .. {end}, {chunks} request(s)"
             )
-        except DownloadError as exc:
-            print(f"  failed: {exc}", file=sys.stderr)
-            failures.append(symbol)
-            continue
+            try:
+                candles = fetch_candles(
+                    kite,
+                    instrument,
+                    interval,
+                    start,
+                    end,
+                    limiter=limiter,
+                    continuous=args.continuous,
+                    oi=args.oi or instrument.is_derivative,
+                )
+            except DownloadError as exc:
+                # One dead interval should not abandon the rest of the run.
+                print(f"  failed: {exc}", file=sys.stderr)
+                failures.append(label)
+                continue
 
-        written = write_candles(candles, path, args.format)
-        total_rows += written
-        if written:
-            print(f"  wrote {written} candles -> {path}")
-        else:
-            print(f"  no data returned for {instrument.symbol}", file=sys.stderr)
+            written = write_candles(candles, path, args.format)
+            total_rows += written
+            if written:
+                print(f"  wrote {written} candles -> {path}")
+            else:
+                print(f"  no data returned for {label}", file=sys.stderr)
 
-    print(f"\nDone. {total_rows} candles across {len(symbols) - len(failures)} symbol(s).")
+    print(
+        f"\nDone. {total_rows} candles, {len(symbols)} symbol(s) "
+        f"x {len(intervals)} interval(s)."
+    )
     if failures:
-        print(f"Failed: {', '.join(failures)}", file=sys.stderr)
+        print(f"Failed ({len(failures)}): {', '.join(failures)}", file=sys.stderr)
         return 1
     return 0
 
@@ -626,7 +663,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="file of symbols, one per line or a CSV with a `symbol` column",
     )
     download.add_argument(
-        "--interval", default="day", help=f"one of: {', '.join(CHUNK_DAYS)} (default: day)"
+        "--interval", default="day",
+        help=(
+            f"comma-separated; one or more of: {', '.join(CHUNK_DAYS)}. "
+            "Aliases: `intraday` (every interval below day), `all`. Default: day"
+        ),
     )
     download.add_argument(
         "--from", dest="from_date", default=None, type=dt.date.fromisoformat,
