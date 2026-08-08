@@ -141,6 +141,7 @@ class DashboardState:
     _series: dict[tuple[str, Timeframe], CandleSeries] = field(default_factory=dict)
     _lock: threading.RLock = field(default_factory=threading.RLock)
     _regime: dict[str, float | None] = field(default_factory=dict)
+    _notice: str = ""
     _started_at: dt.datetime = field(default_factory=now_ist)
 
     # -------------------------------------------------------------- writes
@@ -162,6 +163,16 @@ class DashboardState:
     def set_regime(self, **values: float | None) -> None:
         with self._lock:
             self._regime.update(values)
+
+    def set_notice(self, notice: str) -> None:
+        """A standing caveat about what is on screen, shown as a banner.
+
+        Used for the one thing a viewer cannot infer from the chart itself:
+        that replayed bars are rebuilt from stored closes, so their highs and
+        lows are sampled rather than observed.
+        """
+        with self._lock:
+            self._notice = notice
 
     # --------------------------------------------------------------- reads
 
@@ -207,6 +218,7 @@ class DashboardState:
                 # 09:15 has already cost you the open.
                 "token_expires_soon": token_left is not None and token_left < 3600,
                 "regime": dict(self._regime),
+                "notice": self._notice,
             }
 
     def risk_json(self, symbol: str, timeframe: Timeframe) -> dict[str, Any]:

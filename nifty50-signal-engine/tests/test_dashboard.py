@@ -149,6 +149,14 @@ class TestRiskPanel:
         sizing = state.risk_json("RELIANCE", Timeframe.M15)["sizing"]
         assert sizing["exposure_pct"] > 1.0   # levered, and the UI says so
 
+    def test_a_notice_is_carried_to_the_browser(self) -> None:
+        """Used for the one thing the chart cannot say about itself: that its
+        bars were rebuilt from stored closes rather than observed from ticks."""
+        state = DashboardState(risk=risk())
+        assert state.health_json()["notice"] == ""
+        state.set_notice("bars rebuilt from 5m closes")
+        assert state.health_json()["notice"] == "bars rebuilt from 5m closes"
+
     def test_no_bars_yet_reports_the_hurdle_without_inventing_a_price(self) -> None:
         state = DashboardState(risk=risk())
         payload = state.risk_json("NOTHING", Timeframe.M15)
