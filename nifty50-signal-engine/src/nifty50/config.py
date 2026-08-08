@@ -7,7 +7,9 @@ a ``KeyError`` inside a websocket callback three hours into the session.
 
 from __future__ import annotations
 
+import codecs
 import datetime as dt
+import io
 import os
 import warnings
 from functools import lru_cache
@@ -269,12 +271,21 @@ def load_env(root: Path | None = None) -> Path | None:
     Real environment variables win over the file. A value exported in the shell
     or injected by CI is a deliberate act; a stale line in a working-copy
     ``.env`` should not silently override it.
+
+    The file is decoded by hand rather than handed to ``load_dotenv`` as a
+    path, because on Windows the obvious editor is Notepad and Notepad writes
+    a byte-order mark. A UTF-8 BOM attaches itself to the first key in the
+    file, so ``KITE_API_KEY`` silently becomes ``\\ufeffKITE_API_KEY`` and the
+    variable simply is not there -- every other line loading correctly, which
+    makes it look like one specific credential was mistyped. Saved as
+    Notepad's "Unicode" (UTF-16), the parser raises ``UnicodeDecodeError``
+    from inside a library the user has never heard of.
     """
     env_path = (root or project_root()) / ".env"
     if not env_path.is_file():
         return None
     try:
-        from dotenv import load_dotenv
+        from dotenv import dotenv_values
     except ImportError:  # pragma: no cover - a declared dependency
         warnings.warn(
             f"{env_path} exists but python-dotenv is not installed, so the "
@@ -283,8 +294,44 @@ def load_env(root: Path | None = None) -> Path | None:
             stacklevel=2,
         )
         return None
-    load_dotenv(env_path, override=False)
+
+    text = read_text_any_encoding(env_path)
+    for key, value in dotenv_values(stream=io.StringIO(text)).items():
+        if value is not None and not os.environ.get(key, "").strip():
+            os.environ[key] = value
     return env_path
+
+
+# BOMs, longest first: UTF-32's prefix is UTF-16's, so testing short-first
+# would decode a UTF-32 file as UTF-16 and produce plausible-looking rubbish.
+_BOMS: tuple[tuple[bytes, str], ...] = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+def read_text_any_encoding(path: Path) -> str:
+    """Read a text file written by an unknown editor.
+
+    Config and credential files get edited by whatever is to hand -- Notepad,
+    VS Code, ``vi`` over SSH -- and Notepad in particular still writes a BOM.
+    Honouring the mark is not encoding trivia here: it is the difference
+    between a credential loading and vanishing without a diagnostic.
+    """
+    raw = path.read_bytes()
+    for bom, encoding in _BOMS:
+        if raw.startswith(bom):
+            return raw.decode(encoding)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # Windows ANSI, still the default in some Notepad builds. Latin-1
+        # decodes any byte sequence, so this cannot fail and cannot mangle
+        # the ASCII that credentials are made of.
+        return raw.decode("cp1252", errors="replace")
 
 
 def load_config(path: Path | None = None) -> Config:
