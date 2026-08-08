@@ -80,6 +80,11 @@ _REQUIRED = ("timestamp", "open", "high", "low", "close")
 _ISO_LEADING_YEAR = re.compile(r"^\s*\d{4}[-/.]\d{1,2}[-/.]\d{1,2}")
 _SPELLED_MONTH = re.compile(r"[A-Za-z]{3}")
 
+# Timeframe tokens vendors append to a filename: RELIANCE_15minute, SBIN_day,
+# WIPRO_minute, TCS_60minute. Matched so the symbol can be recovered without
+# destroying hyphens and ampersands that belong to it.
+_TIMEFRAME_SUFFIX = re.compile(r"\d*(MINUTE|MIN|HOUR|DAY|EOD|DAILY)S?", re.IGNORECASE)
+
 # Spacings we recognise, in minutes; D1 is handled separately because a daily
 # bar's spacing is a calendar gap, not a fixed duration.
 _TIMEFRAME_BY_MINUTES: dict[int, Timeframe] = {
@@ -130,9 +135,16 @@ class LoadResult:
             values = self.frame.attrs.get("symbols", [])
             if len(values) == 1:
                 return str(values[0]).upper()
+        # Strip a trailing timeframe token only. Splitting on every separator
+        # mangles real NSE symbols: BAJAJ-AUTO contains a hyphen and M&M an
+        # ampersand, and "BAJAJ-AUTO_15minute" reduced to "BAJAJ" -- a symbol
+        # that does not exist. The panel would then carry a phantom name and
+        # silently drop the real one.
         stem = self.path.stem.upper()
-        for separator in ("_", "-", ".", " "):
-            stem = stem.split(separator)[0]
+        if "_" in stem:
+            head, tail = stem.rsplit("_", 1)
+            if _TIMEFRAME_SUFFIX.fullmatch(tail):
+                stem = head
         return stem or None
 
 

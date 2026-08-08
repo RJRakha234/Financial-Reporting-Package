@@ -387,3 +387,44 @@ class TestParquet:
     def test_the_csv_alias_still_works(self, tmp_path: Path) -> None:
         path = write_csv(tmp_path / "C.csv", intraday_rows())
         assert load_vendor_csv(path).rows == 40
+
+
+class TestSymbolExtraction:
+    """Real NSE symbols contain characters that naive splitting destroys.
+
+    BAJAJ-AUTO has a hyphen and M&M an ampersand. Splitting the filename on
+    every separator reduced "BAJAJ-AUTO_15minute" to "BAJAJ" -- a symbol that
+    does not exist. The panel then carries a phantom name and silently drops
+    the real one, and nothing raises, because "BAJAJ" is a perfectly plausible
+    string.
+    """
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("BAJAJ-AUTO_15minute.parquet", "BAJAJ-AUTO"),
+            ("M&M_15minute.parquet", "M&M"),
+            ("BAJAJ-AUTO_day.csv", "BAJAJ-AUTO"),
+            ("SBIN_15minute.parquet", "SBIN"),
+            ("WIPRO_minute.parquet", "WIPRO"),
+            ("TCS_60minute.parquet", "TCS"),
+            ("RELIANCE_day.csv", "RELIANCE"),
+            ("INFY.parquet", "INFY"),
+        ],
+    )
+    def test_the_symbol_survives_the_filename(
+        self, tmp_path: Path, filename: str, expected: str
+    ) -> None:
+        path = tmp_path / filename
+        if path.suffix == ".parquet":
+            pd.DataFrame(intraday_rows()).to_parquet(path, index=False)
+        else:
+            write_csv(path, intraday_rows())
+        assert load_vendor_file(path).symbol_hint == expected
+
+    def test_a_non_timeframe_suffix_is_kept(self, tmp_path: Path) -> None:
+        # Only a recognised timeframe token is stripped; anything else is part
+        # of the name, because guessing wrong invents a symbol.
+        path = tmp_path / "SOMECO_LTD.csv"
+        write_csv(path, intraday_rows())
+        assert load_vendor_file(path).symbol_hint == "SOMECO_LTD"
