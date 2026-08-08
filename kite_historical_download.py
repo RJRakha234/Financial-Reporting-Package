@@ -251,10 +251,64 @@ class Instrument:
     token: int
     name: str
     kind: str
+    expiry: str = ""  # ISO date; empty for cash and index instruments
 
     @property
     def is_derivative(self) -> bool:
         return self.kind in {"FUT", "CE", "PE"}
+
+    @property
+    def expiry_date(self) -> dt.date | None:
+        return dt.date.fromisoformat(self.expiry) if self.expiry else None
+
+
+def _to_instrument(row: dict[str, Any], exchange: str) -> Instrument:
+    expiry = row.get("expiry")
+    return Instrument(
+        symbol=str(row["tradingsymbol"]),
+        exchange=exchange,
+        token=int(row["instrument_token"]),
+        name=str(row.get("name") or ""),
+        kind=str(row.get("instrument_type") or ""),
+        # The client parses this into a date; some masters hand back a string.
+        expiry=expiry.isoformat() if isinstance(expiry, dt.date) else str(expiry or ""),
+    )
+
+
+def resolve_future(
+    instruments: list[Instrument], underlying: str, *, on: dt.date, month: int = 1
+) -> Instrument:
+    """Pick a futures contract for ``underlying`` by expiry rank.
+
+    Contract symbols carry their expiry (``RELIANCE25AUGFUT``), so any hardcoded
+    name goes stale within a month. Resolving by underlying keeps a saved
+    command working indefinitely. ``month=1`` is the front (nearest unexpired)
+    contract, 2 the next, and so on.
+    """
+    wanted = underlying.strip().upper()
+    chain = sorted(
+        (
+            i
+            for i in instruments
+            if i.kind == "FUT"
+            and i.name.upper() == wanted
+            and (i.expiry_date is None or i.expiry_date >= on)
+        ),
+        key=lambda i: i.expiry or "9999-12-31",
+    )
+    if not chain:
+        available = sorted({i.name for i in instruments if i.kind == "FUT"})
+        near = [n for n in available if wanted in n][:8]
+        hint = f" Similar underlyings: {', '.join(near)}." if near else ""
+        raise DownloadError(
+            f"no unexpired futures found for {underlying!r} on this exchange.{hint}"
+        )
+    if month > len(chain):
+        raise DownloadError(
+            f"--futures-month {month} requested but only {len(chain)} contract(s) "
+            f"listed for {underlying}: {', '.join(i.symbol for i in chain)}"
+        )
+    return chain[month - 1]
 
 
 def load_instruments(kite: Any, exchange: str, *, refresh: bool = False) -> list[Instrument]:
@@ -274,16 +328,7 @@ def load_instruments(kite: Any, exchange: str, *, refresh: bool = False) -> list
 
     print(f"Fetching the {exchange} instrument master ...")
     rows: list[dict[str, Any]] = kite.instruments(exchange)
-    instruments = [
-        Instrument(
-            symbol=str(row["tradingsymbol"]),
-            exchange=exchange,
-            token=int(row["instrument_token"]),
-            name=str(row.get("name") or ""),
-            kind=str(row.get("instrument_type") or ""),
-        )
-        for row in rows
-    ]
+    instruments = [_to_instrument(row, exchange) for row in rows]
     INSTRUMENT_CACHE.write_text(
         json.dumps({"key": cache_key, "instruments": [asdict(i) for i in instruments]}),
         encoding="utf-8",
@@ -560,6 +605,9 @@ def cmd_download(args: argparse.Namespace) -> int:
         raise DownloadError("no symbols given")
     if args.format == "parquet":
         require_parquet_support()
+    if args.futures_month < 1:
+        raise DownloadError("--futures-month must be 1 or greater")
+    exchange = args.exchange or ("NFO" if args.futures else "NSE")
 
     end = args.to_date or _ist_today()
     if bool(args.from_date) == bool(args.last):
@@ -569,7 +617,7 @@ def cmd_download(args: argparse.Namespace) -> int:
         raise DownloadError(f"--from ({start}) is after --to ({end})")
 
     kite = make_client(interactive=False)
-    instruments = load_instruments(kite, args.exchange, refresh=args.refresh)
+    instruments = load_instruments(kite, exchange, refresh=args.refresh)
     limiter = RateLimiter(REQUESTS_PER_SECOND)
     out_dir = Path(args.out)
     suffix = "parquet" if args.format == "parquet" else "csv"
@@ -586,13 +634,24 @@ def cmd_download(args: argparse.Namespace) -> int:
 
     for symbol in symbols:
         try:
-            instrument = resolve(instruments, symbol)
+            instrument = (
+                resolve_future(instruments, symbol, on=end, month=args.futures_month)
+                if args.futures
+                else resolve(instruments, symbol)
+            )
         except DownloadError as exc:
             print(f"{exc}", file=sys.stderr)
             failures.append(symbol)
             continue
 
-        safe = instrument.symbol.replace("/", "-").replace(" ", "_")
+        if args.futures:
+            print(f"{symbol} -> {instrument.symbol} (expiry {instrument.expiry or 'n/a'})")
+        # A continuous series is named after the underlying, not the contract —
+        # the point of it is to outlive any one expiry. The -FUT suffix keeps it
+        # from colliding with the cash file of the same name: RELIANCE the stock
+        # and RELIANCE futures are different series and must not share a path.
+        stem = f"{symbol}-FUT" if args.futures and args.continuous else instrument.symbol
+        safe = stem.replace("/", "-").replace(" ", "_")
 
         for interval in intervals:
             label = f"{instrument.symbol} {interval}"
@@ -818,7 +877,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--to", dest="to_date", default=None, type=dt.date.fromisoformat,
         help="end date, YYYY-MM-DD (default: today)",
     )
-    download.add_argument("--exchange", default="NSE")
+    download.add_argument(
+        "--exchange", default=None, help="default: NSE, or NFO when --futures is given"
+    )
     download.add_argument("--out", default="data/historical", help="output directory")
     download.add_argument("--format", choices=("csv", "parquet"), default="csv")
     download.add_argument("--overwrite", action="store_true")
@@ -830,6 +891,16 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument(
         "--oi", action="store_true",
         help="include open interest (implied for FUT/CE/PE)",
+    )
+    download.add_argument(
+        "--futures", action="store_true",
+        help="treat --symbols as underlyings and resolve each to a futures contract "
+             "(implies --exchange NFO unless given). Pair with --continuous for a "
+             "series that survives expiry rolls.",
+    )
+    download.add_argument(
+        "--futures-month", dest="futures_month", type=int, default=1, metavar="N",
+        help="which contract to take with --futures: 1 = front month (default), 2 = next",
     )
     download.set_defaults(func=cmd_download)
 
