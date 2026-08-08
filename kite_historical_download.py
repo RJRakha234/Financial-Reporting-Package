@@ -639,6 +639,99 @@ def cmd_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scan_csv(path: Path) -> tuple[int, str, str]:
+    """Return (rows, first timestamp, last timestamp) without loading the file.
+
+    These files reach gigabytes at minute resolution, so the scan counts
+    newlines over a binary buffer and keeps only the two edge lines.
+    """
+    rows = 0
+    first = last = ""
+    with path.open("rb") as handle:
+        handle.readline()  # header
+        for line in handle:
+            if not line.strip():
+                continue
+            rows += 1
+            if rows == 1:
+                first = line.split(b",", 1)[0].decode("utf-8", "replace")
+            last = line
+    if rows:
+        last = last.split(b",", 1)[0].decode("utf-8", "replace")  # type: ignore[union-attr]
+    return rows, first, str(last)
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Inventory downloaded files and flag ones whose coverage looks wrong.
+
+    Worth running after any large pull: files are skipped when they already
+    exist, so a directory can quietly mix windows from different runs.
+    """
+    directory = Path(args.dir)
+    if not directory.exists():
+        raise DownloadError(f"directory not found: {directory}")
+    files = sorted(p for p in directory.iterdir() if p.suffix in (".csv", ".parquet"))
+    if not files:
+        raise DownloadError(f"no .csv or .parquet files in {directory}")
+
+    expected_start: dt.date | None = None
+    end = args.to_date or _ist_today()
+    if args.last:
+        expected_start = parse_lookback(args.last, end)
+    elif args.from_date:
+        expected_start = args.from_date
+
+    print(f"{len(files)} file(s) in {directory}")
+    if expected_start:
+        print(f"expecting coverage from {expected_start}\n")
+
+    rows_total = 0
+    short: list[str] = []
+    empty: list[str] = []
+
+    for path in files:
+        if path.suffix == ".parquet":
+            try:
+                import pandas as pd
+            except ImportError as exc:
+                raise DownloadError("reading parquet needs pandas + pyarrow") from exc
+            frame = pd.read_parquet(path)
+            rows = len(frame)
+            first = str(frame.index.min()) if rows else ""
+            last = str(frame.index.max()) if rows else ""
+        else:
+            rows, first, last = _scan_csv(path)
+
+        rows_total += rows
+        if not rows:
+            empty.append(path.name)
+            print(f"  {path.name:<34} EMPTY")
+            continue
+
+        flag = ""
+        if expected_start:
+            actual = dt.date.fromisoformat(first[:10])
+            # A month's grace absorbs the leading non-trading days; anything
+            # beyond that is either a stale file or a later listing date.
+            if (actual - expected_start).days > 31:
+                flag = f"  <-- starts {(actual - expected_start).days}d late"
+                short.append(path.name)
+        print(f"  {path.name:<34} {rows:>9,d}  {first[:10]} .. {last[:10]}{flag}")
+
+    print(f"\n{rows_total:,d} rows across {len(files)} file(s).")
+    if empty:
+        print(f"\n{len(empty)} empty file(s): {', '.join(empty[:10])}"
+              f"{' ...' if len(empty) > 10 else ''}")
+    if short:
+        print(
+            f"\n{len(short)} file(s) start later than requested. Either the symbol "
+            f"listed after {expected_start}, or the file is left over from an earlier "
+            f"run with a shorter window — re-download those with --overwrite:\n"
+            f"  {', '.join(short[:10])}{' ...' if len(short) > 10 else ''}"
+        )
+    return 1 if (short or empty) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -695,6 +788,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="include open interest (implied for FUT/CE/PE)",
     )
     download.set_defaults(func=cmd_download)
+
+    verify = sub.add_parser(
+        "verify", help="inventory downloaded files and flag suspect coverage"
+    )
+    verify.add_argument("--dir", default="data/historical")
+    verify.add_argument(
+        "--last", default=None, metavar="SPEC", help="window the files should cover, e.g. 72m"
+    )
+    verify.add_argument("--from", dest="from_date", default=None, type=dt.date.fromisoformat)
+    verify.add_argument("--to", dest="to_date", default=None, type=dt.date.fromisoformat)
+    verify.set_defaults(func=cmd_verify)
 
     return parser
 
