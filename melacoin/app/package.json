@@ -1,0 +1,16 @@
+{
+  "name": "melacoin-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MelaCoin loyalty network - vendor-configurable points that customers can turn into a real token",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning src/index.js",
+    "seed": "node --no-warnings=ExperimentalWarning src/seed.js",
+    "test": "node --no-warnings=ExperimentalWarning --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My points and MelaCoin</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="dot">M</span> MelaCoin</div>
+  <nav id="nav"></nav>
+</header>
+
+<main>
+  <div class="grid three" id="headline"></div>
+
+  <div class="card">
+    <div class="spread"><h2>Your points, shop by shop</h2><span class="muted" id="points-note"></span></div>
+    <p class="sub">Points only work at the shop that gave them. Convert them to MelaCoin to use them anywhere.</p>
+    <div class="scroll-x"><table id="points-table">
+      <thead><tr><th>Shop</th><th class="num">Points</th><th class="num">Worth here</th><th>Expires next</th><th></th></tr></thead>
+      <tbody><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>MelaCoin wallet</h2>
+      <p class="sub">Tokens you already converted. Spend them at any shop that accepts MELA, or move them to your own wallet.</p>
+      <div id="wallet-box"></div>
+      <form id="withdraw-form" style="margin-top:1rem">
+        <label>Your blockchain wallet address
+          <span class="hint">Starts with 0x. Leave the amount blank to withdraw everything.</span>
+          <input name="to_address" placeholder="0x…" pattern="0x[0-9a-fA-F]{40}"></label>
+        <label>Amount (MELA) <input name="amount" inputmode="decimal" placeholder="all of it"></label>
+        <div class="row" style="margin-top:.8rem"><button type="submit" class="secondary">Withdraw to my wallet</button></div>
+      </form>
+      <div id="wallet-notice" class="notice hidden" style="margin-top:.8rem"></div>
+    </div>
+
+    <div class="card">
+      <h2>Recent activity</h2>
+      <p class="sub">Every point you earned, spent, converted or lost to expiry.</p>
+      <div class="scroll-x"><table id="history-table">
+        <thead><tr><th>When</th><th>Shop</th><th>What happened</th><th class="num">Points</th></tr></thead>
+        <tbody><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+      </table></div>
+    </div>
+  </div>
+</main>
+
+<dialog id="convert-dialog">
+  <h2>Convert points to MelaCoin</h2>
+  <p class="sub" id="convert-shop"></p>
+  <form id="convert-form" method="dialog">
+    <label>Points to convert <input name="points" type="number" min="1" step="1" required></label>
+    <div id="convert-preview" class="notice" style="margin-top:.8rem">Enter an amount to see what you would get.</div>
+    <div class="row" style="margin-top:1rem; justify-content:flex-end">
+      <button type="button" class="secondary" id="convert-cancel">Cancel</button>
+      <button type="submit" id="convert-submit" disabled>Convert</button>
+    </div>
+  </form>
+  <div id="convert-notice" class="notice hidden" style="margin-top:.8rem"></div>
+</dialog>
+
+<script src="/app.js"></script>
+<script src="/page-customer.js"></script>
+</body>
+</html>

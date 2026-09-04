@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MelaCoin — loyalty points that become a real token</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="dot">M</span> MelaCoin</div>
+  <nav id="nav"></nav>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Loyalty points that don't die in one shop</h1>
+    <p>
+      Every shop decides how many points a rupee earns and what a point is worth.
+      Customers spend those points at that shop — or turn them into <strong>MelaCoin</strong>,
+      one token that works across the whole network.
+    </p>
+    <div class="flow">
+      <div class="step"><span class="n">1</span><b>Shop sets the rules</b><span class="muted">e.g. 2 points per ₹1, 1 point = ₹0.05</span></div>
+      <div class="step"><span class="n">2</span><b>Customer buys</b><span class="muted">Points land in their account automatically</span></div>
+      <div class="step"><span class="n">3</span><b>Redeem or upgrade</b><span class="muted">Use points at that shop, or convert to MelaCoin</span></div>
+      <div class="step"><span class="n">4</span><b>MelaCoin travels</b><span class="muted">Spend at any shop, or move it to your own wallet</span></div>
+    </div>
+  </section>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>Sign in</h2>
+      <p class="sub">Customers, shop owners and admins all sign in here.</p>
+      <form id="login-form" method="post">
+        <label>Email <input name="email" type="email" required autocomplete="username"></label>
+        <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+        <div class="row" style="margin-top:.9rem"><button type="submit">Sign in</button></div>
+      </form>
+      <div id="login-notice" class="notice hidden" style="margin-top:.8rem"></div>
+      <details style="margin-top:1rem">
+        <summary class="muted">Using the demo data?</summary>
+        <p class="muted" style="margin-top:.5rem">
+          After running <span class="mono">npm run seed</span> you can sign in as
+          <span class="mono">anita@example.test</span> (customer),
+          <span class="mono">ramesh@chaicorner.test</span> (shop) or
+          <span class="mono">admin@melacoin.test</span> (admin).
+          The password for all of them is <span class="mono">melacoin123</span>.
+        </p>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2>Create an account</h2>
+      <p class="sub">Shoppers collect points. Shops get a dashboard and a till key.</p>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" aria-selected="true" data-role="customer">I'm a shopper</button>
+        <button type="button" role="tab" aria-selected="false" data-role="vendor">I run a shop</button>
+      </div>
+      <form id="register-form" method="post">
+        <label>Your name <input name="name" required maxlength="80"></label>
+        <label>Email <input name="email" type="email" required autocomplete="username"></label>
+        <label>Password <input name="password" type="password" required minlength="8" autocomplete="new-password">
+          <span class="hint">At least 8 characters.</span></label>
+        <div id="customer-fields">
+          <label>Phone <span class="hint">Optional. Lets a shop find you at the counter without your email.</span>
+            <input name="phone" maxlength="20"></label>
+        </div>
+        <div id="vendor-fields" class="hidden">
+          <label>Shop name <input name="shop_name" maxlength="80"></label>
+          <label>City <input name="city" maxlength="60"></label>
+          <label>Category
+            <select name="category">
+              <option value="cafe">Café / restaurant</option>
+              <option value="grocery">Grocery</option>
+              <option value="apparel">Clothing</option>
+              <option value="salon">Salon</option>
+              <option value="general">Something else</option>
+            </select>
+          </label>
+        </div>
+        <div class="row" style="margin-top:.9rem"><button type="submit">Create account</button></div>
+      </form>
+      <div id="register-notice" class="notice hidden" style="margin-top:.8rem"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Shops in the network</h2>
+    <p class="sub">Each row is one shop's own settings. Nothing here is set by the platform.</p>
+    <div class="scroll-x"><table id="vendor-table">
+      <thead><tr><th>Shop</th><th>City</th><th>Earning</th><th>Point value</th><th>Converts to MELA</th><th>Takes MELA</th></tr></thead>
+      <tbody><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+</main>
+
+<script src="/app.js"></script>
+<script src="/page-home.js"></script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platform console — MelaCoin</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="dot">M</span> MelaCoin</div>
+  <nav id="nav"></nav>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Is the token actually backed?</h2>
+    <p class="sub">
+      Every MelaCoin you have issued came from points a shop owed. This is the check that
+      the rupees behind those tokens have really been collected. Below 100% you are issuing
+      tokens you cannot cover.
+    </p>
+    <div id="backing"></div>
+  </div>
+
+  <div class="grid three" id="headline"></div>
+
+  <div class="grid two">
+    <div class="card">
+      <h2>MelaCoin price</h2>
+      <p class="sub">Used for conversions and for MELA payments. Before listing, this is your promise; after listing, feed it from the exchange.</p>
+      <form id="price-form">
+        <label>Price of 1 MELA (₹) <input name="price" type="number" min="0.01" step="0.01" required></label>
+        <div class="row" style="margin-top:.8rem"><button type="submit">Update price</button></div>
+      </form>
+      <div id="price-notice" class="notice hidden" style="margin-top:.8rem"></div>
+    </div>
+
+    <div class="card">
+      <h2>Shops to invoice</h2>
+      <p class="sub">Positive means the shop owes you. Negative means you owe the shop.</p>
+      <div class="scroll-x"><table id="settlements-table">
+        <thead><tr><th>Shop</th><th class="num">Balance</th><th></th></tr></thead>
+        <tbody><tr><td colspan="3" class="muted">Loading…</td></tr></tbody>
+      </table></div>
+      <div id="settlement-notice" class="notice hidden" style="margin-top:.8rem"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Audit log</h2>
+    <p class="sub">Every rate change, price change and settlement, with who did it.</p>
+    <div class="scroll-x"><table id="audit-table">
+      <thead><tr><th>When</th><th>Action</th><th>Details</th></tr></thead>
+      <tbody><tr><td colspan="3" class="muted">Loading…</td></tr></tbody>
+    </table></div>
+  </div>
+</main>
+
+<script src="/app.js"></script>
+<script src="/page-admin.js"></script>
+</body>
+</html>
