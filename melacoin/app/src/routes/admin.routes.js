@@ -6,6 +6,7 @@ const money = require("../money");
 const settings = require("../services/settings.service");
 const settlement = require("../services/settlement.service");
 const loyalty = require("../services/loyalty.service");
+const balance = require("../services/balance.service");
 
 function register(router) {
   router.get("/api/admin/stats", async (ctx) => {
@@ -60,6 +61,23 @@ function register(router) {
   router.post("/api/admin/expire-points", async (ctx) => {
     ctx.requireRole("admin");
     return { body: { points_expired: loyalty.expireDuePoints() } };
+  });
+
+  /**
+   * Which shops are funding the network and which are riding it.
+   * Anything with status "blocked" or "near_limit", or a one-way valve, is a shop
+   * about to churn. This is a morning check, not a monthly report.
+   */
+  router.get("/api/admin/balances", async (ctx) => {
+    ctx.requireRole("admin");
+    const positions = balance.allPositions();
+    return {
+      body: {
+        positions,
+        at_risk: positions.filter((p) => p.status !== "healthy" || p.one_way_valve).length,
+        one_way_valves: positions.filter((p) => p.one_way_valve).map((p) => p.vendor_name),
+      },
+    };
   });
 
   router.get("/api/admin/audit", async (ctx) => {

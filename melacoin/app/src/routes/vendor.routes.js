@@ -7,6 +7,7 @@ const auth = require("../auth");
 const { badRequest } = require("../http");
 const loyalty = require("../services/loyalty.service");
 const settlement = require("../services/settlement.service");
+const balance = require("../services/balance.service");
 
 /**
  * Every rate a vendor may change, with the limits that stop a typo becoming a
@@ -23,6 +24,9 @@ const EDITABLE = {
   max_redeem_bps: { kind: "int", min: 0, max: 10000 },
   points_expiry_days: { kind: "int", min: 0, max: 3650 },
   mela_conversion_fee_bps: { kind: "int", min: 0, max: 5000 },         // <= 50% spread
+  // The shop's own ceiling on how much of its point value may leave as MelaCoin
+  // in a window. 0 means "no ceiling of my own" - the platform's cap still applies.
+  conversion_budget_paise: { kind: "int", min: 0, max: 100000000 },
   earn_on_net: { kind: "bool" },
   allow_mela_conversion: { kind: "bool" },
   accepts_mela: { kind: "bool" },
@@ -116,6 +120,23 @@ function register(router) {
       .run(db.newId("aud"), ctx.user.id, "vendor.apikey.rotate", "vendor", vendor.id, null, db.now());
 
     return { body: { api_key: generated.key, note: "Copy this now. It is not shown again." } };
+  });
+
+  /** Am I funding the rest of the network? The number a shop owner should watch. */
+  router.get("/api/vendor/balance", async (ctx) => {
+    const { vendor } = ctx.requireVendor();
+    const position = balance.netPosition(vendor.id);
+    return {
+      body: {
+        ...position,
+        explanation:
+          position.net_outflow_paise <= 0
+            ? "You have taken in at least as much MelaCoin as your customers have converted away. You are a net beneficiary of the network."
+            : position.status === "blocked"
+              ? "Your customers have converted away more than your limit allows, so conversion of your points is paused. Points can still be redeemed in your shop as normal. Accepting MelaCoin restores headroom immediately."
+              : "Your customers have converted more of your points away than you have taken back in MelaCoin. Accepting MelaCoin brings this back towards zero.",
+      },
+    };
   });
 
   router.get("/api/vendor/purchases", async (ctx) => {

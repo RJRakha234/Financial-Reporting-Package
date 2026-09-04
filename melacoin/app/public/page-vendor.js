@@ -19,6 +19,7 @@ const toForm = (v) => ({
   max_redeem_percent: v.max_redeem_bps / 100,
   points_expiry_days: v.points_expiry_days,
   mela_conversion_fee_percent: v.mela_conversion_fee_bps / 100,
+  conversion_budget_rupees: Math.round((v.conversion_budget_paise || 0) / 100),
 });
 
 const fromForm = (form) => ({
@@ -28,6 +29,7 @@ const fromForm = (form) => ({
   max_redeem_bps: Math.round(Number(form.max_redeem_percent) * 100),
   points_expiry_days: Math.round(Number(form.points_expiry_days)),
   mela_conversion_fee_bps: Math.round(Number(form.mela_conversion_fee_percent) * 100),
+  conversion_budget_paise: Math.round(Number(form.conversion_budget_rupees) * 100),
   earn_on_net: !!form.earn_on_net,
   allow_mela_conversion: !!form.allow_mela_conversion,
   accepts_mela: !!form.accepts_mela,
@@ -35,14 +37,16 @@ const fromForm = (form) => ({
 });
 
 async function refresh() {
-  const [me, customers, settlement, sales] = await Promise.all([
+  const [me, customers, settlement, sales, balance] = await Promise.all([
     api("GET", "/api/vendor/me"),
     api("GET", "/api/vendor/customers"),
     api("GET", "/api/vendor/settlement"),
     api("GET", "/api/vendor/purchases"),
+    api("GET", "/api/vendor/balance"),
   ]);
   vendor = me.vendor;
   renderHeadline(me);
+  renderBalance(balance);
   fillSettings(me.vendor);
   renderCustomers(customers.customers);
   renderSettlement(settlement);
@@ -68,6 +72,40 @@ function renderHeadline(me) {
       <div class="value">${s.display.settlement_balance}</div>
       <div class="note">${s.display.settlement_direction}</div>
     </div>`;
+}
+
+/** The shop's give-and-take with the rest of the network. */
+function renderBalance(b) {
+  const tone = b.status === "blocked" ? "var(--danger)" : b.status === "near_limit" ? "var(--warn)" : "var(--accent)";
+  const used = Math.min(100, Math.max(0, b.used_bps / 100));
+  const label = { blocked: "Conversion paused", near_limit: "Close to the limit", healthy: "Healthy" }[b.status];
+
+  document.getElementById("balance-box").innerHTML = `
+    <div class="stat">
+      <div class="label">Net value that has left your shop</div>
+      <div class="value" style="color:${tone}">${b.display.net_outflow}</div>
+      <div class="note">of ${b.display.cap} allowed over ${b.window_days} days · ${escapeHtml(label)}</div>
+    </div>
+    <div style="height:8px;border-radius:5px;background:var(--surface-2);border:1px solid var(--border);
+                overflow:hidden;margin:.7rem 0">
+      <div style="height:100%;width:${used}%;background:${tone}"></div>
+    </div>
+    <table style="margin-top:.4rem">
+      <tbody>
+        <tr><td>Your customers converted away</td><td class="num">${b.display.outflow}</td></tr>
+        <tr><td>MelaCoin you accepted</td><td class="num">${b.display.inflow}</td></tr>
+        <tr><td>Still allowed to leave</td><td class="num"><strong>${b.display.headroom}</strong></td></tr>
+        <tr><td>Your sales in this window</td><td class="num">${b.display.own_sales}</td></tr>
+      </tbody>
+    </table>
+    <p class="muted" style="margin-top:.7rem;font-size:.87rem">${escapeHtml(b.explanation)}</p>
+    ${
+      b.one_way_valve
+        ? `<div class="notice error" style="margin-top:.7rem">You let points convert out but do not accept
+             MelaCoin. Value only flows away from you. Turning on <strong>Accept MelaCoin as payment</strong>
+             brings customers — and your allowance — back.</div>`
+        : ""
+    }`;
 }
 
 function fillSettings(v) {

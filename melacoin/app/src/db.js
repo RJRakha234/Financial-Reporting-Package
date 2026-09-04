@@ -65,6 +65,13 @@ CREATE TABLE IF NOT EXISTS vendors (
   mela_conversion_fee_bps INTEGER NOT NULL DEFAULT 200, -- 2% spread when points become MELA
   accepts_mela            INTEGER NOT NULL DEFAULT 1,
 
+  -- Protection against becoming a net donor to the network. See balance.service.js.
+  -- A shop's customers may only convert points away faster than the shop takes
+  -- MelaCoin in, up to this much of the shop's OWN sales in the rolling window.
+  net_outflow_tolerance_bps INTEGER NOT NULL DEFAULT 100,    -- 1% of own sales
+  net_outflow_floor_paise   INTEGER NOT NULL DEFAULT 50000,  -- but never less than Rs 500
+  conversion_budget_paise   INTEGER NOT NULL DEFAULT 0,      -- shop's own cap; 0 = no extra cap
+
   active     INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
 
@@ -72,7 +79,10 @@ CREATE TABLE IF NOT EXISTS vendors (
   CHECK (redeem_milli_paise_per_point > 0),
   CHECK (max_redeem_bps BETWEEN 0 AND 10000),
   CHECK (mela_conversion_fee_bps BETWEEN 0 AND 10000),
-  CHECK (points_expiry_days >= 0)
+  CHECK (points_expiry_days >= 0),
+  CHECK (net_outflow_tolerance_bps BETWEEN 0 AND 10000),
+  CHECK (net_outflow_floor_paise >= 0),
+  CHECK (conversion_budget_paise >= 0)
 );
 CREATE INDEX IF NOT EXISTS idx_vendors_owner ON vendors(owner_user_id);
 
@@ -213,7 +223,32 @@ function open(dbPath = config.dbPath) {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/**
+ * Adds columns that were introduced after the first release.
+ *
+ * SQLite cannot express "ALTER TABLE ... ADD COLUMN IF NOT EXISTS", so we read the
+ * table's current columns and add only what is missing. Safe to run on every start,
+ * and it leaves existing rows on the stated default.
+ */
+const ADDED_COLUMNS = {
+  vendors: [
+    ["net_outflow_tolerance_bps", "INTEGER NOT NULL DEFAULT 100"],
+    ["net_outflow_floor_paise", "INTEGER NOT NULL DEFAULT 50000"],
+    ["conversion_budget_paise", "INTEGER NOT NULL DEFAULT 0"],
+  ],
+};
+
+function migrate(database) {
+  for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+    const existing = new Set(database.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+    for (const [name, definition] of columns) {
+      if (!existing.has(name)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+  }
 }
 
 function get() {

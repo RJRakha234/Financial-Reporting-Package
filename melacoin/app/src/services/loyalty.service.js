@@ -122,6 +122,8 @@ function publicVendor(vendor) {
     allow_mela_conversion: !!vendor.allow_mela_conversion,
     mela_conversion_fee_bps: vendor.mela_conversion_fee_bps,
     accepts_mela: !!vendor.accepts_mela,
+    conversion_budget_paise: vendor.conversion_budget_paise,
+    net_outflow_tolerance_bps: vendor.net_outflow_tolerance_bps,
     active: !!vendor.active,
     earn_rate_label: money.describeEarnRate(vendor.earn_milli_points_per_rupee),
     redeem_rate_label: money.describeRedeemRate(vendor.redeem_milli_paise_per_point),

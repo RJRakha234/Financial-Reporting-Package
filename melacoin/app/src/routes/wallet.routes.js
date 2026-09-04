@@ -7,6 +7,7 @@ const { notFound, badRequest } = require("../http");
 const conversion = require("../services/conversion.service");
 const tokenService = require("../services/token.service");
 const settings = require("../services/settings.service");
+const balance = require("../services/balance.service");
 const config = require("../config");
 
 function vendorOr404(vendorId) {
@@ -34,6 +35,23 @@ function register(router) {
           value: money.formatPaise(money.paiseForMelaWei(wei, pricePaise)),
           price: money.formatPaise(pricePaise),
         },
+      },
+    };
+  });
+
+  /**
+   * Where to spend MelaCoin, best shops first.
+   *
+   * "Best" means the shops that have paid the most into the network and taken the
+   * least back out. Steering customers there closes the imbalance without ever
+   * refusing anybody, which is far better than blocking conversions after the fact.
+   */
+  router.get("/api/wallet/spend-here", async (ctx) => {
+    ctx.requireRole("customer");
+    return {
+      body: {
+        shops: balance.shopsNeedingFootfall(20),
+        why: "These shops have funded more of the network than they have received back. Spending here keeps the network in balance.",
       },
     };
   });

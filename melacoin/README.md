@@ -61,6 +61,7 @@ melacoin/
 | [docs/06-api.md](docs/06-api.md) | Every endpoint, with curl examples. |
 | [docs/07-launch-checklist.md](docs/07-launch-checklist.md) | What must be true before you deploy to a real blockchain. |
 | [docs/08-glossary.md](docs/08-glossary.md) | Every crypto word used here, defined simply. |
+| [docs/09-network-balance.md](docs/09-network-balance.md) | How the network stops any one shop quietly funding all the others. |
 | [ROADMAP.md](ROADMAP.md) | **The plan.** Six phases from today to a listed token. |
 
 ---

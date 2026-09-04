@@ -39,6 +39,12 @@ function makeVendor(overrides = {}) {
     allow_mela_conversion: 1,
     mela_conversion_fee_bps: 200,
     accepts_mela: 1,
+    // The net-outflow cap is effectively off for the default fixture so that tests
+    // about earning, redeeming and conversion mechanics are not incidentally
+    // blocked by it. Tests that are ABOUT the cap set these explicitly.
+    net_outflow_tolerance_bps: 10000,
+    net_outflow_floor_paise: 100000000,
+    conversion_budget_paise: 0,
     ...overrides,
   };
 
@@ -47,13 +53,17 @@ function makeVendor(overrides = {}) {
       `INSERT INTO vendors (id, owner_user_id, name, slug, category, city, api_key_hash, api_key_prefix,
                             earn_milli_points_per_rupee, redeem_milli_paise_per_point, min_redeem_points,
                             max_redeem_bps, points_expiry_days, earn_on_net, allow_mela_conversion,
-                            mela_conversion_fee_bps, accepts_mela, active, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)`
+                            mela_conversion_fee_bps, accepts_mela,
+                            net_outflow_tolerance_bps, net_outflow_floor_paise, conversion_budget_paise,
+                            active, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)`
     )
     .run(id, owner.id, settings.name, settings.slug, settings.category, settings.city, key.hash, key.prefix,
          settings.earn_milli_points_per_rupee, settings.redeem_milli_paise_per_point, settings.min_redeem_points,
          settings.max_redeem_bps, settings.points_expiry_days, settings.earn_on_net,
-         settings.allow_mela_conversion, settings.mela_conversion_fee_bps, settings.accepts_mela, db.now());
+         settings.allow_mela_conversion, settings.mela_conversion_fee_bps, settings.accepts_mela,
+         settings.net_outflow_tolerance_bps, settings.net_outflow_floor_paise,
+         settings.conversion_budget_paise, db.now());
 
   return { vendor: db.get().prepare("SELECT * FROM vendors WHERE id = ?").get(id), owner, apiKey: key.key };
 }

@@ -20,6 +20,7 @@ const money = require("../money");
 const settings = require("./settings.service");
 const tokenService = require("./token.service");
 const loyalty = require("./loyalty.service");
+const balance = require("./balance.service");
 
 /** Shows what a conversion would produce, without doing it. */
 function quoteConversion({ vendor, customerId, points }) {
@@ -46,6 +47,10 @@ function quoteConversion({ vendor, customerId, points }) {
     throw new RuleError("That is too few points to make even a fraction of a MELA");
   }
 
+  // The shop must not be bled dry funding footfall for the rest of the network.
+  // Throws with the exact number of points that WOULD be allowed right now.
+  const position = balance.assertConversionAllowed(vendor, grossPaise);
+
   return {
     vendor: loyalty.publicVendor(vendor),
     points: amount,
@@ -56,6 +61,8 @@ function quoteConversion({ vendor, customerId, points }) {
     mela_price_paise: pricePaise,
     mela_wei: melaWei.toString(),
     points_after: available - amount,
+    vendor_headroom_paise: position.headroom_paise - grossPaise,
+    vendor_headroom_used_bps: position.used_bps,
     display: {
       gross: money.formatPaise(grossPaise),
       fee: money.formatPaise(feePaise),

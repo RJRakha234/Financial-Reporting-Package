@@ -45,6 +45,10 @@
           <span class="hint">Charged to the customer at conversion and shared with the platform.</span>
           <input name="mela_conversion_fee_percent" type="number" min="0" max="50" step="0.01" required></label>
 
+        <label>Your own cap on point value leaving as MelaCoin (₹)
+          <span class="hint">Per month. 0 means no cap of your own — the network's protection still applies.</span>
+          <input name="conversion_budget_rupees" type="number" min="0" step="1" required></label>
+
         <label><input type="checkbox" name="earn_on_net" style="width:auto"> Earn points only on the cash actually paid
           <span class="hint">Recommended. Otherwise points earn more points and your costs compound.</span></label>
         <label><input type="checkbox" name="allow_mela_conversion" style="width:auto"> Let customers convert my points to MelaCoin</label>
@@ -74,6 +78,15 @@
           </div>
         </form>
         <div id="pos-notice" class="notice hidden" style="margin-top:.8rem"></div>
+      </div>
+
+      <div class="card">
+        <h2>Are you funding everyone else?</h2>
+        <p class="sub">
+          Points your customers convert to MelaCoin leave as cash and the return visit lands
+          on another shop. Accepting MelaCoin brings that value back.
+        </p>
+        <div id="balance-box"></div>
       </div>
 
       <div class="card">

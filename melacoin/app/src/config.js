@@ -62,6 +62,13 @@ const config = {
   /** Starting MELA price in paise. 100 = Rs 1.00. Admins change this at runtime. */
   defaultMelaPricePaise: num("DEFAULT_MELA_PRICE_PAISE", 100),
 
+  /**
+   * The rolling window over which a shop's give-and-take with the network is judged.
+   * Shorter reacts faster but punishes normal lumpiness; 30 days matches how shops
+   * already think about a marketing budget.
+   */
+  settlementWindowDays: num("SETTLEMENT_WINDOW_DAYS", 30),
+
   /** Failed-login throttle: this many attempts per IP per window. */
   rateLimit: {
     windowMs: num("RATE_LIMIT_WINDOW_MS", 60_000),
