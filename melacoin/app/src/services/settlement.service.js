@@ -67,7 +67,8 @@ function platformStats(melaPricePaise) {
   const purchases = one(
     `SELECT COUNT(*) AS count, COALESCE(SUM(gross_paise),0) AS gross,
             COALESCE(SUM(points_discount_paise),0) AS point_discounts,
-            COALESCE(SUM(mela_discount_paise),0) AS mela_accepted FROM purchases`
+            COALESCE(SUM(mela_discount_paise),0) AS mela_accepted
+     FROM purchases WHERE voided_at IS NULL`
   );
   const livePoints = one(
     `SELECT COALESCE(SUM(points_remaining),0) AS points FROM point_lots

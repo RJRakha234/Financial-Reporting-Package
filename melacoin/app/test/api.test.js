@@ -322,3 +322,93 @@ test("the vendor payload carries every setting the dashboard edits", async () =>
   assert.equal(after.body.vendor.earn_on_net, body.vendor.earn_on_net);
   assert.equal(after.body.vendor.allow_mela_conversion, body.vendor.allow_mela_conversion);
 });
+
+// ------------------------------------------------------- the counter workflow
+
+test("the counter identifies its own shop from the till key", async () => {
+  const { status, body } = await call("GET", "/api/pos/me", { apiKey: state.apiKey });
+  assert.equal(status, 200);
+  assert.equal(body.vendor.id, state.vendorId);
+  assert.ok(body.void_window_minutes > 0);
+
+  const wrong = await call("GET", "/api/pos/me", { apiKey: "mela_sk_nope" });
+  assert.equal(wrong.status, 401);
+});
+
+test("a shop signs up a walk-in with nothing but a phone number", async () => {
+  const { status, body } = await call("POST", "/api/pos/enroll", {
+    apiKey: state.apiKey,
+    body: { phone: "+91 98765 43210", name: "Snigdha" },
+  });
+  assert.equal(status, 201);
+  assert.equal(body.created, true);
+  assert.equal(body.customer.phone, "9876543210", "normalised to ten digits");
+  assert.equal(body.customer.claimed, false);
+  assert.equal(body.customer.email, null, "no placeholder address leaks to the counter");
+  state.walkInPhone = "9876543210";
+
+  // Tapping again is safe.
+  const again = await call("POST", "/api/pos/enroll", {
+    apiKey: state.apiKey, body: { phone: "9876543210" },
+  });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.created, false);
+});
+
+test("that walk-in can be billed immediately, in any phone format", async () => {
+  const sale = await call("POST", "/api/pos/purchase", {
+    apiKey: state.apiKey,
+    body: { customer: "098765 43210", gross_paise: 2000, idempotency_key: "CTR-1" },
+  });
+  assert.equal(sale.status, 201);
+  assert.equal(sale.body.receipt.points_earned, 40); // Rs 20 at 2 points per rupee
+  state.walkInBill = sale.body.receipt.id;
+});
+
+test("a mistyped bill can be cancelled from the counter", async () => {
+  const typo = await call("POST", "/api/pos/purchase", {
+    apiKey: state.apiKey,
+    body: { customer: state.walkInPhone, gross_paise: 200000, idempotency_key: "CTR-TYPO" },
+  });
+  assert.equal(typo.body.points_balance, 40 + 4000);
+
+  const listed = await call("GET", "/api/pos/voidable", { apiKey: state.apiKey });
+  assert.ok(listed.body.bills.some((b) => b.id === typo.body.receipt.id));
+
+  const undone = await call("POST", "/api/pos/void", {
+    apiKey: state.apiKey,
+    body: { purchase_id: typo.body.receipt.id, reason: "typed 2000 not 20" },
+  });
+  assert.equal(undone.status, 200);
+  assert.equal(undone.body.points_balance, 40, "back to just the first bill");
+
+  const twice = await call("POST", "/api/pos/void", {
+    apiKey: state.apiKey, body: { purchase_id: typo.body.receipt.id },
+  });
+  assert.equal(twice.status, 400);
+  assert.match(twice.body.error, /already been cancelled/);
+});
+
+test("the walk-in later claims their own account and keeps their points", async () => {
+  const { status, body } = await call("POST", "/api/auth/register", {
+    body: {
+      name: "Snigdha Rao", email: "snigdha@example.test", password: "her-own-password",
+      phone: state.walkInPhone,
+    },
+  });
+  assert.equal(status, 200);
+  assert.equal(body.claimed_existing, true);
+
+  const summary = await call("GET", "/api/customer/summary", { token: body.token });
+  assert.equal(summary.body.total_points, 40, "the points the shop gave her are hers");
+});
+
+test("a customer cannot reach the counter endpoints with their login", async () => {
+  const login = await call("POST", "/api/auth/login", {
+    body: { email: "snigdha@example.test", password: "her-own-password" },
+  });
+  const attempt = await call("POST", "/api/pos/enroll", {
+    token: login.body.token, body: { phone: "9000000000" },
+  });
+  assert.equal(attempt.status, 401, "a login is not a till key");
+});

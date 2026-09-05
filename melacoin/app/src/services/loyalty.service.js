@@ -225,7 +225,15 @@ function recordPurchase({ vendor, customerId, grossPaise, pointsToRedeem = 0, me
     .get()
     .prepare("SELECT * FROM purchases WHERE vendor_id = ? AND idempotency_key = ?")
     .get(vendor.id, idempotencyKey);
-  if (existing) return { purchase: existing, replayed: true };
+  if (existing) {
+    // A cancelled bill must never be reported as a successful sale just because
+    // the same reference came round again - that would tell the counter the sale
+    // went through when nothing happened.
+    if (existing.voided_at) {
+      throw new RuleError("That bill reference was used for a bill that has been cancelled. Use a new reference.");
+    }
+    return { purchase: existing, replayed: true };
+  }
 
   const quote = quotePurchase({ vendor, customerId, grossPaise, pointsToRedeem, melaWeiToSpend });
   const purchaseId = db.newId("pur");

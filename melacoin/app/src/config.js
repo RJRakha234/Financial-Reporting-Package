@@ -63,6 +63,13 @@ const config = {
   defaultMelaPricePaise: num("DEFAULT_MELA_PRICE_PAISE", 100),
 
   /**
+   * How long a shop has to undo a mistyped bill. Long enough that a busy counter
+   * notices at the end of a rush; short enough that points cannot be quietly
+   * clawed back days later.
+   */
+  voidWindowMinutes: num("VOID_WINDOW_MINUTES", 60),
+
+  /**
    * The rolling window over which a shop's give-and-take with the network is judged.
    * Shorter reacts faster but punishes normal lumpiness; 30 days matches how shops
    * already think about a marketing budget.

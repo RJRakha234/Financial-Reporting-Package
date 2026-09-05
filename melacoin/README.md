@@ -43,7 +43,7 @@ Run the tests with `npm test` (58 tests), and the contract tests with
 melacoin/
 ├── app/          The application. Zero npm dependencies - plain Node.js.
 │   ├── src/      Server, database, business rules
-│   ├── public/   The four screens (shopper, shop, admin, landing)
+│   ├── public/   Five screens (shopper, shop, counter, admin, landing)
 │   └── test/     58 tests
 ├── chain/        The MelaCoin smart contracts (Solidity + Hardhat)
 └── docs/         Start with 01-how-it-works.md
@@ -62,6 +62,7 @@ melacoin/
 | [docs/07-launch-checklist.md](docs/07-launch-checklist.md) | What must be true before you deploy to a real blockchain. |
 | [docs/08-glossary.md](docs/08-glossary.md) | Every crypto word used here, defined simply. |
 | [docs/09-network-balance.md](docs/09-network-balance.md) | How the network stops any one shop quietly funding all the others. |
+| [docs/10-counter-workflow.md](docs/10-counter-workflow.md) | What happens at the till: signing someone up with just a phone number, and undoing a mistake. |
 | [ROADMAP.md](ROADMAP.md) | **The plan.** Six phases from today to a listed token. |
 
 ---

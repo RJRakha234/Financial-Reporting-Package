@@ -4,6 +4,7 @@ const auth = require("../auth");
 const v = require("../validate");
 const { badRequest, unauthorized, conflict } = require("../http");
 const loyalty = require("../services/loyalty.service");
+const counter = require("../services/counter.service");
 
 /** Sensible starting rates for a new shop. The owner can change all of them later. */
 const VENDOR_DEFAULTS = {
@@ -46,6 +47,28 @@ function register(router) {
 
     if (db.get().prepare("SELECT 1 FROM users WHERE email = ?").get(email)) {
       throw conflict("An account with that email already exists");
+    }
+
+    // A shop may already have created this person at its counter, with only a
+    // phone number. Registering with that same number takes ownership of the
+    // account rather than colliding with it - otherwise every customer enrolled
+    // at a till could never reach their own balance.
+    if (role === "customer" && phone) {
+      const claimed = counter.claim({ phone, name, email, password });
+      if (claimed) {
+        const session = auth.createSession(claimed.id);
+        return {
+          status: 200,
+          body: {
+            user: publicUser(claimed),
+            token: session.token,
+            expires_at: session.expiresAt,
+            vendor: null,
+            api_key: null,
+            claimed_existing: true,
+          },
+        };
+      }
     }
 
     const userId = db.newId(role === "vendor" ? "ven" : "cus");

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Counter — MelaCoin</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:,">
+<style>
+  /* The counter screen is used one-handed, at arm's length, by someone who has
+     never been trained and is holding a kettle. Everything here is bigger than
+     the rest of the app on purpose. */
+  body { background: var(--surface-2); }
+  .counter { max-width: 460px; margin: 0 auto; padding: 0 14px 40px; }
+  .counter-bar {
+    display: flex; align-items: center; gap: .6rem; padding: .8rem .2rem;
+  }
+  .counter-bar .shop { font-weight: 700; font-size: 1.05rem; }
+  .counter-bar .shop small { display: block; font-weight: 400; color: var(--muted); font-size: .78rem; }
+  .counter-bar button { margin-left: auto; }
+
+  .step { background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+          padding: 1.1rem; box-shadow: var(--shadow); }
+  .step + .step { margin-top: .8rem; }
+  .step h2 { font-size: 1rem; margin-bottom: .2rem; }
+  .step .hint { color: var(--muted); font-size: .87rem; margin-bottom: .8rem; }
+
+  input.big {
+    font-size: 1.6rem; padding: .7rem .8rem; text-align: center; letter-spacing: .04em;
+    font-variant-numeric: tabular-nums; border-radius: 12px; width: 100%;
+  }
+  button.big {
+    width: 100%; font-size: 1.1rem; padding: .95rem 1rem; border-radius: 12px; margin-top: .7rem;
+    min-height: 54px;
+  }
+  button.big.secondary { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+
+  .who { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+  .who .nm { font-size: 1.25rem; font-weight: 700; }
+  .who .ph { font-family: ui-monospace, Menlo, monospace; color: var(--muted); font-size: .9rem; }
+
+  .pts { display: flex; align-items: baseline; gap: .6rem; margin-top: .5rem; }
+  .pts .n { font-size: 2.1rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .pts .u { color: var(--muted); font-size: .9rem; }
+
+  .ready {
+    margin-top: .8rem; padding: 1rem; border-radius: 14px; text-align: center;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border: 2px solid var(--accent); color: var(--accent);
+  }
+  .ready .big-txt { font-size: 1.3rem; font-weight: 800; letter-spacing: -.01em; }
+  .ready .sub-txt { font-size: .88rem; margin-top: .15rem; }
+
+  .progress { margin-top: .8rem; }
+  .progress .track { height: 12px; border-radius: 7px; background: var(--surface-2);
+                     border: 1px solid var(--border); overflow: hidden; }
+  .progress .fill { height: 100%; background: var(--brand); }
+  .progress .cap { font-size: .85rem; color: var(--muted); margin-top: .35rem; }
+
+  .toggle {
+    display: flex; align-items: center; gap: .7rem; padding: .8rem; margin-top: .8rem;
+    border: 2px solid var(--accent); border-radius: 12px; cursor: pointer;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .toggle input { width: 26px; height: 26px; flex: none; accent-color: var(--accent); }
+  .toggle .t-txt { font-size: .95rem; font-weight: 600; color: var(--accent); }
+  .toggle .t-txt small { display: block; font-weight: 400; color: var(--muted); }
+
+  .done-mark {
+    width: 62px; height: 62px; border-radius: 50%; margin: 0 auto .7rem;
+    background: var(--accent); display: grid; place-items: center; color: #fff;
+    font-size: 2rem; font-weight: 700;
+  }
+  .receipt-line { display: flex; justify-content: space-between; padding: .45rem 0;
+                  border-bottom: 1px solid var(--border); font-size: .95rem; }
+  .receipt-line:last-of-type { border-bottom: 0; }
+  .receipt-line .v { font-family: ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; }
+
+  .recent { margin-top: .8rem; }
+  .recent h3 { font-size: .85rem; text-transform: uppercase; letter-spacing: .05em;
+               color: var(--muted); margin-bottom: .4rem; }
+  .bill { display: flex; align-items: center; gap: .6rem; padding: .55rem .7rem;
+          border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+  .bill + .bill { margin-top: .35rem; }
+  .bill .b-who { font-size: .9rem; font-weight: 600; }
+  .bill .b-who small { display: block; font-weight: 400; color: var(--muted); font-size: .78rem; }
+  .bill .b-amt { margin-left: auto; font-family: ui-monospace, Menlo, monospace; font-size: .92rem; }
+  .bill button { padding: .35rem .7rem; font-size: .82rem; }
+</style>
+</head>
+<body>
+<div class="counter">
+  <div class="counter-bar">
+    <div class="shop" id="shop-name">Counter<small>Not connected</small></div>
+    <button type="button" class="secondary small" id="change-key">Key</button>
+  </div>
+
+  <div id="screen"></div>
+  <div id="notice" class="notice hidden" style="margin-top:.8rem"></div>
+  <div class="recent" id="recent"></div>
+</div>
+
+<script src="/app.js"></script>
+<script src="/page-counter.js"></script>
+</body>
+</html>

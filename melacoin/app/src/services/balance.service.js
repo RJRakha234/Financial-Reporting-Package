@@ -64,7 +64,7 @@ function netPosition(vendorId, days = config.settlementWindowDays) {
   const database = db.get();
 
   const sales = database
-    .prepare("SELECT COALESCE(SUM(gross_paise), 0) AS total FROM purchases WHERE vendor_id = ? AND created_at >= ?")
+    .prepare("SELECT COALESCE(SUM(gross_paise), 0) AS total FROM purchases\n       WHERE vendor_id = ? AND created_at >= ? AND voided_at IS NULL")
     .get(vendorId, since).total;
 
   // Positive rows are conversions away from this shop; negative rows are MelaCoin it took in.

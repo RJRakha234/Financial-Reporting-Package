@@ -44,7 +44,7 @@ function register(router) {
                 COALESCE(SUM(points_redeemed),0) AS points_redeemed,
                 COALESCE(SUM(points_discount_paise),0) AS discounts,
                 COUNT(DISTINCT customer_id) AS customers
-         FROM purchases WHERE vendor_id = ?`
+         FROM purchases WHERE vendor_id = ? AND voided_at IS NULL`
       )
       .get(vendor.id);
 
@@ -167,7 +167,8 @@ function register(router) {
         `SELECT u.id, u.name, u.email,
                 COALESCE(SUM(CASE WHEN l.points_remaining > 0 AND (l.expires_at IS NULL OR l.expires_at > ?)
                                   THEN l.points_remaining ELSE 0 END), 0) AS points,
-                (SELECT COUNT(*) FROM purchases p WHERE p.vendor_id = l.vendor_id AND p.customer_id = u.id) AS visits
+                (SELECT COUNT(*) FROM purchases p WHERE p.vendor_id = l.vendor_id AND p.customer_id = u.id
+                        AND p.voided_at IS NULL) AS visits
          FROM point_lots l JOIN users u ON u.id = l.customer_id
          WHERE l.vendor_id = ? GROUP BY u.id ORDER BY points DESC LIMIT 200`
       )

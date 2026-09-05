@@ -101,9 +101,12 @@ CREATE TABLE IF NOT EXISTS purchases (
   points_earned         INTEGER NOT NULL DEFAULT 0,
   bill_ref              TEXT,
   created_at            TEXT NOT NULL,
+  voided_at             TEXT,
+  void_reason           TEXT,
   UNIQUE (vendor_id, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_purchases_customer ON purchases(customer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_purchases_live ON purchases(vendor_id, voided_at);
 CREATE INDEX IF NOT EXISTS idx_purchases_vendor ON purchases(vendor_id, created_at DESC);
 
 -- Points are held in dated lots so that expiry is oldest-first and provable.
@@ -235,6 +238,10 @@ function open(dbPath = config.dbPath) {
  * and it leaves existing rows on the stated default.
  */
 const ADDED_COLUMNS = {
+  purchases: [
+    ["voided_at", "TEXT"],
+    ["void_reason", "TEXT"],
+  ],
   vendors: [
     ["net_outflow_tolerance_bps", "INTEGER NOT NULL DEFAULT 100"],
     ["net_outflow_floor_paise", "INTEGER NOT NULL DEFAULT 50000"],
@@ -248,6 +255,21 @@ function migrate(database) {
     for (const [name, definition] of columns) {
       if (!existing.has(name)) database.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
     }
+  }
+
+  // A phone number is how a shop finds a customer at the counter, so it has to
+  // identify exactly one person. Added as a guarded step rather than in the base
+  // schema: an older database might already hold duplicates, and refusing to start
+  // is a worse outcome than running without the guarantee until someone fixes it.
+  try {
+    database.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone ON users(phone) WHERE phone IS NOT NULL"
+    );
+  } catch {
+    console.warn(
+      "[db] Could not make phone numbers unique - you have duplicates in the users table. " +
+        "Counter lookup by phone will be ambiguous until they are merged."
+    );
   }
 }
 
