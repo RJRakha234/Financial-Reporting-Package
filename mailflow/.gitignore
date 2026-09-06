@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Never commit live config (it names real recipients/servers), the local
+# status database, or archived outgoing mail.
+mailflow.yaml
+mailflow.db
+*.db
+sent_mail/
+*.eml
+
+# Demo runtime artifacts
+demo/_run/
+demo/_xlsx_run/
+*.xlsx
+!demo/**/template*.xlsx

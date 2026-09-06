@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>mailflow — Corporate Mail Automation</title>
+<style>
+  :root{
+    --navy:#0b2545; --navy2:#13315c; --accent:#2e8bff; --accent2:#19c37d;
+    --ink:#1b2733; --muted:#5b6b7b; --paper:#f4f7fb; --line:#d7e0ea;
+    --term-bg:#0d1117; --term-ink:#d7dde4; --warn:#e6a700; --bad:#e5484d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:#06101f}
+  #deck{height:100%;width:100%;position:relative;overflow:hidden}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;
+    padding:6vh 8vw;background:var(--paper);animation:fade .35s ease}
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  h1{font-size:3.4vw;margin:0 0 1.2vh;color:var(--navy);line-height:1.1}
+  h2{font-size:2.2vw;margin:0 0 2.4vh;color:var(--navy);border-bottom:3px solid var(--accent);padding-bottom:1vh;display:inline-block}
+  h3{font-size:1.4vw;margin:.4vh 0;color:var(--navy2)}
+  p,li{font-size:1.35vw;line-height:1.55;color:var(--ink)}
+  .muted{color:var(--muted)}
+  .lead{font-size:1.7vw;color:var(--muted);max-width:60ch}
+  ul{margin:.6vh 0}
+  li{margin:.7vh 0}
+  .pill{display:inline-block;background:var(--accent);color:#fff;padding:.4vh 1.2vw;border-radius:999px;font-size:1vw;letter-spacing:.04em;text-transform:uppercase}
+  .cols{display:flex;gap:2.5vw;margin-top:1.5vh}
+  .col{flex:1}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:2.4vh 1.8vw;box-shadow:0 6px 24px rgba(11,37,69,.06)}
+  .card h3{margin-top:0;display:flex;align-items:center;gap:.6vw}
+  .ico{width:2.4vw;height:2.4vw;min-width:34px;border-radius:9px;display:grid;place-items:center;color:#fff;font-size:1.3vw;background:var(--navy2)}
+  .ico.a{background:var(--accent)} .ico.b{background:var(--accent2)} .ico.c{background:#7a5cff}
+  .flow{display:flex;align-items:stretch;gap:.8vw;flex-wrap:wrap;margin-top:2vh}
+  .node{background:#fff;border:1px solid var(--line);border-radius:12px;padding:1.6vh 1.2vw;font-size:1.05vw;min-width:9vw;text-align:center;box-shadow:0 4px 14px rgba(11,37,69,.06)}
+  .node b{display:block;color:var(--navy);font-size:1.15vw;margin-bottom:.4vh}
+  .node small{color:var(--muted)}
+  .arrow{align-self:center;color:var(--accent);font-size:1.8vw;font-weight:700}
+  .term{background:var(--term-bg);border-radius:12px;padding:2.2vh 1.6vw;color:var(--term-ink);
+    font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:1.02vw;line-height:1.5;
+    overflow:auto;max-height:62vh;box-shadow:inset 0 0 0 1px #1c2533}
+  .term .c{color:#5aa9ff;font-weight:700}     /* command / heading */
+  .term .g{color:#3ddc84}                       /* good */
+  .term .y{color:#ffd166}                       /* pending/info */
+  .term .r{color:#ff6b6b}                       /* bad */
+  .term .d{color:#7d8895}                       /* dim */
+  .kbd{font-family:monospace;background:#fff;border:1px solid var(--line);border-bottom-width:3px;border-radius:6px;padding:.2vh .6vw;font-size:1vw}
+  table{border-collapse:collapse;width:100%;font-size:1.15vw;margin-top:1vh}
+  th,td{text-align:left;padding:1vh 1vw;border-bottom:1px solid var(--line)}
+  th{color:var(--navy);font-size:1vw;text-transform:uppercase;letter-spacing:.04em}
+  .tag{font-size:.95vw;padding:.25vh .8vw;border-radius:999px;font-weight:600}
+  .tag.ok{background:#e6f7ef;color:#0f8a4f} .tag.wait{background:#fff5e0;color:#a87b00} .tag.bad{background:#fde8e8;color:#c0392b}
+  .title-slide{background:linear-gradient(135deg,var(--navy),#071a33);color:#fff}
+  .title-slide h1{color:#fff;font-size:5vw}
+  .title-slide .lead{color:#aac4e6}
+  .title-slide .pill{background:rgba(255,255,255,.16)}
+  .foot{position:absolute;bottom:2.6vh;left:8vw;right:8vw;display:flex;justify-content:space-between;
+    font-size:.95vw;color:var(--muted);border-top:1px solid var(--line);padding-top:1.4vh}
+  .title-slide .foot{color:#7f9dc4;border-color:rgba(255,255,255,.15)}
+  .progress{position:fixed;top:0;left:0;height:5px;background:var(--accent);transition:width .3s;z-index:10}
+  .nav{position:fixed;bottom:14px;right:18px;z-index:10;display:flex;gap:8px}
+  .nav button{background:var(--navy2);color:#fff;border:0;border-radius:8px;padding:8px 12px;font-size:14px;cursor:pointer;opacity:.85}
+  .nav button:hover{opacity:1}
+  .two{display:flex;gap:2.5vw;align-items:flex-start}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:1.6vw;margin-top:1.5vh}
+  .stat{font-size:2.6vw;color:var(--accent);font-weight:800;line-height:1}
+  .check{color:var(--accent2);font-weight:800}
+</style>
+</head>
+<body>
+<div class="progress" id="bar"></div>
+<div id="deck">
+
+  <!-- 1 TITLE -->
+  <section class="slide title-slide active">
+    <span class="pill">Internal Tooling Proposal</span>
+    <h1>mailflow</h1>
+    <p class="lead">Automated dispatch, archiving, and reply-tracking for the
+      recurring e-mails your teams send on a schedule — financial reports,
+      compliance notices, status digests.</p>
+    <div class="foot"><span>Finance &amp; Operations Automation</span><span>Live demo &amp; walkthrough</span></div>
+  </section>
+
+  <!-- 2 PROBLEM -->
+  <section class="slide">
+    <h2>The problem with "someone emails it every week"</h2>
+    <div class="cols">
+      <div class="col card">
+        <h3>😣 Manual &amp; fragile</h3>
+        <p>A person remembers (or forgets) to send the Monday report. PTO, sick
+          days, and handovers create gaps no one notices.</p>
+      </div>
+      <div class="col card">
+        <h3>🕵️ No audit trail</h3>
+        <p>"Did we send the Q2 pack? To whom? With which attachment?" The proof
+          lives in someone's Sent folder — if it still exists.</p>
+      </div>
+      <div class="col card">
+        <h3>❓ No follow-up</h3>
+        <p>You need the CFO to <em>revert</em> with approval. Today, chasing that
+          is a manual scan of the inbox.</p>
+      </div>
+    </div>
+    <p class="lead" style="margin-top:3vh">mailflow turns this into a reliable,
+      auditable, self-tracking pipeline.</p>
+  </section>
+
+  <!-- 3 SOLUTION -->
+  <section class="slide">
+    <h2>Three jobs, done automatically</h2>
+    <div class="cols">
+      <div class="col card">
+        <h3><span class="ico a">1</span> Send on schedule</h3>
+        <p>Define jobs in YAML — recipients, subject/body templates, attachments,
+          and an <b>interval / daily / weekly / once</b> schedule. Fires via cron
+          or a long-running daemon.</p>
+      </div>
+      <div class="col card">
+        <h3><span class="ico b">2</span> Archive every message</h3>
+        <p>A verbatim <b>.eml</b> copy of each send is written to a path you
+          choose — an instant, opens-in-Outlook audit record.</p>
+      </div>
+      <div class="col card">
+        <h3><span class="ico c">3</span> Track the revert</h3>
+        <p>Each message's <b>status</b> is recorded: sent → <span class="check">replied</span>.
+          Replies are matched automatically over IMAP, or marked manually.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 ARCHITECTURE -->
+  <section class="slide">
+    <h2>How it works</h2>
+    <div class="flow">
+      <div class="node"><b>mailflow.yaml</b><small>jobs, schedule,<br/>recipients</small></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>Scheduler</b><small>what is due now?</small></div>
+      <div class="arrow">→</div>
+      <div class="node"><b>SMTP send</b><small>TLS, attachments</small></div>
+      <div class="arrow">→</div>
+      <div class="node" style="border-color:var(--accent2)"><b>📁 Archive</b><small>.eml on disk</small></div>
+    </div>
+    <div class="flow" style="margin-top:1vh">
+      <div class="node" style="border-color:#7a5cff"><b>🗃️ Tracker</b><small>SQLite: every send<br/>+ revert status</small></div>
+      <div class="arrow">←</div>
+      <div class="node"><b>IMAP check</b><small>match replies by<br/>thread headers</small></div>
+      <div class="arrow">↺</div>
+      <div class="node"><b>status report</b><small>sent / replied / failed</small></div>
+    </div>
+    <p class="muted" style="margin-top:3vh">Pure Python standard library + PyYAML.
+      Passwords come from environment variables — never stored in the config.
+      No third-party services.</p>
+  </section>
+
+  <!-- 5 DEMO SCENARIO -->
+  <section class="slide">
+    <span class="pill">Live demo</span>
+    <h2>Scenario: Acme Corp weekly financials</h2>
+    <div class="two">
+      <div style="flex:1">
+        <p>A service account <b>finance-automation@acme.example</b> must, every
+          Monday 08:00:</p>
+        <ul>
+          <li>e-mail the weekly figures (CSV attached) to the <b>CFO</b> &amp;
+            <b>Controller</b>, cc <b>Audit</b>;</li>
+          <li>keep an <b>audit copy</b> of exactly what went out;</li>
+          <li>flag whether the <b>CFO reverted</b> with approval.</li>
+        </ul>
+        <p class="muted">The demo runs the full lifecycle for real against a local
+          capture relay — no internet, no live mailbox. Run it yourself:</p>
+        <p><span class="kbd">bash demo/run_demo.sh</span></p>
+      </div>
+      <div style="flex:1">
+        <div class="term">
+<span class="d"># the job definition (mailflow.yaml)</span>
+jobs:
+  - name: <span class="g">weekly-financials</span>
+    to: [cfo@acme.example, controller@acme.example]
+    cc: [audit@acme.example]
+    subject: <span class="y">"Acme Weekly Report - {date}"</span>
+    attachments: [reports/weekly_*.csv]
+    schedule:
+      every: <span class="c">weekly</span>
+      weekday: mon
+      at: <span class="c">"08:00"</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 DEMO: SEND -->
+  <section class="slide">
+    <h2>Validate → preview → send (real output)</h2>
+    <div class="term">
+<span class="c">$ mailflow validate</span>
+<span class="g">✓ config OK — 1 job(s):</span>
+  • weekly-financials: 2 recipient(s), weekly on mon at 08:00; next: 2026-06-22 08:00
+
+<span class="c">$ mailflow send weekly-financials --dry-run</span>
+<span class="y">[dry-run] would send weekly-financials to cfo@acme.example, controller@acme.example, audit@acme.example (nothing written)</span>
+
+<span class="c">$ mailflow send weekly-financials</span>
+<span class="g">✓ sent weekly-financials (id=1), saved to archive/20260619-092311_weekly-financials.eml</span>
+<span class="d">[relay] delivered to cfo@acme.example, controller@acme.example, audit@acme.example
+        subject: Acme Weekly Financial Report - 2026-06-19  ->  inbox/received-...eml</span>
+    </div>
+    <p class="muted">A dry run changes nothing — no file, no record, schedule not advanced.</p>
+  </section>
+
+  <!-- 7 DEMO: REVERT -->
+  <section class="slide">
+    <h2>Revert tracking: sent → replied</h2>
+    <div class="term">
+<span class="c">$ mailflow status</span>     <span class="d"># right after sending</span>
+ id  status   job                sent              subject
+ 1   <span class="y">… sent</span>   weekly-financials  2026-06-19 09:23  Acme Weekly Financial Report
+ <span class="d">totals: sent=1</span>
+
+<span class="c">$ mailflow check-replies</span>   <span class="d"># polls IMAP; here we mark it manually</span>
+<span class="c">$ mailflow mark-replied 1 --from cfo@acme.example</span>
+<span class="g">✓ marked send id=1 as replied.</span>
+
+<span class="c">$ mailflow status</span>
+ id  status     job                sent              subject
+ 1   <span class="g">✓ replied</span> weekly-financials  2026-06-19 09:23  Acme Weekly Financial Report
+     <span class="d">↳ revert from cfo@acme.example at 2026-06-19 09:23</span>
+ <span class="d">totals: replied=1</span>
+    </div>
+  </section>
+
+  <!-- 8 STATUS BOARD -->
+  <section class="slide">
+    <h2>The status board your manager asks for</h2>
+    <table>
+      <tr><th>#</th><th>Job</th><th>Sent</th><th>Recipients</th><th>Revert status</th></tr>
+      <tr><td>14</td><td>weekly-financials</td><td>Mon 08:00</td><td>CFO, Controller</td><td><span class="tag ok">✓ replied — CFO 09:41</span></td></tr>
+      <tr><td>13</td><td>board-pack</td><td>Mon 08:05</td><td>Board (7)</td><td><span class="tag wait">… awaiting (2 days)</span></td></tr>
+      <tr><td>12</td><td>daily-heartbeat</td><td>Tue 07:30</td><td>Ops</td><td><span class="muted">not tracked</span></td></tr>
+      <tr><td>11</td><td>vendor-statement</td><td>Mon 09:00</td><td>AP</td><td><span class="tag bad">✗ send failed — retried</span></td></tr>
+    </table>
+    <p class="muted" style="margin-top:2.5vh">Every send is a durable SQLite row, so
+      status survives restarts and is queryable for reporting or compliance.</p>
+  </section>
+
+  <!-- 9 SCHEDULING -->
+  <section class="slide">
+    <h2>Two ways to run it</h2>
+    <div class="cols">
+      <div class="col card">
+        <h3>Cron / Task Scheduler</h3>
+        <div class="term" style="font-size:.95vw">
+<span class="d"># check every 15 min; mailflow fires only due jobs</span>
+*/15 * * * *  cd /opt/mailflow &amp;&amp; \
+   python -m mailflow <span class="c">run</span> &gt;&gt; mailflow.log
+        </div>
+        <p>OS owns the timer; mailflow decides what's due. Catches up a missed slot.</p>
+      </div>
+      <div class="col card">
+        <h3>Long-running daemon</h3>
+        <div class="term" style="font-size:.95vw">
+$ python -m mailflow <span class="c">daemon</span>
+<span class="g">mailflow scheduler started (poll every 60s)</span>
+<span class="d"># fires jobs as they come due AND
+# refreshes revert status each cycle</span>
+        </div>
+        <p>One process under systemd / a Windows service. Also auto-checks reverts.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 SECURITY -->
+  <section class="slide">
+    <h2>Built for an enterprise environment</h2>
+    <div class="grid3">
+      <div class="card"><h3>🔐 No stored secrets</h3><p>Passwords resolve from named
+        environment variables at run time. Config files and the status DB are
+        git-ignored by default.</p></div>
+      <div class="card"><h3>🔏 Encrypted transport</h3><p>STARTTLS / SSL with
+        certificate verification. Internal unauthenticated relays supported via
+        <span class="kbd">auth: false</span>.</p></div>
+      <div class="card"><h3>🧾 Audit by design</h3><p>Verbatim .eml archive plus a
+        timestamped SQLite trail of who got what, and who reverted.</p></div>
+      <div class="card"><h3>🌐 Self-contained</h3><p>Standard library + PyYAML. No
+        SaaS, no outbound calls beyond your own mail servers.</p></div>
+      <div class="card"><h3>🧪 Tested</h3><p>24 offline tests cover config,
+        templating, scheduling, tracking and an end-to-end send.</p></div>
+      <div class="card"><h3>🧩 Extensible</h3><p>Send/reply layers isolated behind
+        small classes — an OAuth2 / Microsoft Graph backend drops in cleanly.</p></div>
+    </div>
+  </section>
+
+  <!-- 11 VALUE -->
+  <section class="slide">
+    <h2>Why it pays off</h2>
+    <div class="grid3">
+      <div class="card"><div class="stat">0</div><h3>missed sends</h3>
+        <p class="muted">The schedule, not a person, guarantees delivery.</p></div>
+      <div class="card"><div class="stat">100%</div><h3>archived</h3>
+        <p class="muted">Every outgoing message kept for audit, automatically.</p></div>
+      <div class="card"><div class="stat">1 view</div><h3>revert status</h3>
+        <p class="muted">Know instantly who has — and hasn't — responded.</p></div>
+    </div>
+    <p class="lead" style="margin-top:3vh">Less manual effort, a clean compliance
+      trail, and built-in follow-up — from one small, auditable tool.</p>
+  </section>
+
+  <!-- 12 CLOSE -->
+  <section class="slide title-slide">
+    <span class="pill">Get started</span>
+    <h1>Ready to run today</h1>
+    <div class="term" style="max-width:60vw;margin-top:2vh">
+<span class="c">$ pip install -r requirements.txt</span>
+<span class="c">$ python -m mailflow init</span>          <span class="d"># write a starter config</span>
+<span class="c">$ export MAILFLOW_SMTP_PASSWORD=…</span>
+<span class="c">$ python -m mailflow validate</span>      <span class="d"># preview the schedule</span>
+<span class="c">$ python -m mailflow run</span>           <span class="d"># fire due jobs (wire to cron)</span>
+<span class="c">$ bash demo/run_demo.sh</span>           <span class="g"># ← run this live demo end-to-end</span>
+    </div>
+    <div class="foot"><span>mailflow — scheduled mail, archived &amp; revert-tracked</span><span>Questions?</span></div>
+  </section>
+
+</div>
+
+<div class="nav">
+  <button onclick="go(-1)">‹ Prev</button>
+  <button onclick="go(1)">Next ›</button>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  let i=0;
+  function show(n){
+    slides[i].classList.remove('active');
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides[i].classList.add('active');
+    document.getElementById('bar').style.width=((i+1)/slides.length*100)+'%';
+  }
+  function go(d){show(i+d)}
+  show(0);
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight','PageDown',' '].includes(e.key)){go(1);e.preventDefault();}
+    else if(['ArrowLeft','PageUp'].includes(e.key)){go(-1);e.preventDefault();}
+    else if(e.key==='Home'){show(0);} else if(e.key==='End'){show(slides.length-1);}
+  });
+</script>
+</body>
+</html>
