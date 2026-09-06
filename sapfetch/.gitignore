@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Never commit credentials, saved sessions, or downloaded financial data.
+.sap_session.json
+*.session.json
+config.yaml
+downloads/
+*.xlsx
+*.pdf

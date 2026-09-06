@@ -1,0 +1,70 @@
+# sapfetch configuration — copy to config.yaml and adjust.
+#
+# Only `portal.base_url` and the `reports` list are strictly required; the rest
+# have sensible defaults that match the GR INDAS / IFRS prompt screens.
+
+portal:
+  # The Enterprise Portal reports URL (the /irj/portal path you screenshotted).
+  base_url: "https://is.ad.infosys.com/irj/portal/reports"
+  # Where the authenticated SSO session is cached after `sapfetch login`.
+  storage_state: ".sap_session.json"
+  # SAP Web Intelligence renders inside an iframe. Put a substring of that
+  # frame's URL or name here once you know it (leave null to use the main frame).
+  report_frame: null
+  headless: true
+  nav_timeout_ms: 60000
+  action_timeout_ms: 30000
+  # Air-gapped / corporate machines: instead of staging Playwright's bundled
+  # Chromium offline, drive the browser already installed on the machine.
+  # Set ONE of the following (leave both null to use bundled Chromium):
+  #   browser_channel: "msedge"          # or "chrome"
+  #   executable_path: "C:/Program Files/Microsoft/Edge/Application/msedge.exe"
+  browser_channel: null
+  executable_path: null
+
+# The visible labels of the period prompts, exactly as the portal shows them.
+# Defaults below match the "GR INDAS Consolidated PL" prompt panel.
+prompt_labels:
+  consol_group: "Consol Group"
+  fiscal_year: "Fiscal Year"
+  from_period: "From Period"
+  to_period: "From To"
+
+# Applied to every report unless a report overrides them.
+defaults:
+  export_format: "xlsx"          # xlsx | pdf
+  download_dir: "downloads"
+  prompts:
+    "Consol Group": "G_GRUP"     # default consolidation group
+
+# The reports to pull. `open_path` is the click path through the portal tabs/
+# tree to reach each report — adjust the names to match exactly what you see.
+reports:
+  - name: "GR INDAS Consolidated PL"
+    open_path: ["Group Reporting", "IND-AS INR", "GR INDAS Consolidated PL"]
+
+  - name: "GR IFRS Consolidated PL - INR"
+    open_path: ["Group Reporting", "IFRS INR & USD", "GR IFRS Consolidated PL INR"]
+    output_name: "GR_IFRS_Consolidated_PL_INR"
+    prompts:
+      "Currency": "INR"          # remove/rename if the report has no such prompt
+
+  - name: "GR IFRS Consolidated PL - USD"
+    open_path: ["Group Reporting", "IFRS INR & USD", "GR IFRS Consolidated PL USD"]
+    output_name: "GR_IFRS_Consolidated_PL_USD"
+    prompts:
+      "Currency": "USD"
+
+# --- Selector calibration (advanced) ---------------------------------------
+# These target the live WebI/portal DOM. The defaults are best-effort guesses;
+# if navigation, prompts, or export misbehave, run `sapfetch login` (which opens
+# an inspectable browser) and refine these with Playwright's selectors.
+#
+# selectors:
+#   prompt_row_by_label: "*:has-text('{label}')"
+#   prompt_input: "input:visible, textarea:visible"
+#   run_button: "button:has-text('OK'), button:has-text('Run')"
+#   export_button: "button[title*='Export' i]"
+#   export_format_option: "*:has-text('{format}')"
+#   export_confirm: "button:has-text('Export'), button:has-text('Download')"
+#   nav_item: "a:has-text('{step}'), *[role=treeitem]:has-text('{step}')"
