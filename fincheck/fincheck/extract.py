@@ -13,14 +13,27 @@ from dataclasses import dataclass, field
 
 import pdfplumber
 
-from .numbers import is_numberish, parse_number
+from .numbers import CURRENCY_SYMBOLS, DASHES, is_numberish, parse_number
+
+# A token that is (part of) a number: digits and the punctuation numbers wear
+# (parentheses, sign, comma, decimal point, currency, dashes). Unlike
+# ``is_numberish`` a lone "(", ")" or "," qualifies, so a figure rendered one
+# character at a time — "( 3 , 1 5 5 )" — can be stitched back together.
+_FRAGMENT_RE = re.compile(
+    r"^[\(\)\-+,.\d" + re.escape(CURRENCY_SYMBOLS + DASHES) + r"]+$"
+)
+
+
+def _is_fragment(text: str) -> bool:
+    text = text.strip()
+    return bool(text) and bool(_FRAGMENT_RE.match(text))
 
 # Phrases that mark a row as a column/period header rather than data.
 # Kept deliberately specific: e.g. "statement of" catches the Cash Flow Statement
 # title without misfiring on a "Cash flow hedge reserves" line item.
 _HEADER_RE = re.compile(
     r"(?i)(year ended|months ended|quarter ended|period ended|as at|as of|"
-    r"particulars|in ₹|in rs|in million|^note$|for the (year|period|quarter)|"
+    r"particulars|in ₹|in rs|in million|^note$|^for the (year|period|quarter)|"
     r"balance sheet|statement of|^index$|page no)"
 )
 
@@ -28,6 +41,12 @@ _HEADER_RE = re.compile(
 def _is_year_token(text: str) -> bool:
     t = text.strip().rstrip(",.")
     return t.isdigit() and len(t) == 4 and 1900 <= int(t) <= 2099
+
+
+_MONTH_RE = re.compile(
+    r"(?i)\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|"
+    r"aug(ust)?|sep(t|tember)?|oct(ober)?|nov(ember)?|dec(ember)?)\b"
+)
 
 # Vertical slack (points) for treating two words as being on the same line.
 _ROW_TOLERANCE = 3.0
@@ -63,6 +82,10 @@ class Row:
     indent: int = 0
     is_header: bool = False
     cells: dict[int, Cell] = field(default_factory=dict)
+    # All merged word tokens on the row (text + bbox), kept so period/date
+    # headers — whose date parts are not stored as numeric cells — can still be
+    # reconstructed and mapped to columns. See ``periods.py``.
+    tokens: list[dict] = field(default_factory=list)
 
     @property
     def is_heading(self) -> bool:
@@ -76,6 +99,9 @@ class Page:
     height: float
     rows: list[Row]
     n_columns: int
+    # Right-edge x position learned for each numeric column (financial figures
+    # are right-aligned), so header dates can be mapped to the same columns.
+    column_edges: list[float] = field(default_factory=list)
 
 
 def _cluster_rows(words: list[dict]) -> list[list[dict]]:
@@ -95,24 +121,40 @@ def _cluster_rows(words: list[dict]) -> list[list[dict]]:
 
 
 def _merge_numberish(words: list[dict]) -> list[dict]:
-    """Glue adjacent number-ish tokens (e.g. ``1 234`` -> ``1234``)."""
+    """Glue adjacent number fragments into one figure.
+
+    Handles both space-separated thousands (``1 234 567``) and figures rendered
+    one glyph at a time (``( 3 , 1 5 5 )``). A maximal run of tightly-spaced
+    fragments is concatenated and kept as a single token only when the result
+    actually parses as a number, so unrelated punctuation is never fused.
+    """
     merged: list[dict] = []
-    for word in words:
-        if (
-            merged
-            and is_numberish(word["text"])
-            and is_numberish(merged[-1]["text"])
-            and word["x0"] - merged[-1]["x1"] <= _MERGE_GAP
-            # Don't glue a date apart into a number: "31," + "2026" -> year stays.
-            and not _is_year_token(word["text"])
-        ):
-            prev = merged[-1]
-            prev["text"] = prev["text"] + " " + word["text"]
-            prev["x1"] = word["x1"]
-            prev["bottom"] = max(prev["bottom"], word["bottom"])
-            prev["top"] = min(prev["top"], word["top"])
-        else:
-            merged.append(dict(word))
+    i, n = 0, len(words)
+    while i < n:
+        word = words[i]
+        if _is_fragment(word["text"]) and not _is_year_token(word["text"]):
+            j = i + 1
+            while (
+                j < n
+                and _is_fragment(words[j]["text"])
+                and words[j]["x0"] - words[j - 1]["x1"] <= _MERGE_GAP
+                # Don't glue a date apart into a number: "31," + "2026" -> year.
+                and not _is_year_token(words[j]["text"])
+            ):
+                j += 1
+            if j - i >= 2:
+                glued = "".join(words[k]["text"] for k in range(i, j))
+                if parse_number(glued) is not None:
+                    new = dict(word)
+                    new["text"] = glued
+                    new["x1"] = words[j - 1]["x1"]
+                    new["top"] = min(words[k]["top"] for k in range(i, j))
+                    new["bottom"] = max(words[k]["bottom"] for k in range(i, j))
+                    merged.append(new)
+                    i = j
+                    continue
+        merged.append(dict(word))
+        i += 1
     return merged
 
 
@@ -147,6 +189,13 @@ def _looks_like_header(label: str, number_words: list[dict]) -> bool:
         return True
     # A row whose figures are all bare years (e.g. "2026  2025  2026  2025").
     if number_words and all(_is_year_token(w["text"]) for w in number_words):
+        return True
+    # A date header like "September 30, 2025  March 31, 2025": a month name in
+    # the text plus a year among the figures. Catching it here keeps the day
+    # tokens ("30,", "31,") from being mistaken for data columns.
+    if _MONTH_RE.search(label) and any(
+        _is_year_token(w["text"]) for w in number_words
+    ):
         return True
     return False
 
@@ -212,6 +261,7 @@ def _build_page(page_index: int, page) -> Page:
                 label_x0=label_x0,
                 is_header=is_header,
                 cells=cells,
+                tokens=merged,
             )
         )
 
@@ -222,6 +272,7 @@ def _build_page(page_index: int, page) -> Page:
         height=page.height,
         rows=rows,
         n_columns=len(edges),
+        column_edges=edges,
     )
 
 

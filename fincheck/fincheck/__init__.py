@@ -14,7 +14,32 @@ from .extract import extract_pages
 from .highlight import write_highlighted_pdf
 from .report import to_dict, to_json
 
-__all__ = ["analyze", "AnalysisResult", "Inconsistency", "TotalCheck"]
+__all__ = [
+    "analyze",
+    "AnalysisResult",
+    "Inconsistency",
+    "TotalCheck",
+    "check_rollforward",
+    "RollforwardResult",
+    "RollforwardCheck",
+]
+
+# The rollforward names are imported lazily so that ``python -m
+# fincheck.rollforward`` does not re-import a module already loaded by this
+# package (which raises a RuntimeWarning).
+_ROLLFORWARD_EXPORTS = {
+    "check_rollforward",
+    "RollforwardResult",
+    "RollforwardCheck",
+}
+
+
+def __getattr__(name):
+    if name in _ROLLFORWARD_EXPORTS:
+        from . import rollforward
+
+        return getattr(rollforward, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @dataclass

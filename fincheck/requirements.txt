@@ -1,4 +1,4 @@
 pdfplumber>=0.11
 PyMuPDF>=1.24
-reportlab>=4.0   # only needed for make_sample.py
+reportlab>=4.0   # only needed for the make_*_sample.py generators
 pytest>=7.0      # only needed to run the tests
