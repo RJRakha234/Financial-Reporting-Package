@@ -448,7 +448,8 @@ def locate_passage(pages: list[tuple[int, list[str]]], target: str) -> Optional[
 
 def apply_template(template: dict, docs: list[tuple[str, str]],
                    marks_by_doc: dict[str, list[Mark]],
-                   min_conf: float = 0.6) -> dict[str, list[dict]]:
+                   min_conf: float = 0.6,
+                   template_label: Optional[str] = None) -> dict[str, list[dict]]:
     """Fill in template notes that are not already highlighted in each document.
 
     For every (note, statement) in the template: keep the reviewer's own
@@ -462,7 +463,14 @@ def apply_template(template: dict, docs: list[tuple[str, str]],
     # a template passage keyed to a label that matches no document would be
     # silently skipped — surface the mismatch instead
     tpl_labels = {lbl for e in template.get("notes", []) for lbl in e.get("passages", {})}
-    unmatched = tpl_labels - set(paths)
+    if template_label is not None:
+        # Version mode: every version uses the SAME statement's template passages.
+        if template_label not in tpl_labels:
+            sys.exit(f"error: --version-of {template_label!r} is not a statement in this "
+                     f"template. Available: {', '.join(sorted(tpl_labels))}")
+        unmatched = set()
+    else:
+        unmatched = tpl_labels - set(paths)
     if unmatched:
         print(f"    warning: template statement labels not in this run "
               f"(their notes are skipped): {', '.join(sorted(unmatched))}")
@@ -473,7 +481,7 @@ def apply_template(template: dict, docs: list[tuple[str, str]],
             if entry.get("serial") is None:
                 continue
             serial = str(entry["serial"])
-            passage = entry.get("passages", {}).get(lbl)
+            passage = entry.get("passages", {}).get(template_label or lbl)
             if passage is None:
                 continue  # template says this note is not present in this statement
             if serial in have:
@@ -987,21 +995,26 @@ _APP_JS = r"""
     var html = ''+
       '<header class="masthead">'+
       '<div class="eyebrow">Financial Reporting Package · Interactive Note Review</div>'+
-      '<h1>Common Notes — Accept / Reject Console</h1>'+
-      '<p class="intro">Every common note is benchmarked against <strong>'+esc(benchShort())+'</strong>'+
-      (DATA.fallbackBenchmark?' (or <strong>'+esc(docShort(DATA.fallbackBenchmark))+'</strong> when the note is absent from it)':'')+'. '+
-      'Where a statement <strong>differs</strong>, the note shows track changes — '+
-      '<span class="del" style="padding:0 4px;border-radius:3px">orange</span> words are benchmark wording coming in; '+
-      '<span class="add" style="padding:0 4px;border-radius:3px">blue</span> words exist here but not in the benchmark. '+
+      '<h1>'+(VERSIONS?'Version Comparison — Accept / Reject Console':'Common Notes — Accept / Reject Console')+'</h1>'+
+      '<p class="intro">'+
+      (VERSIONS
+        ? 'Every note is compared against the baseline version <strong>'+esc(benchShort())+'</strong>. '
+        : 'Every common note is benchmarked against <strong>'+esc(benchShort())+'</strong>'+
+          (DATA.fallbackBenchmark?' (or <strong>'+esc(docShort(DATA.fallbackBenchmark))+'</strong> when the note is absent from it)':'')+'. ')+
+      (VERSIONS?'Where a later version <strong>changed</strong>':'Where a statement <strong>differs</strong>')+', the note shows track changes — '+
+      '<span class="del" style="padding:0 4px;border-radius:3px">orange</span> words '+(VERSIONS?'were in the baseline and are gone here':'are benchmark wording coming in')+'; '+
+      '<span class="add" style="padding:0 4px;border-radius:3px">blue</span> words '+(VERSIONS?'are new in this version':'exist here but not in the benchmark')+'. '+
       'Toggle <strong>Before</strong> to cut the orange (change not yet made) or <strong>After</strong> to cut the blue (change incorporated) — per note or all at once. '+
-      'A note that is <em>not highlighted</em> in a statement is treated as <strong>not present</strong> there — expected, no review needed. '+
+      (VERSIONS
+        ? 'A note missing from a version was <strong>added or removed</strong> between versions — the card says which. '
+        : 'A note that is <em>not highlighted</em> in a statement is treated as <strong>not present</strong> there — expected, no review needed. ')+
       'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported. '+
       '<strong>Click a serial badge or a p.N chip</strong> to open that PDF at the exact page — keep this report in the same folder as the PDFs.</p>'+
       '</header>'+
       '<section class="kpis">'+
-        kpi('accent', k.total, 'Statements') +
-        kpi('accent', k.common, 'Common notes') +
-        kpi('warn', k.needsReview, 'Notes needing review') +
+        kpi('accent', k.total, VERSIONS?'Versions':'Statements') +
+        kpi('accent', VERSIONS?k.notes:k.common, VERSIONS?'Notes tracked':'Common notes') +
+        kpi('warn', k.needsReview, VERSIONS?'Notes changed':'Notes needing review') +
         kpi('good', '<span id="kResolved">0</span>/'+k.needsReview, 'Notes resolved') +
       '</section>'+
       '<div class="celebrate" id="celebrate"><span class="big">🎉</span>'+
@@ -1041,17 +1054,24 @@ _APP_JS = r"""
         '<button data-bulk="accepted" data-serial="'+esc(n.serial)+'">Accept all</button>'+
         '<button data-bulk="rejected" data-serial="'+esc(n.serial)+'">Reject all</button></div>' : '';
     var notes = [];
-    if(n.absentDocs && n.absentDocs.length)
-      notes.push('Not present in: '+n.absentDocs.map(docShort).join(', '));
-    if(n.fallbackUsed)
-      notes.push('Benchmarked against '+docShort(n.benchmarkDoc)+' (absent from '+docShort(BENCH)+')');
+    if(VERSIONS){
+      if(n.addedIn && n.addedIn.length)
+        notes.push('Added in: '+n.addedIn.map(docShort).join(', ')+' (not in '+docShort(BENCH)+')');
+      if(n.removedIn && n.removedIn.length)
+        notes.push('Removed in: '+n.removedIn.map(docShort).join(', '));
+    } else {
+      if(n.absentDocs && n.absentDocs.length)
+        notes.push('Not present in: '+n.absentDocs.map(docShort).join(', '));
+      if(n.fallbackUsed)
+        notes.push('Benchmarked against '+docShort(n.benchmarkDoc)+' (absent from '+docShort(BENCH)+')');
+    }
     var ann = notes.length ? '<div class="hann">'+esc(notes.join('  ·  '))+'</div>' : '';
     // the serial badge links to the note in its benchmark statement's PDF
     var bcell = n.cells.find(function(c){ return c.isBenchmark && c.present; });
     var bmeta = bcell ? docMeta(bcell.doc) : null;
     var badge = (bcell && bmeta && bmeta.href)
       ? '<a class="badge-serial" href="'+esc(bmeta.href)+'#page='+bcell.page+'" target="_blank" rel="noopener" '+
-        'title="Open the benchmark ('+esc(bmeta.main)+' '+esc(bmeta.sub||'')+') at page '+bcell.page+'">'+esc(n.serial)+'</a>'
+        'title="Open the '+(VERSIONS?'baseline':'benchmark')+' ('+esc(bmeta.main)+' '+esc(bmeta.sub||'')+') at page '+bcell.page+'">'+esc(n.serial)+'</a>'
       : '<span class="badge-serial">'+esc(n.serial)+'</span>';
     return '<article class="notecard" data-sev="'+n.severity+'" data-serial="'+esc(n.serial)+'" data-hasdiff="'+(n.hasDiff?1:0)+'">'+
       '<div class="note-head">'+
@@ -1064,6 +1084,7 @@ _APP_JS = r"""
     '</article>';
   }
 
+  var VERSIONS = (DATA.mode === 'versions');
   var BENCH = DATA.benchmark;
   function docShort(label){ if(!label) return 'the majority version'; var m=docMeta(label); return m.main + (m.sub?(' '+m.sub):''); }
   function benchShort(){ return docShort(BENCH); }
@@ -1071,14 +1092,20 @@ _APP_JS = r"""
   function cell(n,c){
     var meta = docMeta(c.doc);
     var refName = docShort(n.benchmarkDoc);
-    var badge = c.isBenchmark ? ('<span class="benchtag'+(n.fallbackUsed?' fb':'')+'">Benchmark'+(n.fallbackUsed?' (fallback)':'')+'</span>') : '';
+    var badge = c.isBenchmark ? ('<span class="benchtag'+(n.fallbackUsed?' fb':'')+'">'+
+        (VERSIONS?'Baseline':'Benchmark')+(n.fallbackUsed&&!VERSIONS?' (fallback)':'')+'</span>') : '';
     var name = '<div class="dname">'+esc(meta.main)+(meta.sub?'<small>'+esc(meta.sub)+'</small>':'')+'</div>';
     var body, chips='', decision='';
     if(c.absent){
       // Note not highlighted here = not present in this statement (expected).
-      chips = '<span class="mini muted">not present</span>';
-      body = '<div class="dtext" style="background:none;color:var(--faint);font-style:italic">This note is not present in this statement — no review needed.</div>';
-      decision = '<div class="tag-absent">Not applicable here</div>';
+      var gone = VERSIONS && n.removedIn && n.removedIn.indexOf(c.doc)>=0;
+      chips = '<span class="mini muted">'+(VERSIONS?(gone?'removed here':'not in this version'):'not present')+'</span>';
+      body = '<div class="dtext" style="background:none;color:var(--faint);font-style:italic">'+
+        (VERSIONS
+          ? (gone ? 'This note was in the baseline but does not appear in this version.'
+                  : 'This note does not appear in this version.')
+          : 'This note is not present in this statement — no review needed.')+'</div>';
+      decision = '<div class="tag-absent">'+(VERSIONS?(gone?'Removed since baseline':'Not in this version'):'Not applicable here')+'</div>';
       return '<div class="dcell absent" data-serial="'+esc(n.serial)+'" data-doc="'+esc(c.doc)+'" data-differs="0">'+
         '<div class="dtop">'+name+'</div><div class="chiprow">'+chips+'</div>'+body+decision+'</div>';
     }
@@ -1109,11 +1136,16 @@ _APP_JS = r"""
              '<button class="expand" data-exp>Show full text ▾</button>';
     }
     if(c.isBenchmark){
-      decision = '<div class="tag-bench">Reference statement'+(n.fallbackUsed?' (used because the note is absent from '+esc(benchShort())+')':'')+' · all others compared to this</div>';
+      decision = VERSIONS
+        ? '<div class="tag-bench">Baseline version · later versions compared to this</div>'
+        : '<div class="tag-bench">Reference statement'+(n.fallbackUsed?' (used because the note is absent from '+esc(benchShort())+')':'')+' · all others compared to this</div>';
     } else if(c.differs){
       var counts = diffCounts(n.refText, c.text);
-      var legend = '<div class="dh"><span class="del">insertions from benchmark ('+counts.del+')</span>'+
-                   ' · <span class="add">deletions — extra here ('+counts.add+')</span></div>';
+      var legend = VERSIONS
+        ? '<div class="dh"><span class="del">removed since baseline ('+counts.del+')</span>'+
+          ' · <span class="add">added in this version ('+counts.add+')</span></div>'
+        : '<div class="dh"><span class="del">insertions from benchmark ('+counts.del+')</span>'+
+          ' · <span class="add">deletions — extra here ('+counts.add+')</span></div>';
       decision = '<div class="decision">'+
         '<div class="difflegend">'+legend+'Highlighted above vs <strong>'+esc(refName)+'</strong>.</div>'+
         '<div class="seg" role="group" aria-label="decision">'+
@@ -1121,7 +1153,7 @@ _APP_JS = r"""
           '<button class="rej" data-dec="rejected" aria-pressed="false"><span class="pop">✕</span> Reject</button>'+
         '</div></div>';
     } else {
-      decision = '<div class="tag-match">Matches benchmark</div>';
+      decision = '<div class="tag-match">'+(VERSIONS?'Unchanged from baseline':'Matches benchmark')+'</div>';
     }
     return '<div class="dcell'+(c.isBenchmark?' isbench':'')+'" data-serial="'+esc(n.serial)+'" data-doc="'+esc(c.doc)+'" data-differs="'+(c.differs?1:0)+'">'+
       '<div class="dtop">'+name+badge+'</div>'+
@@ -1320,13 +1352,18 @@ def _display_section(heading: str, ref_text: str) -> str:
 
 def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                   notes: list[NoteRow], benchmark: Optional[str] = None,
-                  doc_links: Optional[dict[str, str]] = None) -> dict:
+                  doc_links: Optional[dict[str, str]] = None,
+                  mode: str = "statements") -> dict:
     """Assemble the JSON model the interactive front-end renders from.
 
-    Every note is compared against the *benchmark* statement (default: the
-    Consolidated Ind AS financial). The benchmark cell is the reference and is
-    never flagged; other statements differ when their serial or highlighted text
-    departs from the benchmark's.
+    mode="statements" (default): different documents of one period. Each note is
+    compared against the *benchmark* statement (Ind AS Consolidated, with IFRS
+    INR as the per-note fallback); a note missing from a statement means it does
+    not apply there.
+
+    mode="versions": successive versions of the SAME document (Q1 vs Q2, draft vs
+    final). The first version listed is the baseline, every later one is compared
+    against it, and a note missing from a version means it was added or removed.
     """
     from collections import Counter
 
@@ -1344,9 +1381,15 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 add += j2 - j1
         return add, dele
 
+    versions = (mode == "versions")
     total = len(doc_labels)
-    bench = resolve_benchmark(doc_labels, benchmark)
-    fallback = resolve_fallback_benchmark(doc_labels, bench)
+    if versions:
+        # Baseline = the version the reviewer named, else the first one listed.
+        bench = benchmark if benchmark in doc_labels else doc_labels[0]
+        fallback = None
+    else:
+        bench = resolve_benchmark(doc_labels, benchmark)
+        fallback = resolve_fallback_benchmark(doc_labels, bench)
     common = [n for n in notes if n.present_count == total]
     partial = [n for n in notes if n.present_count < total]
 
@@ -1363,6 +1406,9 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         # otherwise the fallback (IFRS INR Consolidated); otherwise majority vote.
         if n.cells.get(bench):
             eff_bench = bench
+        elif versions:
+            # Note is new: compare against the earliest version that has it.
+            eff_bench = next((l for l in doc_labels if n.cells.get(l)), None)
         elif fallback and n.cells.get(fallback):
             eff_bench = fallback
         else:
@@ -1389,7 +1435,8 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 cells.append({
                     "doc": lbl, "present": False, "page": None, "serial": "",
                     "text": "", "differs": False, "absent": True,
-                    "reasons": ["not present in this statement"],
+                    "reasons": ["not in this version"] if versions
+                               else ["not present in this statement"],
                     "sim": 0.0, "isBenchmark": False,
                 })
                 continue
@@ -1412,18 +1459,36 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
         diff_cells = [c for c in cells if c["differs"]]
         absent_docs = [c["doc"] for c in cells if c.get("absent")]
         present_n = total - len(absent_docs)
+        # In version mode an absent note is not "not applicable" — it was added
+        # or removed between versions, which is itself worth seeing.
+        added_in, removed_in = [], []
+        if versions:
+            in_base = n.cells.get(bench) is not None
+            for lbl in doc_labels:
+                if lbl == bench:
+                    continue
+                here = n.cells.get(lbl) is not None
+                if here and not in_base:
+                    added_in.append(lbl)
+                elif not here and in_base:
+                    removed_in.append(lbl)
         if diff_cells:
-            label, severity, has_diff = "Needs review", "warn", True
+            label, severity, has_diff = ("Changed" if versions else "Needs review"), "warn", True
+        elif removed_in:
+            label, severity, has_diff = "Removed in " + ", ".join(removed_in), "warn", False
+        elif added_in:
+            label, severity, has_diff = "New in " + ", ".join(added_in), "warn", False
         elif absent_docs:
             label, severity, has_diff = f"Aligned · in {present_n} of {total}", "good", False
         else:
-            label, severity, has_diff = "Consistent", "good", False
+            label, severity, has_diff = ("Unchanged" if versions else "Consistent"), "good", False
         note_objs.append({
             "serial": n.serial_key, "label": n.label,
             "section": _display_section(n.section, ref_text),
             "refSerial": ref_serial, "refText": ref_text, "refSource": ref_source,
             "benchmarkDoc": eff_bench, "fallbackUsed": eff_bench not in (None, bench),
             "absentDocs": absent_docs, "presentCount": present_n,
+            "addedIn": added_in, "removedIn": removed_in,
             "status": label, "severity": severity, "hasDiff": has_diff,
             "diffCount": len(diff_cells), "cells": cells,
         })
@@ -1436,6 +1501,7 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     fully_consistent = sum(1 for n in note_objs if not n["hasDiff"])
     return {
         "generated": date.today().isoformat(),
+        "mode": mode,
         "benchmark": bench,
         "fallbackBenchmark": fallback,
         "docs": docs_meta,
@@ -1446,6 +1512,9 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
             "common": len(common),
             "consistent": fully_consistent,
             "needsReview": sum(1 for n in note_objs if n["hasDiff"]),
+            "notes": len(note_objs),
+            "added": sum(1 for n in note_objs if n["addedIn"]),
+            "removed": sum(1 for n in note_objs if n["removedIn"]),
             "unnumbered": len(unnumbered),
         },
     }
@@ -1453,9 +1522,10 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 
 def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 notes: list[NoteRow], benchmark: Optional[str] = None,
-                doc_links: Optional[dict[str, str]] = None) -> str:
+                doc_links: Optional[dict[str, str]] = None,
+                mode: str = "statements") -> str:
     payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark,
-                            doc_links=doc_links)
+                            doc_links=doc_links, mode=mode)
     import json
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     return (
@@ -1503,7 +1573,8 @@ def load_decisions(path: str) -> dict[tuple[str, str], str]:
 def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 notes: list[NoteRow], out_path: str,
                 decisions_path: Optional[str] = None,
-                benchmark: Optional[str] = None) -> None:
+                benchmark: Optional[str] = None,
+                mode: str = "statements") -> None:
     """Write a formatted workbook: common-notes matrix + unnumbered highlights.
 
     If decisions_path is given (a JSON exported from the interactive console),
@@ -1524,7 +1595,7 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
     # Decisions + per-cell diff model (reuse the same logic the front-end uses).
     decisions = load_decisions(decisions_path) if decisions_path else {}
     have_dec = bool(decisions_path)
-    payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark)
+    payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark, mode=mode)
     bench = payload["benchmark"]
     pnote_by_serial = {n["serial"]: n for n in payload["notes"]}
 
@@ -1831,6 +1902,32 @@ def detect_docs_in_dir(folder: str) -> list[tuple[str, str]]:
     return [(lbl, found[lbl][0]) for lbl in present]
 
 
+def detect_versions_in_dir(folder: str) -> list[tuple[str, str]]:
+    """Treat every PDF in a folder as a VERSION of the same document.
+
+    Labels come from the filenames (separators turned into spaces), ordered by
+    name so the earliest/baseline version comes first. Minimum two files.
+    """
+    import glob as _glob
+    if not os.path.isdir(folder):
+        sys.exit(f"error: --versions is not a folder: {folder}")
+    pdfs = sorted(_glob.glob(os.path.join(folder, "*.pdf")))
+    if len(pdfs) < 2:
+        sys.exit(f"error: need at least 2 PDFs in {folder} to compare versions "
+                 f"(found {len(pdfs)}). Put each version of the document there.")
+    out = []
+    for p in pdfs:
+        stem = os.path.splitext(os.path.basename(p))[0]
+        label = _clean(re.sub(r"[_\-]+", " ", stem))[:40] or os.path.basename(p)
+        out.append((label, p))
+    labels = [l for l, _ in out]
+    dupes = {l for l in labels if labels.count(l) > 1}
+    if dupes:
+        sys.exit("error: these filenames give the same version label: "
+                 + ", ".join(sorted(dupes)) + " — rename them or use --version 'Label=path'.")
+    return out
+
+
 def parse_docs(pairs: list[str]) -> list[tuple[str, str]]:
     out = []
     for p in pairs:
@@ -1865,6 +1962,16 @@ def main(argv=None):
                     help="Folder containing the four PDFs — statements are assigned "
                          "automatically by filename (consol…/sa…/…ifrsinr…/…ifrsusd…). "
                          "Alternative to --doc.")
+    ap.add_argument("--versions", default=None, metavar="FOLDER",
+                    help="VERSION MODE: every PDF in this folder is a version of the SAME "
+                         "document (Q1 vs Q2, draft vs final). Labels come from the filenames, "
+                         "the first is the baseline, and outputs go to FOLDER/output.")
+    ap.add_argument("--version", action="append", default=[], metavar="LABEL=PATH",
+                    help="VERSION MODE, explicit: repeatable, e.g. --version \"Q1 FY26=q1.pdf\". "
+                         "Order given is the order shown; the first is the baseline.")
+    ap.add_argument("--version-of", default=None, metavar="STATEMENT",
+                    help="In version mode with --template: which statement's template passages "
+                         "to use for every version (e.g. \"Ind AS · Consolidated\").")
     ap.add_argument("--out", default="common_notes_report.html", help="Output HTML file.")
     ap.add_argument("--xlsx", default=None,
                     help="Also write an Excel workbook to this path (e.g. report.xlsx).")
@@ -1911,9 +2018,44 @@ def main(argv=None):
               + (f"  (template: {os.path.basename(args.template)})" if args.template
                  else "  (no template — comparing the PDFs' own highlights)"))
 
+    version_mode = bool(args.versions or args.version)
+    if version_mode:
+        if args.dir or args.doc or args.folder:
+            sys.exit("error: version mode uses --versions/--version only "
+                     "(not a bare FOLDER, --dir or --doc).")
+        if args.versions and args.version:
+            sys.exit("error: use either --versions or --version, not both.")
+        docs = (detect_versions_in_dir(os.path.expanduser(args.versions)) if args.versions
+                else parse_docs(args.version))
+        if args.versions:  # same one-command convenience as the statements flow
+            outdir = os.path.join(args.versions, "output")
+            if args.annotate_dir is None:
+                args.annotate_dir = outdir
+            if args.out == "common_notes_report.html":
+                args.out = os.path.join(outdir, "report.html")
+            if args.xlsx is None:
+                args.xlsx = os.path.join(outdir, "report.xlsx")
+            if args.template is None and not args.no_template:
+                for cand in (os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "notes_template_final.json"),
+                             "notes_template_final.json"):
+                    if os.path.exists(cand):
+                        args.template = cand
+                        break
+            os.makedirs(outdir, exist_ok=True)
+        print(f"  Version mode: {len(docs)} versions of one document — baseline "
+              f"{(args.benchmark if args.benchmark in [d[0] for d in docs] else docs[0][0])!r}"
+              + (f" → outputs in {args.annotate_dir}" if args.versions else ""))
+        if args.template and not args.version_of:
+            print("  note: --template without --version-of — each version must match a "
+                  "template statement label by name, which is unlikely. Pass "
+                  "--version-of \"<statement>\" to locate notes in every version.")
+
     if args.dir and args.doc:
         sys.exit("error: use either --dir or --doc, not both.")
-    if args.dir:
+    if version_mode:
+        pass
+    elif args.dir:
         docs = detect_docs_in_dir(os.path.expanduser(args.dir))
     else:
         docs = parse_docs(args.doc) if args.doc else DEFAULT_DOCS
@@ -1928,7 +2070,8 @@ def main(argv=None):
 
     if args.template:
         template = load_template(args.template)
-        log = apply_template(template, docs, marks_by_doc, min_conf=args.min_confidence)
+        log = apply_template(template, docs, marks_by_doc, min_conf=args.min_confidence,
+                             template_label=args.version_of)
         print(f"\n  Template: {args.template} ({len(template.get('notes', []))} notes)")
         for lbl in labels:
             located = [e for e in log[lbl] if e["action"] == "located"]
@@ -1946,9 +2089,14 @@ def main(argv=None):
 
     notes = build_notes(labels, marks_by_doc)
     common = [n for n in notes if n.present_count == len(labels)]
-    bench = resolve_benchmark(labels, args.benchmark)
-    print(f"\n  {len(notes)} distinct serials · {len(common)} common across all {len(labels)} statements")
-    print(f"  Benchmark statement: {bench}")
+    if version_mode:
+        bench = args.benchmark if args.benchmark in labels else labels[0]
+        print(f"\n  {len(notes)} distinct serials · {len(common)} present in all {len(labels)} versions")
+        print(f"  Baseline version: {bench}")
+    else:
+        bench = resolve_benchmark(labels, args.benchmark)
+        print(f"\n  {len(notes)} distinct serials · {len(common)} common across all {len(labels)} statements")
+        print(f"  Benchmark statement: {bench}")
 
     if args.save_template:
         save_template(args.save_template, labels, notes, args.benchmark)
@@ -1970,8 +2118,9 @@ def main(argv=None):
         for label, path in docs:
             doc_links[label] = os.path.basename(path)
 
+    run_mode = "versions" if version_mode else "statements"
     body = render_html(labels, marks_by_doc, notes, benchmark=args.benchmark,
-                       doc_links=doc_links)
+                       doc_links=doc_links, mode=run_mode)
     page = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -1984,7 +2133,8 @@ def main(argv=None):
 
     if args.xlsx:
         render_xlsx(labels, marks_by_doc, notes, args.xlsx,
-                    decisions_path=args.decisions, benchmark=args.benchmark)
+                    decisions_path=args.decisions, benchmark=args.benchmark,
+                    mode=run_mode)
         note = " (with Accept/Reject sign-off)" if args.decisions else ""
         print(f"  Excel report written to: {os.path.abspath(args.xlsx)}{note}")
     elif args.decisions:
