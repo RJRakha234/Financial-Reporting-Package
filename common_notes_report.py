@@ -1838,6 +1838,28 @@ def render_xlsx(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 # CLI
 # --------------------------------------------------------------------------- #
 
+def classify_statement(path: str) -> Optional[str]:
+    """Which of the four statements a filename refers to, or None.
+
+    Recognized patterns (case-insensitive), matching this package's naming:
+      ifrs + inr       -> IFRS · INR Consolidated     (consolifrsinr… / IFRS_INR_…)
+      ifrs + usd       -> IFRS · USD Earnings Release (ifrsusd… / IFRS_USD_…)
+      sa… / standalone -> Ind AS · Standalone         (safy… / SA_FY…)
+      consol…          -> Ind AS · Consolidated       (consolfy… / CONSOL_FY…)
+    """
+    name = os.path.basename(path).lower()
+    if "ifrs" in name and "inr" in name:
+        return "IFRS · INR Consolidated"
+    if "ifrs" in name and "usd" in name:
+        return "IFRS · USD Earnings Release"
+    if (name.startswith(("sa_", "sa-", "safy")) or "standalone" in name
+            or re.search(r"(^|[^a-z])sa[^a-z]?fy", name)):
+        return "Ind AS · Standalone"
+    if "consol" in name:
+        return "Ind AS · Consolidated"
+    return None
+
+
 def detect_docs_in_dir(folder: str) -> list[tuple[str, str]]:
     """Scan a folder of PDFs and assign each to its statement by filename.
 
@@ -1855,18 +1877,7 @@ def detect_docs_in_dir(folder: str) -> list[tuple[str, str]]:
     if not pdfs:
         sys.exit(f"error: no PDFs found in {folder}")
 
-    def classify(path: str) -> Optional[str]:
-        name = os.path.basename(path).lower()
-        if "ifrs" in name and "inr" in name:
-            return "IFRS · INR Consolidated"
-        if "ifrs" in name and "usd" in name:
-            return "IFRS · USD Earnings Release"
-        if name.startswith(("sa_", "sa-", "safy")) or "standalone" in name or re.search(r"(^|[^a-z])sa[^a-z]?fy", name):
-            return "Ind AS · Standalone"
-        if "consol" in name:
-            return "Ind AS · Consolidated"
-        return None
-
+    classify = classify_statement
     found: dict[str, list[str]] = {}
     skipped: list[str] = []
     for p in pdfs:
@@ -2047,9 +2058,22 @@ def main(argv=None):
               f"{(args.benchmark if args.benchmark in [d[0] for d in docs] else docs[0][0])!r}"
               + (f" → outputs in {args.annotate_dir}" if args.versions else ""))
         if args.template and not args.version_of:
-            print("  note: --template without --version-of — each version must match a "
-                  "template statement label by name, which is unlikely. Pass "
-                  "--version-of \"<statement>\" to locate notes in every version.")
+            # The versions are all the same statement — work out which one from
+            # the filenames so --version-of is optional for the usual naming.
+            guesses = {classify_statement(p) for _, p in docs}
+            guesses.discard(None)
+            if len(guesses) == 1:
+                args.version_of = guesses.pop()
+                print(f"  Detected statement from filenames: {args.version_of} "
+                      f"(override with --version-of)")
+            elif len(guesses) > 1:
+                sys.exit("error: these version filenames point at different statements "
+                         f"({', '.join(sorted(guesses))}). Versions must all be the same "
+                         "statement — pass --version-of \"<statement>\" to say which.")
+            else:
+                print("  note: could not tell which statement these versions are from "
+                      "their filenames. Pass --version-of \"<statement>\" so the template "
+                      "can locate notes in them.")
 
     if args.dir and args.doc:
         sys.exit("error: use either --dir or --doc, not both.")
