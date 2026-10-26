@@ -117,6 +117,7 @@ class Mark:
     x0: float = 0.0          # left edge (tie-break within a line)
     conf: Optional[float] = None  # set when auto-located from a template (0..1)
     author: str = ""         # annotation author; the tool signs its own highlights
+    rect: Optional[tuple] = None  # (x0,y0,x1,y1) of the mark on `page`, for previews
 
 
 @dataclass
@@ -212,6 +213,7 @@ def extract_marks(label: str, path: str) -> list[Mark]:
                     y0=annot.rect.y0,
                     x0=annot.rect.x0,
                     author=_clean(annot.info.get("title", "")),
+                    rect=(annot.rect.x0, annot.rect.y0, annot.rect.x1, annot.rect.y1),
                 ))
     finally:
         doc.close()
@@ -247,6 +249,11 @@ def _merge_marks(hits: list[Mark]) -> Mark:
         return hits[0]
     ordered = sorted(hits, key=lambda m: (m.page, m.y0, m.x0))
     first = ordered[0]
+    same_page = [m.rect for m in ordered if m.page == first.page and m.rect]
+    union = None
+    if same_page:
+        union = (min(r[0] for r in same_page), min(r[1] for r in same_page),
+                 max(r[2] for r in same_page), max(r[3] for r in same_page))
     return Mark(
         doc=first.doc,
         page=first.page,
@@ -256,6 +263,8 @@ def _merge_marks(hits: list[Mark]) -> Mark:
         heading=max((m.heading for m in ordered), key=len, default=""),
         y0=first.y0,
         x0=first.x0,
+        author=first.author,
+        rect=union,
     )
 
 
@@ -600,6 +609,11 @@ def annotate_pdf(src_path: str, dst_path: str, marks: list[Mark],
                     annot.set_info(content=m.serial_raw or m.serial_key,
                                    title=MACHINE_AUTHOR)
                     annot.update()
+                # record the drawn area on the mark's own page for page previews
+                own = per_page.get(m.page)
+                if own:
+                    m.rect = (min(r.x0 for r in own), min(r.y0 for r in own),
+                              max(r.x1 for r in own), max(r.y1 for r in own))
                 added += 1
             except Exception as exc:  # one bad note must not lose the whole file
                 print(f"    warning: could not draw serial {m.serial_key} "
@@ -608,6 +622,55 @@ def annotate_pdf(src_path: str, dst_path: str, marks: list[Mark],
     finally:
         doc.close()
     return added
+
+
+def render_page_images(pdf_path: str, marks: list[Mark], out_dir: str, slug: str,
+                       dpi: int = 110) -> dict[str, dict]:
+    """Render every page a note sits on to a JPEG, for the report's page viewer.
+
+    Each referenced page is rendered once. Returns {serial: {"img": relative path,
+    "page": n, "box": [x0,y0,x1,y1] as 0-1 fractions of the page}} so the viewer
+    can scroll to the passage and ring it.
+    """
+    wanted: dict[int, list[Mark]] = {}
+    for m in marks:
+        if m.serial_key and m.rect:
+            wanted.setdefault(m.page, []).append(m)
+    if not wanted:
+        return {}
+    os.makedirs(out_dir, exist_ok=True)
+    zoom = dpi / 72.0
+    out: dict[str, dict] = {}
+    doc = fitz.open(pdf_path)
+    try:
+        for pno, page_marks in sorted(wanted.items()):
+            if not (1 <= pno <= len(doc)):
+                continue
+            page = doc[pno - 1]
+            rel = f"{slug}-p{pno}.jpg"
+            dest = os.path.join(out_dir, rel)
+            if not os.path.exists(dest):
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                try:
+                    data = pix.tobytes("jpeg", jpg_quality=72)
+                except Exception:            # build without JPEG support
+                    rel = f"{slug}-p{pno}.png"
+                    dest = os.path.join(out_dir, rel)
+                    data = pix.tobytes("png")
+                with open(dest, "wb") as fh:
+                    fh.write(data)
+            pw, ph = page.rect.width or 1, page.rect.height or 1
+            for m in page_marks:
+                x0, y0, x1, y1 = m.rect
+                out[m.serial_key] = {
+                    "img": os.path.basename(out_dir) + "/" + rel,
+                    "page": pno,
+                    "box": [round(x0 / pw, 4), round(y0 / ph, 4),
+                            round(x1 / pw, 4), round(y1 / ph, 4)],
+                }
+    finally:
+        doc.close()
+    return out
 
 
 def text_consistency(row: NoteRow) -> float:
@@ -914,6 +977,37 @@ a.badge-serial:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .dcell[data-state="accepted"]{box-shadow:inset 3px 0 0 var(--good)}
 .reasons{display:flex;gap:6px;flex-wrap:wrap}
 
+/* inline page viewer */
+a.mini.viewpg{text-decoration:none;cursor:pointer;color:var(--good);font-weight:700;
+  border:1px solid color-mix(in srgb,var(--good) 45%,transparent);transition:all .15s ease}
+a.mini.viewpg:hover{background:var(--good);color:#fff;border-color:var(--good);
+  transform:translateY(-1px);box-shadow:0 3px 8px color-mix(in srgb,var(--good) 35%,transparent)}
+#pageview{position:fixed;inset:0;z-index:80;display:none;align-items:center;justify-content:center;
+  background:color-mix(in srgb,var(--ink) 72%,transparent);backdrop-filter:blur(3px);padding:24px}
+#pageview.open{display:flex;animation:pvin .22s ease}
+@keyframes pvin{from{opacity:0}to{opacity:1}}
+#pageview .pv{background:var(--card);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.45);
+  width:min(1000px,96vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;
+  animation:pvpop .26s cubic-bezier(.34,1.3,.64,1)}
+@keyframes pvpop{from{transform:scale(.97) translateY(8px)}to{transform:none}}
+#pageview .pvhead{display:flex;align-items:center;gap:12px;padding:13px 16px;
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+#pageview .pvtitle{font-weight:750;font-size:14px}
+#pageview .pvsub{color:var(--muted);font-size:12.5px}
+#pageview .pvspacer{margin-left:auto;display:flex;gap:8px;align-items:center}
+#pageview .pvbody{overflow:auto;background:var(--paper);padding:18px;flex:1}
+#pageview .pvwrap{position:relative;width:100%;max-width:860px;margin:0 auto;
+  box-shadow:0 2px 14px rgba(0,0,0,.18);border-radius:4px;overflow:hidden;background:#fff}
+#pageview img{display:block;width:100%;height:auto}
+#pageview .ring{position:absolute;border:2.5px solid var(--bad);border-radius:5px;
+  box-shadow:0 0 0 9999px color-mix(in srgb,var(--ink) 26%,transparent);
+  animation:ringpulse 1.5s ease-in-out 3}
+@keyframes ringpulse{0%,100%{box-shadow:0 0 0 9999px color-mix(in srgb,var(--ink) 26%,transparent)}
+  50%{box-shadow:0 0 0 9999px color-mix(in srgb,var(--ink) 10%,transparent)}}
+#pageview .pvclose{font:inherit;font-size:18px;line-height:1;cursor:pointer;border:none;
+  background:transparent;color:var(--muted);padding:4px 8px;border-radius:8px}
+#pageview .pvclose:hover{background:var(--line);color:var(--ink)}
+
 /* confetti + celebrate banner */
 #confetti{position:fixed;inset:0;pointer-events:none;z-index:60}
 .celebrate{margin:0 0 18px;padding:14px 18px;border-radius:14px;display:none;align-items:center;gap:12px;
@@ -1009,7 +1103,8 @@ _APP_JS = r"""
         ? 'A note missing from a version was <strong>added or removed</strong> between versions — the card says which. '
         : 'A note that is <em>not highlighted</em> in a statement is treated as <strong>not present</strong> there — expected, no review needed. ')+
       'Accept an acceptable variation or reject one that needs correction. Decisions are saved in this browser and can be exported. '+
-      '<strong>Click a serial badge or a p.N chip</strong> to open that PDF at the exact page — keep this report in the same folder as the PDFs.</p>'+
+      '<strong>⛶ view page</strong> shows the source page right here with the passage ringed; '+
+      'a <strong>serial badge or p.N chip</strong> opens the PDF itself at that page — keep this report beside the PDFs.</p>'+
       '</header>'+
       '<section class="kpis">'+
         kpi('accent', k.total, VERSIONS?'Versions':'Statements') +
@@ -1037,6 +1132,22 @@ _APP_JS = r"""
         '</div>'+
       '</div>'+
       '<div id="notes">' + DATA.notes.map(noteCard).join('') + '</div>'+
+      '<div id="pageview" role="dialog" aria-modal="true" aria-label="Page preview">'+
+        '<div class="pv">'+
+          '<div class="pvhead">'+
+            '<span class="pvtitle" id="pvTitle"></span>'+
+            '<span class="pvsub" id="pvSub"></span>'+
+            '<span class="pvspacer">'+
+              '<a class="btn ghost" id="pvOpen" target="_blank" rel="noopener">Open in PDF ↗</a>'+
+              '<button class="pvclose" id="pvClose" aria-label="Close">✕</button>'+
+            '</span>'+
+          '</div>'+
+          '<div class="pvbody" id="pvBody"><div class="pvwrap" id="pvWrap">'+
+            '<img id="pvImg" alt="Page preview">'+
+            '<div class="ring" id="pvRing" style="display:none"></div>'+
+          '</div></div>'+
+        '</div>'+
+      '</div>'+
       '<canvas id="confetti"></canvas>';
     app.className = '';
     app.innerHTML = html;
@@ -1114,8 +1225,15 @@ _APP_JS = r"""
       ? '<a class="mini pglink" href="'+esc(meta.href)+'#page='+c.page+'" target="_blank" rel="noopener" '+
         'title="Open '+esc(meta.main)+' '+esc(meta.sub||'')+' at page '+c.page+'">p.'+c.page+' ↗</a>'
       : '<span class="mini">p.'+c.page+'</span>';
+    var viewChip = c.img
+      ? '<a class="mini viewpg" href="#" data-view-page="'+esc(c.img)+'" '+
+        'data-box="'+(c.box?c.box.join(','):'')+'" data-pg="'+c.page+'" '+
+        'data-doc="'+esc(meta.main+(meta.sub?' '+meta.sub:''))+'" data-note="'+esc(n.label)+'" '+
+        (meta.href?'data-pdf="'+esc(meta.href)+'" ':'')+
+        'title="Show page '+c.page+' right here">⛶ view page</a>'
+      : '';
     chips = '<span class="'+scls+'">serial '+esc(c.serial||'—')+'</span>'+
-            pageChip+
+            pageChip+viewChip+
             (c.autoFound ? '<span class="mini tmpl">◎ auto-located '+Math.round(c.autoFound*100)+'%</span>' : '')+
             (c.reasons.indexOf('text differs')>=0 ? '<span class="mini bad">'+Math.round(c.sim*100)+'% match</span>' : '');
     // Benchmark shows its own text as the reference; differing statements keep the
@@ -1273,6 +1391,9 @@ _APP_JS = r"""
         app.querySelectorAll('.dcell .vbtn[data-view]').forEach(function(x){
           x.classList.toggle('on', x.getAttribute('data-view')===v2); });
         return; }
+      var vp=t.closest('[data-view-page]');
+      if(vp){ ev.preventDefault(); openPage(vp); return; }
+      if(t.id==='pvClose' || t.id==='pageview'){ closePage(); return; }
       if(t.id==='expCsv'){ exportCsv(); return; }
       if(t.id==='expJson'){ exportJson(); return; }
       if(t.id==='reset'){ if(confirm('Clear all accept/reject decisions?')){ store={}; persist();
@@ -1285,8 +1406,41 @@ _APP_JS = r"""
     app.addEventListener('keydown', function(ev){
       if((ev.target.id==='flt') && (ev.key==='Enter'||ev.key===' ')){ ev.preventDefault(); ev.target.click(); }
     });
+    document.addEventListener('keydown', function(ev){
+      if(ev.key==='Escape') closePage();
+    });
     addEventListener('resize', function(){ var cv=document.getElementById('confetti'); if(cv){cv.width=innerWidth;cv.height=innerHeight;} });
   }
+
+  // ---- inline page viewer -------------------------------------------------
+  function openPage(el){
+    var box = document.getElementById('pageview');
+    var img = document.getElementById('pvImg'), ring = document.getElementById('pvRing');
+    document.getElementById('pvTitle').textContent = el.getAttribute('data-note');
+    document.getElementById('pvSub').textContent = el.getAttribute('data-doc')+' · page '+el.getAttribute('data-pg');
+    var pdf = el.getAttribute('data-pdf'), open_ = document.getElementById('pvOpen');
+    if(pdf){ open_.href = pdf+'#page='+el.getAttribute('data-pg'); open_.style.display=''; }
+    else { open_.style.display='none'; }
+    var b = (el.getAttribute('data-box')||'').split(',').map(Number);
+    ring.style.display = 'none';
+    img.onload = function(){
+      if(b.length===4 && b.every(function(v){return !isNaN(v);})){
+        ring.style.left   = (b[0]*100)+'%';
+        ring.style.top    = (b[1]*100)+'%';
+        ring.style.width  = ((b[2]-b[0])*100)+'%';
+        ring.style.height = ((b[3]-b[1])*100)+'%';
+        ring.style.display = '';
+        // bring the ringed passage into view inside the scroll area
+        var body = document.getElementById('pvBody');
+        var target = ring.offsetTop - body.clientHeight/2 + ring.offsetHeight/2;
+        body.scrollTop = Math.max(0, target);
+      }
+    };
+    img.src = el.getAttribute('data-view-page');
+    box.classList.add('open');
+    document.getElementById('pvClose').focus();
+  }
+  function closePage(){ document.getElementById('pageview').classList.remove('open'); }
 
   // ---- export ------------------------------------------------------------
   function decisionOf(n,c){
@@ -1353,7 +1507,8 @@ def _display_section(heading: str, ref_text: str) -> str:
 def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                   notes: list[NoteRow], benchmark: Optional[str] = None,
                   doc_links: Optional[dict[str, str]] = None,
-                  mode: str = "statements") -> dict:
+                  mode: str = "statements",
+                  page_images: Optional[dict[str, dict[str, dict]]] = None) -> dict:
     """Assemble the JSON model the interactive front-end renders from.
 
     mode="statements" (default): different documents of one period. Each note is
@@ -1449,11 +1604,13 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                     reasons.append("serial format")
                 if add or dele:  # ANY word-level difference, however small (e.g. case)
                     reasons.append("text differs")
+            prev = (page_images or {}).get(lbl, {}).get(n.serial_key)
             cells.append({
                 "doc": lbl, "present": True, "page": m.page, "serial": m.serial_raw,
                 "text": m.text, "differs": bool(reasons), "reasons": reasons,
                 "sim": round(sim, 3), "wordAdd": add, "wordDel": dele,
                 "isBenchmark": is_bench, "absent": False, "autoFound": m.conf,
+                "img": (prev or {}).get("img"), "box": (prev or {}).get("box"),
             })
 
         diff_cells = [c for c in cells if c["differs"]]
@@ -1523,9 +1680,10 @@ def build_payload(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
 def render_html(doc_labels: list[str], marks_by_doc: dict[str, list[Mark]],
                 notes: list[NoteRow], benchmark: Optional[str] = None,
                 doc_links: Optional[dict[str, str]] = None,
-                mode: str = "statements") -> str:
+                mode: str = "statements",
+                page_images: Optional[dict[str, dict[str, dict]]] = None) -> str:
     payload = build_payload(doc_labels, marks_by_doc, notes, benchmark=benchmark,
-                            doc_links=doc_links, mode=mode)
+                            doc_links=doc_links, mode=mode, page_images=page_images)
     import json
     data_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     return (
@@ -2000,6 +2158,14 @@ def main(argv=None):
                          "document does not highlight itself is fuzzy-matched from the template.")
     ap.add_argument("--min-confidence", type=float, default=0.6,
                     help="Minimum match confidence (0-1) for a template-located note (default 0.6).")
+    ap.add_argument("--page-images", dest="page_images", action="store_true", default=None,
+                    help="Render each note's page to an image so the report can SHOW the page "
+                         "inline (a viewer opens in the report itself, with the passage ringed). "
+                         "On automatically in one-command and --versions runs.")
+    ap.add_argument("--no-page-images", dest="page_images", action="store_false",
+                    help="Skip the inline page images (smaller output folder, links still work).")
+    ap.add_argument("--page-image-dpi", type=int, default=110, metavar="DPI",
+                    help="Resolution of the inline page images (default 110).")
     ap.add_argument("--annotate-dir", default=None, metavar="DIR",
                     help="Write highlighted copies of the PDFs here: every auto-located note is "
                          "drawn as a highlight with its serial number in the comment box.")
@@ -2024,6 +2190,8 @@ def main(argv=None):
                 if os.path.exists(cand):
                     args.template = cand
                     break
+        if args.page_images is None:
+            args.page_images = True
         os.makedirs(outdir, exist_ok=True)
         print(f"  One-command mode: PDFs from {args.folder} → outputs in {outdir}"
               + (f"  (template: {os.path.basename(args.template)})" if args.template
@@ -2053,6 +2221,8 @@ def main(argv=None):
                     if os.path.exists(cand):
                         args.template = cand
                         break
+            if args.page_images is None:
+                args.page_images = True
             os.makedirs(outdir, exist_ok=True)
         print(f"  Version mode: {len(docs)} versions of one document — baseline "
               f"{(args.benchmark if args.benchmark in [d[0] for d in docs] else docs[0][0])!r}"
@@ -2142,9 +2312,30 @@ def main(argv=None):
         for label, path in docs:
             doc_links[label] = os.path.basename(path)
 
+    page_images: dict[str, dict[str, dict]] = {}
+    if args.page_images:
+        img_root = os.path.join(os.path.dirname(os.path.abspath(args.out)) or ".", "pages")
+        used_slugs: set[str] = set()
+        for label, path in docs:
+            # Prefer the highlighted copy so the passage is visibly marked on the page.
+            shown = os.path.join(args.annotate_dir,
+                                 os.path.splitext(os.path.basename(path))[0] + "_highlighted.pdf"
+                                 ) if args.annotate_dir else None
+            src_pdf = shown if shown and os.path.exists(shown) else path
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", label).strip("-").lower()[:40] or "doc"
+            while slug in used_slugs:
+                slug += "x"
+            used_slugs.add(slug)
+            page_images[label] = render_page_images(src_pdf, marks_by_doc[label],
+                                                    img_root, slug, dpi=args.page_image_dpi)
+        shots = sum(len(v) for v in page_images.values())
+        files = len({v["img"] for d in page_images.values() for v in d.values()})
+        if shots:
+            print(f"  Page previews: {files} page images for {shots} notes → {img_root}")
+
     run_mode = "versions" if version_mode else "statements"
     body = render_html(labels, marks_by_doc, notes, benchmark=args.benchmark,
-                       doc_links=doc_links, mode=run_mode)
+                       doc_links=doc_links, mode=run_mode, page_images=page_images)
     page = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
